@@ -95,6 +95,9 @@ export class GameSession {
       case "Error":
         store.set({ error: msg.message });
         return;
+      case "RunOver":
+        // Wired up with the run flow (M1 integration).
+        return;
     }
   }
 

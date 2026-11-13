@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 pub const TICK_HZ: u32 = 20;
 pub const PHYSICS_HZ: u32 = 60;
 pub const MAX_INPUTS_PER_MSG: u32 = 32;
@@ -12,6 +12,8 @@ pub const MAX_CLIENT_MSG_BYTES: u32 = 4096;
 pub const BTN_JUMP: u8 = 1;
 pub const BTN_ABILITY: u8 = 2;
 pub const BTN_INTERACT: u8 = 4;
+pub const DEATH_VOID: u8 = 0;
+pub const DEATH_ENEMY: u8 = 1;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Vec3 {
@@ -89,6 +91,14 @@ pub struct EnemyView {
     pub pos: Vec3,
 }
 
+/// End-of-run stats. cause is one of DEATH_VOID / DEATH_ENEMY.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunSummary {
+    pub level_reached: u32,
+    pub gifts_collected: u32,
+    pub cause: u8,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ClientMsg {
     Hello { protocol_version: u16, name: String },
@@ -101,9 +111,10 @@ pub enum ClientMsg {
 pub enum ServerMsg {
     Welcome { protocol_version: u16, player_id: u32, tick: u32 },
     Level { data: LevelData },
-    Snapshot { tick: u32, last_input_seq: u32, you: ControllerState, players: Vec<PlayerView>, enemies: Vec<EnemyView>, gifts_taken: Vec<u16> },
+    Snapshot { tick: u32, level: u32, last_input_seq: u32, you: ControllerState, players: Vec<PlayerView>, enemies: Vec<EnemyView>, gifts_taken: Vec<u16> },
     Pong { t: u32 },
     Error { code: u16, message: String },
+    RunOver { summary: RunSummary },
 }
 
 #[cfg(test)]
@@ -118,6 +129,7 @@ pub(crate) fn fixture_encode(type_name: &str, value: serde_json::Value) -> Resul
         "LevelData" => crate::encode(&serde_json::from_value::<LevelData>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "PlayerView" => crate::encode(&serde_json::from_value::<PlayerView>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "EnemyView" => crate::encode(&serde_json::from_value::<EnemyView>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
+        "RunSummary" => crate::encode(&serde_json::from_value::<RunSummary>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "ClientMsg" => crate::encode(&serde_json::from_value::<ClientMsg>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "ServerMsg" => crate::encode(&serde_json::from_value::<ServerMsg>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         other => Err(format!("unknown type {other}")),

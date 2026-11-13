@@ -1,104 +1,474 @@
 {
   "$comment": "Single source of truth for the VOIDWRAP RUN wire protocol. Edit this file, then run `just gen`. Never hand-edit generated code. Wire format: bincode 1.x fixint little-endian (u64 lengths, u32 enum tags).",
   "constants": {
-    "PROTOCOL_VERSION": ["u16", 1],
-    "TICK_HZ": ["u32", 20],
-    "PHYSICS_HZ": ["u32", 60],
-    "MAX_INPUTS_PER_MSG": ["u32", 32],
-    "MAX_NAME_LEN": ["u32", 24],
-    "MAX_CLIENT_MSG_BYTES": ["u32", 4096],
-    "BTN_JUMP": ["u8", 1],
-    "BTN_ABILITY": ["u8", 2],
-    "BTN_INTERACT": ["u8", 4]
+    "PROTOCOL_VERSION": [
+      "u16",
+      2
+    ],
+    "TICK_HZ": [
+      "u32",
+      20
+    ],
+    "PHYSICS_HZ": [
+      "u32",
+      60
+    ],
+    "MAX_INPUTS_PER_MSG": [
+      "u32",
+      32
+    ],
+    "MAX_NAME_LEN": [
+      "u32",
+      24
+    ],
+    "MAX_CLIENT_MSG_BYTES": [
+      "u32",
+      4096
+    ],
+    "BTN_JUMP": [
+      "u8",
+      1
+    ],
+    "BTN_ABILITY": [
+      "u8",
+      2
+    ],
+    "BTN_INTERACT": [
+      "u8",
+      4
+    ],
+    "DEATH_VOID": [
+      "u8",
+      0
+    ],
+    "DEATH_ENEMY": [
+      "u8",
+      1
+    ]
   },
   "types": [
-    { "name": "Vec3", "struct": [["x", "f32"], ["y", "f32"], ["z", "f32"]] },
-    { "name": "Aabb", "struct": [["min", "Vec3"], ["max", "Vec3"]] },
+    {
+      "name": "Vec3",
+      "struct": [
+        [
+          "x",
+          "f32"
+        ],
+        [
+          "y",
+          "f32"
+        ],
+        [
+          "z",
+          "f32"
+        ]
+      ]
+    },
+    {
+      "name": "Aabb",
+      "struct": [
+        [
+          "min",
+          "Vec3"
+        ],
+        [
+          "max",
+          "Vec3"
+        ]
+      ]
+    },
     {
       "name": "InputFrame",
       "$comment": "One fixed physics step (1/PHYSICS_HZ s) of player intent. move_x/move_z: world-space wish direction scaled to [-127,127]; the client rotates by camera yaw so the sim needs no trig.",
-      "struct": [["seq", "u32"], ["move_x", "i8"], ["move_z", "i8"], ["buttons", "u8"]]
+      "struct": [
+        [
+          "seq",
+          "u32"
+        ],
+        [
+          "move_x",
+          "i8"
+        ],
+        [
+          "move_z",
+          "i8"
+        ],
+        [
+          "buttons",
+          "u8"
+        ]
+      ]
     },
     {
       "name": "ControllerState",
       "$comment": "Complete kinematic character state. Must contain everything the step function reads so client reconciliation is exact.",
       "struct": [
-        ["pos", "Vec3"],
-        ["vel", "Vec3"],
-        ["grounded", "bool"],
-        ["coyote_frames", "u8"],
-        ["jump_buffer_frames", "u8"],
-        ["prev_buttons", "u8"],
-        ["air_jumps_used", "u8"],
-        ["ability_cooldown_frames", "u16"],
-        ["ability_active_frames", "u8"],
-        ["ability_dir", "Vec3"]
+        [
+          "pos",
+          "Vec3"
+        ],
+        [
+          "vel",
+          "Vec3"
+        ],
+        [
+          "grounded",
+          "bool"
+        ],
+        [
+          "coyote_frames",
+          "u8"
+        ],
+        [
+          "jump_buffer_frames",
+          "u8"
+        ],
+        [
+          "prev_buttons",
+          "u8"
+        ],
+        [
+          "air_jumps_used",
+          "u8"
+        ],
+        [
+          "ability_cooldown_frames",
+          "u16"
+        ],
+        [
+          "ability_active_frames",
+          "u8"
+        ],
+        [
+          "ability_dir",
+          "Vec3"
+        ]
       ]
     },
-    { "name": "Platform", "struct": [["id", "u16"], ["kind", "u8"], ["bounds", "Aabb"]] },
-    { "name": "Gift", "struct": [["id", "u16"], ["pos", "Vec3"]] },
+    {
+      "name": "Platform",
+      "struct": [
+        [
+          "id",
+          "u16"
+        ],
+        [
+          "kind",
+          "u8"
+        ],
+        [
+          "bounds",
+          "Aabb"
+        ]
+      ]
+    },
+    {
+      "name": "Gift",
+      "struct": [
+        [
+          "id",
+          "u16"
+        ],
+        [
+          "pos",
+          "Vec3"
+        ]
+      ]
+    },
     {
       "name": "LevelData",
       "struct": [
-        ["level", "u32"],
-        ["seed", "u32"],
-        ["spawn", "Vec3"],
-        ["beacon", "Vec3"],
-        ["kill_y", "f32"],
-        ["platforms", ["vec", "Platform"]],
-        ["gifts", ["vec", "Gift"]]
+        [
+          "level",
+          "u32"
+        ],
+        [
+          "seed",
+          "u32"
+        ],
+        [
+          "spawn",
+          "Vec3"
+        ],
+        [
+          "beacon",
+          "Vec3"
+        ],
+        [
+          "kill_y",
+          "f32"
+        ],
+        [
+          "platforms",
+          [
+            "vec",
+            "Platform"
+          ]
+        ],
+        [
+          "gifts",
+          [
+            "vec",
+            "Gift"
+          ]
+        ]
       ]
     },
-    { "name": "PlayerView", "struct": [["id", "u32"], ["pos", "Vec3"], ["vel", "Vec3"], ["alive", "bool"]] },
-    { "name": "EnemyView", "struct": [["id", "u32"], ["kind", "u8"], ["pos", "Vec3"]] },
+    {
+      "name": "PlayerView",
+      "struct": [
+        [
+          "id",
+          "u32"
+        ],
+        [
+          "pos",
+          "Vec3"
+        ],
+        [
+          "vel",
+          "Vec3"
+        ],
+        [
+          "alive",
+          "bool"
+        ]
+      ]
+    },
+    {
+      "name": "EnemyView",
+      "struct": [
+        [
+          "id",
+          "u32"
+        ],
+        [
+          "kind",
+          "u8"
+        ],
+        [
+          "pos",
+          "Vec3"
+        ]
+      ]
+    },
+    {
+      "name": "RunSummary",
+      "$comment": "End-of-run stats. cause is one of DEATH_VOID / DEATH_ENEMY.",
+      "struct": [
+        [
+          "level_reached",
+          "u32"
+        ],
+        [
+          "gifts_collected",
+          "u32"
+        ],
+        [
+          "cause",
+          "u8"
+        ]
+      ]
+    },
     {
       "name": "ClientMsg",
       "enum": [
-        ["Hello", [["protocol_version", "u16"], ["name", "string"]]],
-        ["Inputs", [["frames", ["vec", "InputFrame"]]]],
-        ["Ping", [["t", "u32"]]],
-        ["Restart", []]
+        [
+          "Hello",
+          [
+            [
+              "protocol_version",
+              "u16"
+            ],
+            [
+              "name",
+              "string"
+            ]
+          ]
+        ],
+        [
+          "Inputs",
+          [
+            [
+              "frames",
+              [
+                "vec",
+                "InputFrame"
+              ]
+            ]
+          ]
+        ],
+        [
+          "Ping",
+          [
+            [
+              "t",
+              "u32"
+            ]
+          ]
+        ],
+        [
+          "Restart",
+          []
+        ]
       ]
     },
     {
       "name": "ServerMsg",
       "enum": [
-        ["Welcome", [["protocol_version", "u16"], ["player_id", "u32"], ["tick", "u32"]]],
-        ["Level", [["data", "LevelData"]]],
+        [
+          "Welcome",
+          [
+            [
+              "protocol_version",
+              "u16"
+            ],
+            [
+              "player_id",
+              "u32"
+            ],
+            [
+              "tick",
+              "u32"
+            ]
+          ]
+        ],
+        [
+          "Level",
+          [
+            [
+              "data",
+              "LevelData"
+            ]
+          ]
+        ],
         [
           "Snapshot",
           [
-            ["tick", "u32"],
-            ["last_input_seq", "u32"],
-            ["you", "ControllerState"],
-            ["players", ["vec", "PlayerView"]],
-            ["enemies", ["vec", "EnemyView"]],
-            ["gifts_taken", ["vec", "u16"]]
+            [
+              "tick",
+              "u32"
+            ],
+            [
+              "level",
+              "u32"
+            ],
+            [
+              "last_input_seq",
+              "u32"
+            ],
+            [
+              "you",
+              "ControllerState"
+            ],
+            [
+              "players",
+              [
+                "vec",
+                "PlayerView"
+              ]
+            ],
+            [
+              "enemies",
+              [
+                "vec",
+                "EnemyView"
+              ]
+            ],
+            [
+              "gifts_taken",
+              [
+                "vec",
+                "u16"
+              ]
+            ]
           ]
         ],
-        ["Pong", [["t", "u32"]]],
-        ["Error", [["code", "u16"], ["message", "string"]]]
+        [
+          "Pong",
+          [
+            [
+              "t",
+              "u32"
+            ]
+          ]
+        ],
+        [
+          "Error",
+          [
+            [
+              "code",
+              "u16"
+            ],
+            [
+              "message",
+              "string"
+            ]
+          ]
+        ],
+        [
+          "RunOver",
+          [
+            [
+              "summary",
+              "RunSummary"
+            ]
+          ]
+        ]
       ]
     }
   ],
   "fixtures": [
-    { "name": "client_hello", "type": "ClientMsg", "value": { "Hello": { "protocol_version": 1, "name": "blocky" } } },
+    {
+      "name": "client_hello",
+      "type": "ClientMsg",
+      "value": {
+        "Hello": {
+          "protocol_version": 1,
+          "name": "blocky"
+        }
+      }
+    },
     {
       "name": "client_inputs",
       "type": "ClientMsg",
-      "value": { "Inputs": { "frames": [{ "seq": 7, "move_x": -127, "move_z": 64, "buttons": 3 }] } }
+      "value": {
+        "Inputs": {
+          "frames": [
+            {
+              "seq": 7,
+              "move_x": -127,
+              "move_z": 64,
+              "buttons": 3
+            }
+          ]
+        }
+      }
     },
-    { "name": "client_restart", "type": "ClientMsg", "value": "Restart" },
+    {
+      "name": "client_restart",
+      "type": "ClientMsg",
+      "value": "Restart"
+    },
     {
       "name": "server_snapshot",
       "type": "ServerMsg",
       "value": {
         "Snapshot": {
           "tick": 4000000000,
+          "level": 3,
           "last_input_seq": 42,
           "you": {
-            "pos": { "x": 1.5, "y": -2.25, "z": 0.0 },
-            "vel": { "x": 0.0, "y": 9.75, "z": -3.5 },
+            "pos": {
+              "x": 1.5,
+              "y": -2.25,
+              "z": 0.0
+            },
+            "vel": {
+              "x": 0.0,
+              "y": 9.75,
+              "z": -3.5
+            },
             "grounded": true,
             "coyote_frames": 7,
             "jump_buffer_frames": 0,
@@ -106,14 +476,58 @@
             "air_jumps_used": 0,
             "ability_cooldown_frames": 300,
             "ability_active_frames": 0,
-            "ability_dir": { "x": 0.0, "y": 0.0, "z": 1.0 }
+            "ability_dir": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 1.0
+            }
           },
-          "players": [{ "id": 1, "pos": { "x": 1.0, "y": 2.0, "z": 3.0 }, "vel": { "x": 0.0, "y": 0.0, "z": 0.0 }, "alive": true }],
+          "players": [
+            {
+              "id": 1,
+              "pos": {
+                "x": 1.0,
+                "y": 2.0,
+                "z": 3.0
+              },
+              "vel": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0
+              },
+              "alive": true
+            }
+          ],
           "enemies": [],
-          "gifts_taken": [2, 65535]
+          "gifts_taken": [
+            2,
+            65535
+          ]
         }
       }
     },
-    { "name": "server_error", "type": "ServerMsg", "value": { "Error": { "code": 400, "message": "void ✦ wrap" } } }
+    {
+      "name": "server_error",
+      "type": "ServerMsg",
+      "value": {
+        "Error": {
+          "code": 400,
+          "message": "void ✦ wrap"
+        }
+      }
+    },
+    {
+      "name": "server_run_over",
+      "type": "ServerMsg",
+      "value": {
+        "RunOver": {
+          "summary": {
+            "level_reached": 12,
+            "gifts_collected": 57,
+            "cause": 1
+          }
+        }
+      }
+    }
   ]
 }

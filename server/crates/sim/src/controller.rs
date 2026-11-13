@@ -1,14 +1,17 @@
 //! Kinematic character controller.
 //!
-//! M0 bootstrap version: instant run speed, gravity, edge-triggered ground jump,
-//! axis-separated AABB collision. Ticket T-010 replaces this with the full M1
-//! controller (coyote time, jump buffering, class ability). The public signature
-//! [`step`] is the contract shared by server and WASM client and must not change
-//! without updating both.
+//! M1 controller: instant run speed (ground and air), gravity with terminal
+//! velocity, coyote time, jump buffering, variable jump height (jump cut) and a
+//! dash class ability. Collision is axis-separated AABB against [`World`].
+//!
+//! [`step`] is the contract shared by the authoritative server and the WASM
+//! client prediction. Both must produce bit-identical results, so the step path
+//! only uses `+ - * /`, `sqrt`, `abs`, `min`, `max` and comparisons: no
+//! transcendental functions, no randomness, no time, no allocation.
 
 use crate::tuning::*;
 use crate::world::{World, overlaps};
-use protocol::{Aabb, BTN_JUMP, ControllerState, InputFrame, Vec3};
+use protocol::{Aabb, BTN_ABILITY, BTN_JUMP, ControllerState, InputFrame, Vec3};
 
 /// A fresh controller standing at `pos`.
 pub fn spawn_state(pos: Vec3) -> ControllerState {
@@ -53,23 +56,121 @@ pub fn wish_dir(input: &InputFrame) -> (f32, f32) {
 }
 
 /// Advance one fixed physics frame of [`DT`] seconds.
+///
+/// Step order (identical on server and client):
+///   1. timers & edge detection
+///   2. dash start
+///   3. jump (buffer + coyote)
+///   4. horizontal velocity
+///   5. vertical velocity (gravity / jump cut / dash)
+///   6. collide Y, then X, then Z
+///   7. grounded & coyote refresh, ability timer tick
+///   8. `prev_buttons = input.buttons`
 pub fn step(state: &mut ControllerState, input: &InputFrame, world: &World) {
-    let (wx, wz) = wish_dir(input);
-    state.vel.x = wx * RUN_SPEED;
-    state.vel.z = wz * RUN_SPEED;
+    let was_grounded = state.grounded;
 
+    // 1. Timers and button edges.
+    state.ability_cooldown_frames = state.ability_cooldown_frames.saturating_sub(1);
     let jump_pressed = input.buttons & BTN_JUMP != 0 && state.prev_buttons & BTN_JUMP == 0;
-    if jump_pressed && state.grounded {
+    let ability_pressed = input.buttons & BTN_ABILITY != 0 && state.prev_buttons & BTN_ABILITY == 0;
+    if jump_pressed {
+        state.jump_buffer_frames = JUMP_BUFFER_FRAMES;
+    }
+    let (wx, wz) = wish_dir(input);
+
+    // 2. Dash start.
+    if ability_pressed && state.ability_cooldown_frames == 0 && state.ability_active_frames == 0 {
+        state.ability_dir = dash_dir(wx, wz, &state.vel);
+        state.ability_active_frames = DASH_FRAMES;
+        state.ability_cooldown_frames = DASH_COOLDOWN_FRAMES;
+    }
+
+    // 3. Jump: consume the buffer on the first step a jump is allowed.
+    if state.jump_buffer_frames > 0 && (state.grounded || state.coyote_frames > 0) {
         state.vel.y = JUMP_VELOCITY;
         state.grounded = false;
+        state.coyote_frames = 0;
+        state.jump_buffer_frames = 0;
+        state.ability_active_frames = 0; // jumping cancels a dash
+    } else if state.jump_buffer_frames > 0 && !jump_pressed {
+        // The arming step itself does not tick, so a press N steps before
+        // touchdown still fires on the first step a jump is allowed.
+        state.jump_buffer_frames -= 1;
     }
-    state.vel.y = (state.vel.y - GRAVITY * DT).max(-MAX_FALL_SPEED);
-    state.prev_buttons = input.buttons;
 
+    let dashing = state.ability_active_frames > 0;
+
+    // 4. Horizontal velocity (instant, ground and air).
+    if dashing {
+        state.vel.x = state.ability_dir.x * DASH_SPEED;
+        state.vel.z = state.ability_dir.z * DASH_SPEED;
+    } else {
+        state.vel.x = wx * RUN_SPEED;
+        state.vel.z = wz * RUN_SPEED;
+    }
+
+    // 5. Vertical velocity.
+    if dashing {
+        state.vel.y = 0.0;
+    } else {
+        state.vel.y = (state.vel.y - GRAVITY * DT).max(-MAX_FALL_SPEED);
+        if input.buttons & BTN_JUMP == 0 && state.vel.y > 0.0 {
+            state.vel.y = state.vel.y.min(JUMP_CUT_VELOCITY);
+        }
+    }
+
+    // 6. Collide, one axis at a time.
     let landed = move_axis(state, world, Axis::Y, state.vel.y * DT);
-    state.grounded = landed;
     move_axis(state, world, Axis::X, state.vel.x * DT);
     move_axis(state, world, Axis::Z, state.vel.z * DT);
+
+    // 7. Grounded & coyote refresh.
+    state.grounded = landed || resting_on_solid(state, world);
+    if state.grounded {
+        state.coyote_frames = COYOTE_FRAMES;
+    } else if !was_grounded {
+        // Only steps that began airborne consume coyote time, so the step that
+        // walks off a ledge still leaves the whole window available.
+        state.coyote_frames = state.coyote_frames.saturating_sub(1);
+    }
+    state.ability_active_frames = state.ability_active_frames.saturating_sub(1);
+
+    // 8. Remember buttons for edge detection.
+    state.prev_buttons = input.buttons;
+}
+
+/// Unit horizontal dash direction: wish direction, else current horizontal
+/// velocity, else straight back (-Z).
+fn dash_dir(wx: f32, wz: f32, vel: &Vec3) -> Vec3 {
+    let wish_len_sq = wx * wx + wz * wz;
+    if wish_len_sq > 0.0 {
+        let len = wish_len_sq.sqrt();
+        return Vec3::new(wx / len, 0.0, wz / len);
+    }
+    let vel_len_sq = vel.x * vel.x + vel.z * vel.z;
+    if vel_len_sq > 0.0 {
+        let len = vel_len_sq.sqrt();
+        return Vec3::new(vel.x / len, 0.0, vel.z / len);
+    }
+    Vec3::new(0.0, 0.0, -1.0)
+}
+
+/// True when the feet rest on a solid top (within [`GROUND_EPSILON`]) while
+/// overlapping it in x/z and not moving upwards. Needed because a dash zeroes
+/// `vel.y`, which makes the downward Y move (and therefore `landed`) zero.
+fn resting_on_solid(state: &ControllerState, world: &World) -> bool {
+    if state.vel.y > 0.0 {
+        return false;
+    }
+    let b = player_box(&state.pos);
+    for solid in &world.solids {
+        let overlaps_xz =
+            b.min.x < solid.max.x && b.max.x > solid.min.x && b.min.z < solid.max.z && b.max.z > solid.min.z;
+        if overlaps_xz && (state.pos.y - solid.max.y).abs() <= GROUND_EPSILON {
+            return true;
+        }
+    }
+    false
 }
 
 #[derive(Clone, Copy)]
@@ -135,17 +236,51 @@ mod tests {
     use super::*;
     use crate::levels;
 
-    fn idle(seq: u32) -> InputFrame {
+    fn input(seq: u32, move_x: i8, move_z: i8, buttons: u8) -> InputFrame {
         InputFrame {
             seq,
-            move_x: 0,
-            move_z: 0,
-            buttons: 0,
+            move_x,
+            move_z,
+            buttons,
         }
+    }
+
+    fn idle(seq: u32) -> InputFrame {
+        input(seq, 0, 0, 0)
+    }
+
+    fn run_x(seq: u32, buttons: u8) -> InputFrame {
+        input(seq, 127, 0, buttons)
     }
 
     fn world() -> World {
         World::from_level(&levels::bootstrap())
+    }
+
+    /// Runs +X until the controller leaves the ground. On return the controller
+    /// is airborne and the next step is airborne step 1.
+    fn run_off_ledge(s: &mut ControllerState, w: &World, seq: &mut u32) {
+        let mut guard = 0;
+        while s.grounded && guard < 2000 {
+            step(s, &run_x(*seq, 0), w);
+            *seq += 1;
+            guard += 1;
+        }
+        assert!(!s.grounded, "controller never left the slab");
+    }
+
+    /// Number of steps (1-based) until a controller dropped from `start_y`
+    /// first reports `grounded`.
+    fn landing_step(start_y: f32) -> u32 {
+        let w = world();
+        let mut s = spawn_state(Vec3::new(0.0, start_y, 0.0));
+        let mut n = 0;
+        while !s.grounded && n < 2000 {
+            step(&mut s, &idle(n), &w);
+            n += 1;
+        }
+        assert!(s.grounded, "controller never landed");
+        n
     }
 
     #[test]
@@ -161,57 +296,284 @@ mod tests {
     }
 
     #[test]
-    fn jump_is_edge_triggered() {
-        let w = world();
-        let mut s = spawn_state(Vec3::ZERO);
-        step(&mut s, &idle(0), &w);
-        assert!(s.grounded);
-        let jump = InputFrame {
-            seq: 1,
-            move_x: 0,
-            move_z: 0,
-            buttons: BTN_JUMP,
-        };
-        step(&mut s, &jump, &w);
-        assert!(s.pos.y > 0.0 && !s.grounded);
-        // Holding jump after landing must not re-jump.
-        for i in 0..200 {
-            step(
-                &mut s,
-                &InputFrame {
-                    seq: 2 + i,
-                    ..jump.clone()
-                },
-                &w,
-            );
-        }
-        assert!(s.grounded);
-    }
-
-    #[test]
     fn walks_off_edge_into_void() {
         let w = world();
         let mut s = spawn_state(Vec3::ZERO);
-        let run = |seq| InputFrame {
-            seq,
-            move_x: 127,
-            move_z: 0,
-            buttons: 0,
-        };
         for i in 0..400 {
-            step(&mut s, &run(i), &w);
+            step(&mut s, &run_x(i, 0), &w);
         }
         assert!(s.pos.y < w.kill_y);
     }
 
     #[test]
     fn diagonal_input_is_normalised() {
-        let (x, z) = wish_dir(&InputFrame {
-            seq: 0,
-            move_x: 127,
-            move_z: -128,
-            buttons: 0,
-        });
+        let (x, z) = wish_dir(&input(0, 127, -128, 0));
         assert!(((x * x + z * z).sqrt() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn coyote_jump_fires_on_airborne_step_seven() {
+        let w = world();
+        let mut s = spawn_state(Vec3::ZERO);
+        let mut seq = 0;
+        step(&mut s, &idle(seq), &w);
+        seq += 1;
+        assert!(s.grounded);
+        run_off_ledge(&mut s, &w, &mut seq);
+        for k in 1..=7u32 {
+            let buttons = if k == 7 { BTN_JUMP } else { 0 };
+            step(&mut s, &run_x(seq, buttons), &w);
+            seq += 1;
+        }
+        assert!(s.vel.y > 0.0, "coyote jump on airborne step 7 must fire");
+    }
+
+    #[test]
+    fn coyote_jump_does_not_fire_on_airborne_step_eight() {
+        let w = world();
+        let mut s = spawn_state(Vec3::ZERO);
+        let mut seq = 0;
+        step(&mut s, &idle(seq), &w);
+        seq += 1;
+        assert!(s.grounded);
+        run_off_ledge(&mut s, &w, &mut seq);
+        for k in 1..=8u32 {
+            let buttons = if k == 8 { BTN_JUMP } else { 0 };
+            step(&mut s, &run_x(seq, buttons), &w);
+            seq += 1;
+        }
+        assert!(s.vel.y <= 0.0, "coyote jump on airborne step 8 must not fire");
+    }
+
+    #[test]
+    fn buffered_jump_fires_within_one_step_of_landing() {
+        let w = world();
+        let land = landing_step(5.0);
+        assert!(land > 6);
+        let press_at = land - 5;
+        let mut s = spawn_state(Vec3::new(0.0, 5.0, 0.0));
+        let mut jumped = false;
+        for i in 1..=(land + 2) {
+            let buttons = if i == press_at { BTN_JUMP } else { 0 };
+            step(&mut s, &input(i, 0, 0, buttons), &w);
+            if i >= land && s.vel.y > 0.0 {
+                jumped = true;
+            }
+        }
+        assert!(jumped, "buffered jump must fire within one step of landing");
+    }
+
+    #[test]
+    fn buffered_jump_expires_before_landing() {
+        let w = world();
+        let land = landing_step(5.0);
+        assert!(land > 9);
+        let press_at = land - 8;
+        let mut s = spawn_state(Vec3::new(0.0, 5.0, 0.0));
+        let mut jumped = false;
+        for i in 1..=(land + 2) {
+            let buttons = if i == press_at { BTN_JUMP } else { 0 };
+            step(&mut s, &input(i, 0, 0, buttons), &w);
+            if i >= land && s.vel.y > 0.0 {
+                jumped = true;
+            }
+        }
+        assert!(!jumped, "an 8-step-old jump press must not fire on landing");
+    }
+
+    #[test]
+    fn holding_jump_does_not_rejump_after_landing() {
+        let w = world();
+        let mut s = spawn_state(Vec3::ZERO);
+        step(&mut s, &idle(0), &w);
+        assert!(s.grounded);
+        step(&mut s, &input(1, 0, 0, BTN_JUMP), &w);
+        assert!(s.vel.y > 0.0);
+        for i in 0..200 {
+            step(&mut s, &input(2 + i, 0, 0, BTN_JUMP), &w);
+        }
+        assert!(s.grounded);
+        assert_eq!(s.vel.y, 0.0);
+        // A fresh press does jump again.
+        step(&mut s, &idle(300), &w);
+        step(&mut s, &input(301, 0, 0, BTN_JUMP), &w);
+        assert!(s.vel.y > 0.0);
+    }
+
+    #[test]
+    fn jump_cut_lowers_apex() {
+        let w = world();
+        let apex = |hold: bool| -> f32 {
+            let mut s = spawn_state(Vec3::ZERO);
+            step(&mut s, &idle(0), &w);
+            let mut max_y = s.pos.y;
+            for i in 0..120 {
+                let buttons = if i == 0 || hold { BTN_JUMP } else { 0 };
+                step(&mut s, &input(1 + i, 0, 0, buttons), &w);
+                if s.pos.y > max_y {
+                    max_y = s.pos.y;
+                }
+            }
+            max_y
+        };
+        let tapped = apex(false);
+        let held = apex(true);
+        assert!(tapped < held, "tapped apex {tapped} must be below held apex {held}");
+    }
+
+    #[test]
+    fn dash_travels_expected_distance() {
+        let w = world();
+        let mut s = spawn_state(Vec3::ZERO);
+        let mut seq = 0;
+        step(&mut s, &idle(seq), &w);
+        seq += 1;
+        assert!(s.grounded);
+        let start_x = s.pos.x;
+        step(&mut s, &run_x(seq, BTN_ABILITY), &w);
+        seq += 1;
+        assert!(s.ability_active_frames > 0);
+        for _ in 1..DASH_FRAMES {
+            step(&mut s, &run_x(seq, 0), &w);
+            seq += 1;
+        }
+        let travelled = s.pos.x - start_x;
+        let in_range = (4.0..=4.4).contains(&travelled);
+        assert!(in_range, "dash travelled {travelled}, expected 28 * 9 / 60 = 4.2");
+    }
+
+    #[test]
+    fn dash_zeroes_vertical_velocity_in_air() {
+        let w = world();
+        let mut s = spawn_state(Vec3::new(0.0, 5.0, 0.0));
+        let mut seq = 0;
+        step(&mut s, &run_x(seq, BTN_ABILITY), &w);
+        seq += 1;
+        assert!(s.ability_active_frames > 0);
+        assert_eq!(s.vel.y, 0.0);
+        for _ in 1..DASH_FRAMES {
+            step(&mut s, &run_x(seq, 0), &w);
+            seq += 1;
+            assert_eq!(s.vel.y, 0.0);
+        }
+    }
+
+    #[test]
+    fn dash_cooldown_blocks_and_then_allows() {
+        let w = world();
+        let mut s = spawn_state(Vec3::ZERO);
+        let mut seq = 0;
+        step(&mut s, &idle(seq), &w);
+        seq += 1;
+        assert!(s.grounded);
+
+        step(&mut s, &run_x(seq, BTN_ABILITY), &w);
+        seq += 1;
+        assert!(s.ability_active_frames > 0);
+        for _ in 1..DASH_FRAMES {
+            step(&mut s, &run_x(seq, 0), &w);
+            seq += 1;
+        }
+        assert_eq!(s.ability_active_frames, 0);
+        assert!(s.ability_cooldown_frames > 0);
+
+        // A second press while cooling down does nothing.
+        let before = s.pos.x;
+        step(&mut s, &run_x(seq, BTN_ABILITY), &w);
+        seq += 1;
+        assert_eq!(s.ability_active_frames, 0);
+        assert!((s.pos.x - before - RUN_SPEED * DT).abs() < 1e-4);
+
+        // After the cooldown it works again.
+        while s.ability_cooldown_frames > 0 {
+            step(&mut s, &idle(seq), &w);
+            seq += 1;
+        }
+        step(&mut s, &run_x(seq, BTN_ABILITY), &w);
+        assert!(s.ability_active_frames > 0);
+    }
+
+    #[test]
+    fn dash_without_input_goes_negative_z() {
+        let w = world();
+        let mut s = spawn_state(Vec3::ZERO);
+        let mut seq = 0;
+        step(&mut s, &idle(seq), &w);
+        seq += 1;
+        assert_eq!(s.vel.x, 0.0);
+        assert_eq!(s.vel.z, 0.0);
+        step(&mut s, &input(seq, 0, 0, BTN_ABILITY), &w);
+        assert_eq!(s.ability_dir, Vec3::new(0.0, 0.0, -1.0));
+        assert_eq!(s.vel.x, 0.0);
+        assert!(s.vel.z < 0.0);
+    }
+
+    #[test]
+    fn terminal_fall_lands_on_thin_slab() {
+        let slab = Aabb {
+            min: Vec3::new(-10.0, -1.0, -10.0),
+            max: Vec3::new(10.0, 0.0, 10.0),
+        };
+        let w = World {
+            solids: vec![slab],
+            kill_y: -30.0,
+        };
+        let mut s = spawn_state(Vec3::new(0.0, 40.0, 0.0));
+        for i in 0..400 {
+            step(&mut s, &idle(i), &w);
+        }
+        assert!(s.grounded);
+        assert_eq!(s.pos.y, 0.0);
+        assert_eq!(s.vel.y, 0.0);
+    }
+
+    #[test]
+    fn wall_stops_flush_and_does_not_ground() {
+        let wall = Aabb {
+            min: Vec3::new(5.0, -10.0, -5.0),
+            max: Vec3::new(6.0, 10.0, 5.0),
+        };
+        let w = World {
+            solids: vec![wall.clone()],
+            kill_y: -100.0,
+        };
+        let mut s = spawn_state(Vec3::new(0.0, 5.0, 0.0));
+        for i in 0..40 {
+            step(&mut s, &run_x(i, 0), &w);
+        }
+        assert_eq!(s.pos.x, wall.min.x - PLAYER_HALF_WIDTH);
+        assert!(!s.grounded);
+    }
+
+    fn scripted(seq: u32) -> InputFrame {
+        let phase = seq % 120;
+        let move_x = match phase {
+            0..=29 => 127,
+            30..=59 => -128,
+            60..=89 => 64,
+            _ => 0,
+        };
+        let move_z = if phase.is_multiple_of(17) { 127 } else { 0 };
+        let mut buttons = 0u8;
+        if phase.is_multiple_of(23) {
+            buttons |= BTN_JUMP;
+        }
+        if phase.is_multiple_of(37) {
+            buttons |= BTN_ABILITY;
+        }
+        input(seq, move_x, move_z, buttons)
+    }
+
+    #[test]
+    fn step_is_deterministic() {
+        let w = world();
+        let run = || {
+            let mut s = spawn_state(Vec3::new(0.0, 2.0, 0.0));
+            for i in 0..600 {
+                step(&mut s, &scripted(i), &w);
+            }
+            s
+        };
+        assert_eq!(run(), run());
     }
 }

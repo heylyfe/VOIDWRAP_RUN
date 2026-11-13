@@ -18,3 +18,20 @@ pub const GRAVITY: f32 = 32.0;
 pub const JUMP_VELOCITY: f32 = 12.0;
 /// Terminal fall speed, units/s.
 pub const MAX_FALL_SPEED: f32 = 40.0;
+
+/// Frames of coyote time after walking off a ledge (~120 ms at 60 Hz).
+pub const COYOTE_FRAMES: u8 = 7;
+/// Frames a jump press is remembered while waiting for a landing (~100 ms).
+pub const JUMP_BUFFER_FRAMES: u8 = 6;
+/// Upward speed is clamped to this when jump is released early (variable height).
+pub const JUMP_CUT_VELOCITY: f32 = 4.0;
+
+/// Dash speed, units/s.
+pub const DASH_SPEED: f32 = 28.0;
+/// Frames a dash lasts (28 * 9 / 60 = 4.2 units of travel).
+pub const DASH_FRAMES: u8 = 9;
+/// Frames between dashes.
+pub const DASH_COOLDOWN_FRAMES: u16 = 45;
+
+/// Feet-to-surface distance still treated as "resting on" a solid top.
+pub const GROUND_EPSILON: f32 = 0.001;

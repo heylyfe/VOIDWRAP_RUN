@@ -2,7 +2,7 @@
 /* eslint-disable */
 import { Reader, Writer } from "./codec";
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 export const TICK_HZ = 20;
 export const PHYSICS_HZ = 60;
 export const MAX_INPUTS_PER_MSG = 32;
@@ -11,6 +11,8 @@ export const MAX_CLIENT_MSG_BYTES = 4096;
 export const BTN_JUMP = 1;
 export const BTN_ABILITY = 2;
 export const BTN_INTERACT = 4;
+export const DEATH_VOID = 0;
+export const DEATH_ENEMY = 1;
 
 export interface Vec3 {
   x: number;
@@ -308,6 +310,36 @@ export function decodeEnemyView(bytes: Uint8Array): EnemyView {
   return v;
 }
 
+/** End-of-run stats. cause is one of DEATH_VOID / DEATH_ENEMY. */
+export interface RunSummary {
+  levelReached: number;
+  giftsCollected: number;
+  cause: number;
+}
+export function writeRunSummary(w: Writer, v: RunSummary): void {
+  w.u32(v.levelReached);
+  w.u32(v.giftsCollected);
+  w.u8(v.cause);
+}
+export function readRunSummary(r: Reader): RunSummary {
+  return {
+    levelReached: r.u32(),
+    giftsCollected: r.u32(),
+    cause: r.u8(),
+  };
+}
+export function encodeRunSummary(v: RunSummary): Uint8Array<ArrayBuffer> {
+  const w = new Writer();
+  writeRunSummary(w, v);
+  return w.finish();
+}
+export function decodeRunSummary(bytes: Uint8Array): RunSummary {
+  const r = new Reader(bytes);
+  const v = readRunSummary(r);
+  r.end();
+  return v;
+}
+
 export type ClientMsg =
   | { type: "Hello"; protocolVersion: number; name: string }
   | { type: "Inputs"; frames: InputFrame[] }
@@ -364,9 +396,10 @@ export function decodeClientMsg(bytes: Uint8Array): ClientMsg {
 export type ServerMsg =
   | { type: "Welcome"; protocolVersion: number; playerId: number; tick: number }
   | { type: "Level"; data: LevelData }
-  | { type: "Snapshot"; tick: number; lastInputSeq: number; you: ControllerState; players: PlayerView[]; enemies: EnemyView[]; giftsTaken: number[] }
+  | { type: "Snapshot"; tick: number; level: number; lastInputSeq: number; you: ControllerState; players: PlayerView[]; enemies: EnemyView[]; giftsTaken: number[] }
   | { type: "Pong"; t: number }
   | { type: "Error"; code: number; message: string }
+  | { type: "RunOver"; summary: RunSummary }
 ;
 export function writeServerMsg(w: Writer, v: ServerMsg): void {
   switch (v.type) {
@@ -383,6 +416,7 @@ export function writeServerMsg(w: Writer, v: ServerMsg): void {
     case "Snapshot":
       w.u32(2);
       w.u32(v.tick);
+      w.u32(v.level);
       w.u32(v.lastInputSeq);
       writeControllerState(w, v.you);
       w.vec(v.players, (x) => writePlayerView(w, x));
@@ -398,6 +432,10 @@ export function writeServerMsg(w: Writer, v: ServerMsg): void {
       w.u16(v.code);
       w.string(v.message);
       return;
+    case "RunOver":
+      w.u32(5);
+      writeRunSummary(w, v.summary);
+      return;
   }
 }
 export function readServerMsg(r: Reader): ServerMsg {
@@ -408,11 +446,13 @@ export function readServerMsg(r: Reader): ServerMsg {
     case 1:
       return { type: "Level", data: readLevelData(r) };
     case 2:
-      return { type: "Snapshot", tick: r.u32(), lastInputSeq: r.u32(), you: readControllerState(r), players: r.vec(() => readPlayerView(r)), enemies: r.vec(() => readEnemyView(r)), giftsTaken: r.vec(() => r.u16()) };
+      return { type: "Snapshot", tick: r.u32(), level: r.u32(), lastInputSeq: r.u32(), you: readControllerState(r), players: r.vec(() => readPlayerView(r)), enemies: r.vec(() => readEnemyView(r)), giftsTaken: r.vec(() => r.u16()) };
     case 3:
       return { type: "Pong", t: r.u32() };
     case 4:
       return { type: "Error", code: r.u16(), message: r.string() };
+    case 5:
+      return { type: "RunOver", summary: readRunSummary(r) };
     default:
       throw new Error(`ServerMsg: unknown variant tag ${tag}`);
   }
@@ -440,6 +480,7 @@ export const CODECS = {
   LevelData: { encode: encodeLevelData, decode: decodeLevelData },
   PlayerView: { encode: encodePlayerView, decode: decodePlayerView },
   EnemyView: { encode: encodeEnemyView, decode: decodeEnemyView },
+  RunSummary: { encode: encodeRunSummary, decode: decodeRunSummary },
   ClientMsg: { encode: encodeClientMsg, decode: decodeClientMsg },
   ServerMsg: { encode: encodeServerMsg, decode: decodeServerMsg },
 } as const;

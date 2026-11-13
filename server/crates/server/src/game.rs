@@ -254,6 +254,7 @@ impl Game {
             };
             let msg = ServerMsg::Snapshot {
                 tick: self.tick,
+                level: self.level.level,
                 last_input_seq: p.last_applied_seq,
                 you: p.state.clone(),
                 players: players.clone(),
