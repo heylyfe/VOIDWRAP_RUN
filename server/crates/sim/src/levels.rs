@@ -64,13 +64,22 @@ pub fn level(n: u32) -> LevelData {
 }
 
 /// Enemy spawn points for level `n`, as `(kind, position)` pairs.
+///
+/// Every spawn sits exactly 2.0 above a platform top, at least 15 units (3D) from the
+/// player start, and at least 4.0 units horizontally from every gift and from the beacon,
+/// so a dormant chaser never shares a column with a pickup or the goal. Spawns prefer
+/// side-branch slabs over the main route.
 pub fn enemy_spawns(n: u32) -> Vec<(u8, Vec3)> {
     match design_of(n) {
-        1 => vec![(ENEMY_KIND_CHASER, Vec3::new(12.0, 2.0, 10.0))],
-        2 => vec![(ENEMY_KIND_CHASER, Vec3::new(12.0, 5.0, 10.0))],
+        // Design 1: the dead-end slab at (12, -4), far corner away from the loop.
+        1 => vec![(ENEMY_KIND_CHASER, Vec3::new(13.8, 2.0, -5.8))],
+        // Design 2: same dead-end slab, whose top is 1.5 high.
+        2 => vec![(ENEMY_KIND_CHASER, Vec3::new(13.8, 3.5, -5.8))],
+        // Design 3: the wide junction slab at (0, -20), on opposite corners so the two
+        // chasers do not stack and neither sits over gift 4 or the beacon.
         _ => vec![
-            (ENEMY_KIND_CHASER, Vec3::new(0.0, 3.5, -27.0)),
-            (ENEMY_KIND_CHASER, Vec3::new(0.0, 5.0, -33.0)),
+            (ENEMY_KIND_CHASER, Vec3::new(2.5, 3.5, -22.5)),
+            (ENEMY_KIND_CHASER, Vec3::new(-2.5, 3.5, -17.5)),
         ],
     }
 }
@@ -177,6 +186,13 @@ mod tests {
             .max(a.bounds.min.z - b.bounds.max.z)
             .max(0.0);
         (gx * gx + gz * gz).sqrt()
+    }
+
+    /// Horizontal (x/z) distance between two points.
+    fn dist_xz(a: &Vec3, b: &Vec3) -> f32 {
+        let dx = a.x - b.x;
+        let dz = a.z - b.z;
+        (dx * dx + dz * dz).sqrt()
     }
 
     /// Index of the platform whose top is `top` and whose x/z extent contains `(x, z)`.
@@ -380,6 +396,54 @@ mod tests {
                 assert!(
                     platform_at_top(&level, pos.x, pos.z, pos.y - 2.0).is_some(),
                     "enemy spawn is not 2 units above a platform top"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn enemy_spawns_clear_of_gifts_and_beacon() {
+        for n in 1..=3 {
+            let level = level(n);
+            let spawns = enemy_spawns(n);
+            assert!(!spawns.is_empty(), "design {n} has no enemy spawns");
+
+            for (kind, pos) in &spawns {
+                assert_eq!(*kind, ENEMY_KIND_CHASER, "design {n} spawns a non-chaser");
+
+                for g in &level.gifts {
+                    let d = dist_xz(pos, &g.pos);
+                    assert!(
+                        d >= 4.0,
+                        "design {n}: enemy spawn at ({}, {}, {}) is only {d} from gift {}",
+                        pos.x,
+                        pos.y,
+                        pos.z,
+                        g.id
+                    );
+                }
+
+                let d = dist_xz(pos, &level.beacon);
+                assert!(
+                    d >= 4.0,
+                    "design {n}: enemy spawn at ({}, {}, {}) is only {d} from the beacon",
+                    pos.x,
+                    pos.y,
+                    pos.z
+                );
+
+                let dx = pos.x - level.spawn.x;
+                let dy = pos.y - level.spawn.y;
+                let dz = pos.z - level.spawn.z;
+                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                assert!(dist >= 15.0, "design {n}: enemy spawn is only {dist} from the start");
+
+                assert!(
+                    platform_at_top(&level, pos.x, pos.z, pos.y - 2.0).is_some(),
+                    "design {n}: enemy spawn at ({}, {}, {}) is not exactly 2 units above a platform top",
+                    pos.x,
+                    pos.y,
+                    pos.z
                 );
             }
         }

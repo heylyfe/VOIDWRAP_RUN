@@ -22,6 +22,9 @@ export function GameHud(props: GameHudProps): JSX.Element {
           </span>
         </div>
         <div className="flex items-center gap-2 whitespace-nowrap">
+          <span className="text-sm tracking-widest text-white/70">
+            GIFTS LEFT
+          </span>
           <span aria-hidden="true" className="inline-block h-3 w-3 bg-[#ffd23d]" />
           <span
             data-testid="gifts-remaining"

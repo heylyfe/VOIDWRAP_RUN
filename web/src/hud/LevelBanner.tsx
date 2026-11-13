@@ -42,7 +42,7 @@ export function LevelBanner(props: LevelBannerProps): JSX.Element | null {
   return (
     <div
       data-testid="level-banner"
-      className={`pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap font-mono text-6xl font-bold tracking-widest text-white transition-opacity duration-500 [text-shadow:0_0_24px_#ff3db8,0_0_6px_#07060d] ${
+      className={`pointer-events-none absolute left-1/2 top-[22%] -translate-x-1/2 whitespace-nowrap rounded-full bg-black/70 px-6 py-3 font-mono text-4xl font-bold tracking-widest text-white transition-opacity duration-500 [text-shadow:0_0_24px_#ff3db8,0_0_6px_#07060d] sm:text-5xl ${
         phase === "faded" ? "opacity-0" : "opacity-100"
       }`}
     >

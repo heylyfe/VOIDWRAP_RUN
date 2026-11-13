@@ -42,6 +42,18 @@ builds non-deterministic. The human turned SAC off; builds are clean since.
 | T-012 rules + levels | DEEPSEEK | plan | 1 | ✓ | ✓ | ✓ | ✓ | ✓ | merged, 0 rejections | 33 sim tests incl. per-level validity + reachability BFS; design 3 optional 6.0-unit dash gap. Integration found level-1 chaser hovering over a gift → OVERSEER rule (run.rs): dormant enemies are harmless |
 | T-013 scene components | GLM | plan | 1 | ✓ | ✓ | ✓ | ✓ | ✓ | merged, 0 rejections | reply wrapped FILE bodies in markdown fences → apply-response now strips one enclosing fence (tooling, P-1 spirit). Visual: platform top strip floods the whole top (OVERSEER ticket flaw) → fix ticket |
 | M1 integration | OVERSEER | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | merged | server run.rs + tick order (move → gifts → enemies → deaths → beacon → snapshots), RunOver/Restart flow, client run state, scene + HUD wiring, capture flow death → summary → new run |
+| T-014 visual QA | INKLING-VISION | zen + 5 images | 1 | ✓ | n/a | n/a | n/a | ✓ (triage) | 10 findings → 5 accepted, 2 deferred to M4 (falling cues, title backdrop), 2 discarded, 1 merged with OVERSEER finding; cross-checked by OVERSEER (second reviewer in place of NEMOTRON) |
+| T-015 visual fixes | GLM | plan | 1 | ✓ | ✓ | ✓ | ✓ | ✓ | merged, 0 rejections | edge-bar platform outlines, saturated red chaser, findable closed beacon, "GIFTS LEFT", banner moved to upper third; verified in new screenshots |
+| T-016 enemy spawns | DEEPSEEK | plan | 1 + 1 | ✓ | ✓ | ✓ (after r1) | ✓ | ✓ | merged, 1 rejection | r0: new test did not compile (moved out of non-Copy Vec3). r1 fixed; only spawn points changed (diffed) |
+| playthrough bot | OVERSEER | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | merged | sim/tests/playthrough.rs: levels 1–3 completed with the real controller (24.9 s total game time); runs in just verify |
+
+**M1 exit demo (2026-11-13):** 3-level run proven completable by the playthrough bot; client capture flow green
+(spawn → move → death → summary → new run, no console errors, ~60 fps even under headless software rendering);
+prediction exercised throughout (WASM controller, reconciliation). Visual QA loop run once and its fixes verified.
+
+**M1 subordinate pass rates (first submission → merged):** DEEPSEEK 1/3 first-pass (T-012), 3/3 merged; GLM 3/5
+first-pass incl. T-002/T-013/T-015, 5/5 merged (T-011 needed one rejection). INKLING-VISION 1 QA pass, 50% of
+findings actionable. Paid route: 0 tickets.
 
 **Policy P-1 (2026-11-13):** OVERSEER runs `cargo fmt` / formatters on subordinate output before the gate. Formatting
 alone is never a rejection reason (a model cannot reproduce rustfmt byte-for-byte); every other static failure is.

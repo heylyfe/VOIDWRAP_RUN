@@ -14,6 +14,10 @@ const SHARD_OFFSETS: ReadonlyArray<readonly [number, number, number]> = [
   [0, -0.95, -0.35],
 ];
 
+const CORE_COLOR = PALETTE.chaserRed;
+const SHARD_COLOR = "#c81e1e";
+const EMISSIVE = "#ff1a1a";
+
 export function Chaser(props: { position: Vec3 }): JSX.Element {
   const coreRef = useRef<Mesh>(null);
   const shardsRef = useRef<Group>(null);
@@ -33,11 +37,12 @@ export function Chaser(props: { position: Vec3 }): JSX.Element {
   return (
     <group position={[props.position.x, props.position.y, props.position.z]}>
       <mesh ref={coreRef}>
-        <octahedronGeometry args={[0.6]} />
+        <octahedronGeometry args={[0.7]} />
         <meshStandardMaterial
-          color={PALETTE.chaserRed}
-          emissive={PALETTE.chaserRed}
-          emissiveIntensity={1.4}
+          color={CORE_COLOR}
+          emissive={EMISSIVE}
+          emissiveIntensity={0.6}
+          toneMapped={false}
         />
       </mesh>
       <group ref={shardsRef}>
@@ -45,9 +50,10 @@ export function Chaser(props: { position: Vec3 }): JSX.Element {
           <mesh key={index} position={offset as [number, number, number]}>
             <octahedronGeometry args={[0.14]} />
             <meshStandardMaterial
-              color={PALETTE.chaserRed}
-              emissive={PALETTE.chaserRed}
-              emissiveIntensity={1.8}
+              color={SHARD_COLOR}
+              emissive={EMISSIVE}
+              emissiveIntensity={0.8}
+              toneMapped={false}
             />
           </mesh>
         ))}

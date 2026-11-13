@@ -49,6 +49,13 @@ try {
   await page.mouse.click(640, 360); // focus (pointer lock is not available headless)
   await page.waitForTimeout(300);
   await shot("01-spawn");
+  const fps = await page.evaluate(() => new Promise((resolve) => {
+    let n = 0;
+    const t0 = performance.now();
+    const tick = () => (performance.now() - t0 < 2000 ? (n++, requestAnimationFrame(tick)) : resolve(n / 2));
+    requestAnimationFrame(tick);
+  }));
+  console.log(`capture: ~${Math.round(fps)} fps (headless software rendering; a lower bound, not a GPU measurement)`);
   const level = await page.getByTestId("level-number").textContent();
   const gifts = await page.getByTestId("gifts-remaining").textContent();
   console.log(`capture: HUD level=${level} gifts=${gifts}`);
