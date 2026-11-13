@@ -1,0 +1,69 @@
+name: Release
+
+# Push a tag like v0.1.0-alpha.1 to build downloadable game packages and publish a GitHub release.
+# Tags containing "alpha", "beta" or "rc" are published as pre-releases.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+          - os: ubuntu-latest
+            name: linux
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node tools/package.mjs
+      - name: Zip (Windows)
+        if: matrix.name == 'windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/VOIDWRAP_RUN -DestinationPath "VOIDWRAP_RUN-${{ github.ref_name }}-windows.zip"
+      - name: Tarball (Linux)
+        if: matrix.name == 'linux'
+        run: tar -C dist -czf "VOIDWRAP_RUN-${{ github.ref_name }}-linux.tar.gz" VOIDWRAP_RUN
+      - uses: actions/upload-artifact@v5
+        with:
+          name: package-${{ matrix.name }}
+          path: VOIDWRAP_RUN-*
+
+  publish:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: package-*
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          prerelease=""
+          case "$TAG" in *alpha*|*beta*|*rc*) prerelease="--prerelease" ;; esac
+          notes="release-notes/$TAG.md"
+          [ -f "$notes" ] || notes=/dev/null
+          gh release create "$TAG" VOIDWRAP_RUN-* $prerelease --title "VOIDWRAP RUN $TAG" --notes-file "$notes"
