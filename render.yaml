@@ -1,0 +1,10 @@
+# Free hosting on Render (https://render.com): "New" -> "Blueprint" -> pick this repository.
+# The free plan sleeps after ~15 minutes without visitors; the first visit afterwards takes ~1 minute to wake it.
+services:
+  - type: web
+    name: voidwrap-run
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true

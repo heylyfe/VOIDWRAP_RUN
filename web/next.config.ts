@@ -6,6 +6,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 const config: NextConfig = {
   reactStrictMode: true,
+  // Production builds are a static site (web/out) served by the game server itself: one program = the whole game.
+  output: process.env.NODE_ENV === "production" ? "export" : undefined,
+  trailingSlash: true,
   // The monorepo root, so the client can import design/palette.json.
   turbopack: { root: join(here, "..") },
   poweredByHeader: false,

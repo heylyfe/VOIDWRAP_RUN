@@ -13,16 +13,48 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use protocol::MAX_CLIENT_MSG_BYTES;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
+use tower_http::services::{ServeDir, ServeFile};
 
 static NEXT_CONN: AtomicU64 = AtomicU64::new(1);
 
-pub fn router(game_tx: mpsc::Sender<GameEvent>) -> Router {
-    Router::new()
+pub fn router(game_tx: mpsc::Sender<GameEvent>, web_dir: Option<PathBuf>) -> Router {
+    let router = Router::new()
         .route("/ws", get(ws_handler))
         .route("/health", get(|| async { "ok" }))
-        .with_state(game_tx)
+        .with_state(game_tx);
+    match web_dir {
+        // Serve the built web client from the same address, so one program is the whole game.
+        Some(dir) => {
+            let not_found = ServeFile::new(dir.join("404.html"));
+            router.fallback_service(
+                ServeDir::new(dir)
+                    .append_index_html_on_directories(true)
+                    .fallback(not_found),
+            )
+        }
+        None => router,
+    }
+}
+
+/// Locate the built web client: $VOIDWRAP_WEB_DIR, then `web/` next to the executable (release download),
+/// then `web/out` in the source tree (after `pnpm --dir web build`).
+pub fn find_web_dir() -> Option<PathBuf> {
+    let has_index = |d: &PathBuf| d.join("index.html").is_file();
+    if let Some(dir) = std::env::var_os("VOIDWRAP_WEB_DIR").map(PathBuf::from) {
+        return has_index(&dir).then_some(dir);
+    }
+    let beside_exe = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|p| p.join("web")));
+    let candidates = [
+        beside_exe,
+        Some(PathBuf::from("web/out")),
+        Some(PathBuf::from("../web/out")),
+    ];
+    candidates.into_iter().flatten().find(has_index)
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(game_tx): State<mpsc::Sender<GameEvent>>) -> impl IntoResponse {

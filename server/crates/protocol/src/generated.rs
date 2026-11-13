@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 4;
 pub const TICK_HZ: u32 = 20;
 pub const PHYSICS_HZ: u32 = 60;
 pub const MAX_INPUTS_PER_MSG: u32 = 32;
@@ -25,6 +25,10 @@ pub const GIFT_GOLDEN: u8 = 1;
 pub const CARD_ENEMY: u8 = 0;
 pub const CARD_UPGRADE: u8 = 1;
 pub const CARD_CURSE: u8 = 2;
+pub const PLAYER_ACTIVE: u8 = 0;
+pub const PLAYER_FINISHED: u8 = 1;
+pub const PLAYER_DEAD: u8 = 2;
+pub const PLAYER_WAITING: u8 = 3;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Vec3 {
@@ -88,12 +92,13 @@ pub struct LevelData {
     pub gifts: Vec<Gift>,
 }
 
+/// mode: PLAYER_ACTIVE playing; PLAYER_FINISHED reached the beacon (spectating); PLAYER_DEAD out of lives (spectating); PLAYER_WAITING joined mid-level (spectating until the next lobby).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlayerView {
     pub id: u32,
     pub pos: Vec3,
     pub vel: Vec3,
-    pub alive: bool,
+    pub mode: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

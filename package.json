@@ -5,6 +5,10 @@
   "packageManager": "pnpm@12.18.0",
   "scripts": {
     "gen": "node tools/protocol-gen.mjs",
-    "run": "node tools/run.mjs"
+    "run": "node tools/run.mjs",
+    "start": "node tools/play.mjs",
+    "start:friends": "node tools/play.mjs --friends",
+    "dev": "node tools/run.mjs",
+    "package": "node tools/package.mjs"
   }
 }

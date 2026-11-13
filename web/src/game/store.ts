@@ -33,6 +33,10 @@ export interface GameStore {
   runInfo: RunInfo | null;
   /** The current lobby draft offer, if any. */
   draft: DraftOffer | null;
+  /** This player's mode from the latest snapshot (PLAYER_ACTIVE / FINISHED / DEAD / WAITING). */
+  myMode: number;
+  /** Ids of players still playing the level (for the spectator HUD and follow camera). */
+  activeIds: number[];
   set(patch: Partial<Omit<GameStore, "set">>): void;
 }
 
@@ -51,5 +55,7 @@ export const useGameStore = create<GameStore>((set) => ({
   fps: 0,
   runInfo: null,
   draft: null,
+  myMode: 0,
+  activeIds: [],
   set: (patch) => set(patch),
 }));

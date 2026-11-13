@@ -8,14 +8,18 @@
 //!
 //! Run flow (see [`crate::run`]): lobby on the spawn hub with a draft offer → every player
 //! votes → a generated level → collect all normal gifts → golden gifts + beacon → lobby.
-//! Tick order: movement → (playing) gifts → enemies → deaths/lives → beacon → snapshots.
+//! Tick order: movement → (playing) gifts → enemies → deaths/lives → beacon → end check → snapshots.
+//!
+//! Multiplayer: a player who enters the open beacon is FINISHED and one who runs out of lives is DEAD; both
+//! become invisible spectators. The level ends when nobody is ACTIVE: back to the lobby if anyone finished,
+//! otherwise the run is over. Solo is the same rule with one player.
 
 use crate::content::Content;
 use crate::run::Run;
 use protocol::{
     BTN_ABILITY, BTN_INTERACT, BTN_JUMP, ClientMsg, ControllerState, InputFrame, MAX_DRAFT_PICKS, MAX_INPUTS_PER_MSG,
-    MAX_NAME_LEN, PHASE_ENEMY_DRAFT, PHASE_OVER, PHASE_PLAYING, PHYSICS_HZ, PROTOCOL_VERSION, PlayerView, RunSummary,
-    ServerMsg, TICK_HZ, Tuning, Vec3,
+    MAX_NAME_LEN, PHASE_ENEMY_DRAFT, PHASE_OVER, PHASE_PLAYING, PHYSICS_HZ, PLAYER_ACTIVE, PLAYER_DEAD,
+    PLAYER_FINISHED, PLAYER_WAITING, PROTOCOL_VERSION, PlayerView, RunSummary, ServerMsg, TICK_HZ, Tuning, Vec3,
 };
 use sim::controller;
 use std::collections::{BTreeMap, VecDeque};
@@ -62,10 +66,17 @@ struct Player {
     last_applied_seq: u32,
     tokens: u32,
     starved_ticks: u32,
-    alive: bool,
+    /// PLAYER_ACTIVE / PLAYER_FINISHED / PLAYER_DEAD / PLAYER_WAITING.
+    mode: u8,
+    /// How this player last died (for the run summary).
+    cause: u8,
 }
 
 impl Player {
+    fn active(&self) -> bool {
+        self.mode == PLAYER_ACTIVE
+    }
+
     fn centre(&self) -> Vec3 {
         Vec3::new(
             self.state.pos.x,
@@ -207,7 +218,7 @@ impl Game {
             let at = self.spawn_point(slot);
             if let Some(p) = self.conns.get_mut(id).and_then(|c| c.player.as_mut()) {
                 p.state = controller::spawn_state(at);
-                p.alive = true;
+                p.mode = PLAYER_ACTIVE;
                 p.starved_ticks = 0;
             }
         }
@@ -275,8 +286,12 @@ impl Game {
                 self.next_player_id = self.next_player_id.wrapping_add(1).max(1);
                 let spawn = self.spawn_point(self.player_count());
                 tracing::info!(conn = id, player = player_id, name = %name, "player joined");
-                // Joining mid-level: you wait in the lobby of the next level (dead until then); in the lobby you play.
-                let alive = self.run.phase == PHASE_ENEMY_DRAFT;
+                // Joining mid-level: you spectate until the next lobby; in the lobby you play.
+                let mode = if self.run.phase == PHASE_ENEMY_DRAFT {
+                    PLAYER_ACTIVE
+                } else {
+                    PLAYER_WAITING
+                };
                 if let Some(conn) = self.conns.get_mut(&id) {
                     conn.player = Some(Player {
                         id: player_id,
@@ -287,7 +302,8 @@ impl Game {
                         last_applied_seq: 0,
                         tokens: 0,
                         starved_ticks: 0,
-                        alive,
+                        mode,
+                        cause: protocol::DEATH_VOID,
                     });
                 }
                 self.send(
@@ -364,8 +380,8 @@ impl Game {
         // 1. Movement (lobby and playing).
         for p in self.conns.values_mut().filter_map(|c| c.player.as_mut()) {
             p.tokens = (p.tokens + STEPS_PER_TICK).min(MAX_STEP_TOKENS);
-            if !p.alive {
-                // Dead players' inputs are acknowledged and dropped so the client's queue drains.
+            if !p.active() {
+                // Spectators' inputs are acknowledged and dropped (their camera is client-side).
                 if let Some(last) = p.inputs.back() {
                     p.last_applied_seq = last.seq;
                 }
@@ -424,7 +440,7 @@ impl Game {
                 id: p.id,
                 pos: p.state.pos.clone(),
                 vel: p.state.vel.clone(),
-                alive: p.alive,
+                mode: p.mode,
             })
             .collect();
         let enemies = self.run.enemy_views();
@@ -449,7 +465,7 @@ impl Game {
         // Gifts (shared by the team; golden ones unlock after the normal ones).
         let currency_before = self.run.currency;
         for conn in self.conns.values() {
-            if let Some(p) = conn.player.as_ref().filter(|p| p.alive) {
+            if let Some(p) = conn.player.as_ref().filter(|p| p.active()) {
                 self.run.collect_gifts(&p.state.pos);
             }
         }
@@ -460,21 +476,20 @@ impl Game {
             .conns
             .values()
             .filter_map(|c| c.player.as_ref())
-            .filter(|p| p.alive)
+            .filter(|p| p.active())
             .map(Player::centre)
             .collect();
         self.run.step_enemies(&targets);
 
-        // Deaths: a spare life respawns you at the level start, otherwise you are out for this run.
+        // Deaths: a spare life (shared by the team) respawns you at the level start; otherwise you spectate.
         let ids = self.joined_ids();
-        let mut deaths: Vec<(ConnId, u8)> = Vec::new();
         for (slot, id) in ids.iter().enumerate() {
             let at = self.spawn_point(slot);
             let Some(p) = self
                 .conns
                 .get_mut(id)
                 .and_then(|c| c.player.as_mut())
-                .filter(|p| p.alive)
+                .filter(|p| p.active())
             else {
                 continue;
             };
@@ -484,16 +499,62 @@ impl Game {
             if self.run.lives > 0 {
                 self.run.lives -= 1;
                 p.state = controller::spawn_state(at);
-                info_changed = true;
                 tracing::info!(conn = id, cause, lives = self.run.lives, "life lost");
             } else {
-                p.alive = false;
+                p.mode = PLAYER_DEAD;
+                p.cause = cause;
                 p.state.vel = Vec3::ZERO;
-                deaths.push((*id, cause));
+                tracing::info!(conn = id, cause, level = self.run.level_num, "player out; spectating");
+            }
+            info_changed = true;
+        }
+
+        // Beacon: each active player who walks into the open beacon finishes the level and spectates.
+        for p in self
+            .conns
+            .values_mut()
+            .filter_map(|c| c.player.as_mut())
+            .filter(|p| p.active())
+        {
+            if self.run.beacon_reached(&p.state.pos) {
+                p.mode = PLAYER_FINISHED;
+                p.state.vel = Vec3::ZERO;
+                info_changed = true;
             }
         }
-        for (id, cause) in deaths {
-            tracing::info!(conn = id, cause, level = self.run.level_num, "player died");
+
+        // The level ends when nobody is still playing it.
+        let players: Vec<&Player> = self.conns.values().filter_map(|c| c.player.as_ref()).collect();
+        if !players.is_empty() && !players.iter().any(|p| p.active()) {
+            if players.iter().any(|p| p.mode == PLAYER_FINISHED) {
+                self.run.finish_level(&self.content);
+                tracing::info!(
+                    next_level = self.run.level_num,
+                    currency = self.run.currency,
+                    "level cleared"
+                );
+                self.votes.clear();
+                self.respawn_all_and_broadcast();
+            } else {
+                self.end_run();
+            }
+            return;
+        }
+        if info_changed {
+            self.broadcast_run_state();
+        }
+    }
+
+    /// Everyone is out: the run is over. Each player gets a summary with their own cause of death.
+    fn end_run(&mut self) {
+        self.run.end();
+        tracing::info!(level = self.run.level_num, "run over");
+        let summaries: Vec<(ConnId, u8)> = self
+            .conns
+            .iter()
+            .filter_map(|(id, c)| c.player.as_ref().map(|p| (*id, p.cause)))
+            .collect();
+        for (id, cause) in summaries {
             let summary = RunSummary {
                 level_reached: self.run.level_num,
                 gifts_collected: self.run.gifts_collected,
@@ -501,34 +562,7 @@ impl Game {
             };
             self.send(id, &ServerMsg::RunOver { summary });
         }
-
-        let anyone_alive = self.conns.values().filter_map(|c| c.player.as_ref()).any(|p| p.alive);
-        if !anyone_alive && self.player_count() > 0 {
-            self.run.end();
-            self.broadcast_run_state();
-            return;
-        }
-
-        // Beacon: a living player in the open beacon takes the team back to the lobby for the next level.
-        let through_beacon = self
-            .conns
-            .values()
-            .filter_map(|c| c.player.as_ref())
-            .any(|p| p.alive && self.run.beacon_reached(&p.state.pos));
-        if through_beacon {
-            self.run.finish_level(&self.content);
-            tracing::info!(
-                next_level = self.run.level_num,
-                currency = self.run.currency,
-                "level cleared"
-            );
-            self.votes.clear();
-            self.respawn_all_and_broadcast();
-            return;
-        }
-        if info_changed {
-            self.broadcast_run_state();
-        }
+        self.broadcast_run_state();
     }
 }
 
@@ -767,7 +801,7 @@ mod tests {
             msg: ClientMsg::Restart,
         });
         assert_eq!(g.run.phase, PHASE_ENEMY_DRAFT);
-        assert!(player(&mut g, 1).alive);
+        assert!(player(&mut g, 1).active());
         assert!(
             drain(&mut rx)
                 .iter()
@@ -783,9 +817,98 @@ mod tests {
         let kill_y = g.run.world.kill_y;
         player(&mut g, 1).state.pos.y = kill_y - 1.0;
         g.tick();
-        assert!(player(&mut g, 1).alive);
+        assert!(player(&mut g, 1).active());
         assert!(player(&mut g, 1).state.pos.y > kill_y);
         assert!(!drain(&mut rx).iter().any(|m| matches!(m, ServerMsg::RunOver { .. })));
+    }
+
+    fn dormant_enemies(g: &mut Game) {
+        for e in &mut g.run.enemies {
+            e.active_in = 1_000;
+        }
+    }
+
+    fn collect_normal_gifts(g: &mut Game, id: ConnId) {
+        let gifts: Vec<_> = g
+            .run
+            .level
+            .gifts
+            .iter()
+            .filter(|g| g.kind != GIFT_GOLDEN)
+            .cloned()
+            .collect();
+        for gift in gifts {
+            player(g, id).state.pos = Vec3::new(gift.pos.x, gift.pos.y - 0.9, gift.pos.z);
+            dormant_enemies(g);
+            g.tick();
+        }
+    }
+
+    #[test]
+    fn multiplayer_beacon_makes_you_spectate_until_everyone_is_done() {
+        let mut g = game();
+        let mut rx1 = connect(&mut g, 1);
+        hello(&mut g, 1);
+        let _rx2 = connect(&mut g, 2);
+        hello(&mut g, 2);
+        vote(&mut g, 1);
+        vote(&mut g, 2);
+        collect_normal_gifts(&mut g, 1);
+        let beacon = g.run.level.beacon.clone();
+        player(&mut g, 1).state.pos = beacon;
+        dormant_enemies(&mut g);
+        g.tick();
+        assert_eq!(player(&mut g, 1).mode, PLAYER_FINISHED, "player 1 spectates");
+        assert_eq!(g.run.phase, PHASE_PLAYING, "player 2 is still playing");
+        let snaps = drain(&mut rx1);
+        assert!(snaps.iter().any(|m| matches!(m, ServerMsg::Snapshot { players, .. }
+            if players.iter().any(|p| p.id == 1 && p.mode == PLAYER_FINISHED))));
+        // Player 2 falls with no lives: nobody is active, someone finished -> the team goes to the lobby.
+        g.run.lives = 0;
+        let kill_y = g.run.world.kill_y;
+        player(&mut g, 2).state.pos.y = kill_y - 5.0;
+        g.tick();
+        assert_eq!(g.run.phase, PHASE_ENEMY_DRAFT);
+        assert_eq!(g.run.level_num, 2);
+        assert!(player(&mut g, 1).active() && player(&mut g, 2).active());
+    }
+
+    #[test]
+    fn multiplayer_run_ends_only_when_everyone_is_out() {
+        let mut g = game();
+        let mut rx1 = connect(&mut g, 1);
+        hello(&mut g, 1);
+        let mut rx2 = connect(&mut g, 2);
+        hello(&mut g, 2);
+        vote(&mut g, 1);
+        vote(&mut g, 2);
+        g.run.lives = 0;
+        let kill_y = g.run.world.kill_y;
+        player(&mut g, 1).state.pos.y = kill_y - 5.0;
+        g.tick();
+        assert_eq!(player(&mut g, 1).mode, PLAYER_DEAD);
+        assert_eq!(g.run.phase, PHASE_PLAYING);
+        assert!(
+            !drain(&mut rx1).iter().any(|m| matches!(m, ServerMsg::RunOver { .. })),
+            "no summary yet"
+        );
+        player(&mut g, 2).state.pos.y = kill_y - 5.0;
+        g.tick();
+        assert_eq!(g.run.phase, PHASE_OVER);
+        for rx in [&mut rx1, &mut rx2] {
+            assert!(drain(rx).iter().any(|m| matches!(m, ServerMsg::RunOver { .. })));
+        }
+    }
+
+    #[test]
+    fn joining_mid_level_waits_as_a_spectator() {
+        let mut g = game();
+        let _rx1 = connect(&mut g, 1);
+        hello(&mut g, 1);
+        vote(&mut g, 1);
+        let _rx2 = connect(&mut g, 2);
+        hello(&mut g, 2);
+        assert_eq!(player(&mut g, 2).mode, PLAYER_WAITING);
     }
 
     #[test]

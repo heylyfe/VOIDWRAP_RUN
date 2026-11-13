@@ -3,13 +3,23 @@
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Group } from "three";
-import { DEATH_ENEMY, GIFT_GOLDEN, PHASE_ENEMY_DRAFT, PHASE_PLAYING, type LevelData } from "@/protocol/generated";
+import {
+  DEATH_ENEMY,
+  GIFT_GOLDEN,
+  PHASE_ENEMY_DRAFT,
+  PHASE_PLAYING,
+  PLAYER_ACTIVE,
+  PLAYER_FINISHED,
+  type LevelData,
+} from "@/protocol/generated";
 import { gradeForTheme } from "@/content";
 import { DraftScreen } from "@/hud/DraftScreen";
 import { GameHud } from "@/hud/GameHud";
 import { RunStatus } from "@/hud/RunStatus";
 import { LevelBanner } from "@/hud/LevelBanner";
 import { RunSummary } from "@/hud/RunSummary";
+import { SpectatorHud } from "@/hud/SpectatorHud";
+import { flyStep, followCamera, nextFollow } from "./spectator";
 import type { DeathCause } from "@/hud/format";
 import { Atmosphere } from "@/scene/Atmosphere";
 import { Beacon } from "@/scene/Beacon";
@@ -83,11 +93,42 @@ function World({ session, level, themeLevel }: { session: GameSession; level: Le
   );
   const grade = gradeForTheme(baseTheme.id);
   const bounds = useMemo(() => levelBounds(level), [level]);
+  const myMode = useGameStore((s) => s.myMode);
+  const phase = useGameStore((s) => s.runInfo?.phase);
+  const spectating = phase === PHASE_PLAYING && myMode !== PLAYER_ACTIVE;
+  /** Free-flight camera position while spectating (starts where the player stopped). */
+  const flyPos = useRef<{ x: number; y: number; z: number } | null>(null);
 
   useFrame((_, dt) => {
     session.update(dt);
     const p = session.playerPosition(dt);
     const g = player.current;
+    if (g) g.visible = !spectating; // spectators are invisible, to everyone and to themselves
+    if (spectating) {
+      if (!flyPos.current) {
+        const from = p ?? level.spawn;
+        flyPos.current = { x: from.x, y: from.y + 3, z: from.z };
+      }
+      const k = session.keys;
+      const keys = { forward: k.forward, back: k.back, left: k.left, right: k.right, up: k.jump, down: k.down, fast: k.ability || session.rightMouse };
+      const now = performance.now();
+      const targets = [...session.remotePlayers(now).entries()];
+      const followed = session.followIndex === null ? undefined : targets[session.followIndex % Math.max(targets.length, 1)];
+      if (followed) {
+        const cam = followCamera(followed[1], session.yaw, session.pitch, CAMERA_DISTANCE);
+        camera.position.set(cam.x, cam.y, cam.z);
+        camera.lookAt(followed[1].x, followed[1].y + CAMERA_HEIGHT, followed[1].z);
+        flyPos.current = cam;
+      } else {
+        const f = flyPos.current;
+        flyStep(f, keys, session.yaw, session.pitch, dt);
+        camera.position.set(f.x, f.y, f.z);
+        const cp = Math.cos(session.pitch);
+        camera.lookAt(f.x - Math.sin(session.yaw) * cp, f.y - Math.sin(session.pitch), f.z - Math.cos(session.yaw) * cp);
+      }
+    } else {
+      flyPos.current = null;
+    }
     const c = session.playerController();
     if (c) {
       const m = motion.current;
@@ -96,7 +137,7 @@ function World({ session, level, themeLevel }: { session: GameSession; level: Le
       m.grounded = c.grounded;
       m.dashing = c.abilityActiveFrames > 0;
     }
-    if (p && g) {
+    if (p && g && !spectating) {
       g.position.set(p.x, p.y, p.z);
       const v = session.playerVelocity();
       const speed = v ? Math.hypot(v.x, v.z) : 0;
@@ -241,7 +282,8 @@ export default function GameClient() {
   const [level, setLevel] = useState<LevelData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const container = useRef<HTMLDivElement>(null);
-  const { status, pointerLocked, runOver, giftsTaken, runInfo, draft } = useGameStore();
+  const { status, pointerLocked, runOver, giftsTaken, runInfo, draft, myMode, activeIds } = useGameStore();
+  const [following, setFollowing] = useState<number | null>(null);
   const drafting = !!draft && runInfo?.phase === PHASE_ENEMY_DRAFT;
   // The lobby hub is shown in the colours of the level about to be played.
   const runLevel = runInfo?.level ?? level?.level ?? 1;
@@ -275,6 +317,14 @@ export default function GameClient() {
   useEffect(() => {
     if (!session) return;
     const key = (down: boolean) => (e: KeyboardEvent) => {
+      const st = useGameStore.getState();
+      const spectatingNow = st.runInfo?.phase === PHASE_PLAYING && st.myMode !== PLAYER_ACTIVE;
+      if (down && spectatingNow && !e.repeat && (e.code === "KeyF" || e.code === "KeyG")) {
+        session.followIndex = e.code === "KeyF" ? nextFollow(session.followIndex, st.activeIds.length) : null;
+        setFollowing(session.followIndex);
+        e.preventDefault();
+        return;
+      }
       const b = bindingFor(e.code);
       if (!b) return;
       session.keys[b] = down;
@@ -343,6 +393,13 @@ export default function GameClient() {
           <GameHud level={runLevel} giftsRemaining={normalLeft} giftsTotal={normalTotal} />
           <LevelBanner level={runLevel} />
         </>
+      )}
+      {playing && myMode !== PLAYER_ACTIVE && !runOver && (
+        <SpectatorHud
+          reason={myMode === PLAYER_FINISHED ? "beacon" : "dead"}
+          playersLeft={activeIds.length}
+          following={following === null ? null : `Player ${activeIds[following % Math.max(activeIds.length, 1)] ?? "?"}`}
+        />
       )}
       {runInfo && playing && (
         <RunStatus

@@ -3,6 +3,8 @@
 import {
   MAX_INPUTS_PER_MSG,
   PHASE_ENEMY_DRAFT,
+  PHASE_PLAYING,
+  PLAYER_ACTIVE,
   PHYSICS_HZ,
   PROTOCOL_VERSION,
   type ControllerState,
@@ -28,6 +30,8 @@ export class GameSession {
   /** Camera yaw/pitch in radians; see input.ts for the convention. */
   yaw = 0;
   pitch = 0.35;
+  /** Spectator follow target (index into the players still playing), or null for free flight. */
+  followIndex: number | null = null;
   level: LevelData | null = null;
   playerId: number | null = null;
   onLevel: (level: LevelData) => void = () => {};
@@ -96,9 +100,13 @@ export class GameSession {
         const now = performance.now();
         this.remote.push(
           now,
-          msg.players.filter((p) => p.id !== this.playerId && p.alive),
+          msg.players.filter((p) => p.id !== this.playerId && p.mode === PLAYER_ACTIVE),
         );
         this.enemies.push(now, msg.enemies);
+        const me = msg.players.find((p) => p.id === this.playerId);
+        const activeIds = msg.players.filter((p) => p.mode === PLAYER_ACTIVE).map((p) => p.id);
+        if (me && me.mode !== store.myMode) store.set({ myMode: me.mode });
+        if (activeIds.join(",") !== store.activeIds.join(",")) store.set({ activeIds });
         if (msg.giftsTaken.length !== store.giftsTaken.length) store.set({ giftsTaken: msg.giftsTaken });
         store.set({ serverTick: msg.tick, playerCount: msg.players.length });
         return;
@@ -144,7 +152,10 @@ export class GameSession {
   /** Advance the fixed-step loop by one rendered frame and flush inputs to the server. */
   update(dtSeconds: number): void {
     if (!this.level || this.predictor.state === null) return;
-    if (useGameStore.getState().runOver) return; // dead: no input, frozen in place
+    const st = useGameStore.getState();
+    if (st.runOver) return; // run over: no input, frozen in place
+    // Spectating (beacon reached / out of lives / joined mid-level): the camera is free, the body is not ours.
+    if (st.myMode !== PLAYER_ACTIVE && st.runInfo?.phase === PHASE_PLAYING) return;
     this.accumulator += Math.min(dtSeconds, MAX_FRAME_DT);
     while (this.accumulator >= DT) {
       const { moveX, moveZ } = wishFromKeys(this.keys, this.yaw);

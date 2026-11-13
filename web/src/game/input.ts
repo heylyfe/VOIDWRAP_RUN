@@ -10,6 +10,8 @@ export interface KeyState {
   jump: boolean;
   ability: boolean;
   interact: boolean;
+  /** Spectator flight only: descend. */
+  down: boolean;
 }
 
 export const emptyKeys = (): KeyState => ({
@@ -20,6 +22,7 @@ export const emptyKeys = (): KeyState => ({
   jump: false,
   ability: false,
   interact: false,
+  down: false,
 });
 
 const BINDINGS: Record<string, keyof KeyState> = {
@@ -35,6 +38,8 @@ const BINDINGS: Record<string, keyof KeyState> = {
   ShiftLeft: "ability",
   ShiftRight: "ability",
   KeyE: "interact",
+  KeyC: "down",
+  ControlLeft: "down",
 };
 
 export function bindingFor(code: string): keyof KeyState | undefined {

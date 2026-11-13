@@ -1,11 +1,22 @@
 // WebSocket transport. Binary frames only, protocol-encoded both ways.
 import { decodeServerMsg, encodeClientMsg, type ClientMsg, type ServerMsg } from "@/protocol/generated";
 
+/**
+ * Where the game server is:
+ * 1. `?server=wss://host/ws` in the page URL (handy for testing a remote server),
+ * 2. NEXT_PUBLIC_VOIDWRAP_WS at build time,
+ * 3. the web dev server (port 3000) -> the game server on port 7878 of the same machine,
+ * 4. otherwise the page was served BY the game server: connect back to the same address.
+ */
 export function defaultServerUrl(): string {
+  if (typeof window === "undefined") return "ws://localhost:7878/ws";
+  const fromQuery = new URLSearchParams(window.location.search).get("server");
+  if (fromQuery && /^wss?:\/\//.test(fromQuery)) return fromQuery;
   const configured = process.env.NEXT_PUBLIC_VOIDWRAP_WS;
   if (configured) return configured;
-  const host = typeof window === "undefined" ? "localhost" : window.location.hostname;
-  return `ws://${host}:7878/ws`;
+  const { protocol, hostname, host, port } = window.location;
+  if (port === "3000") return `ws://${hostname}:7878/ws`;
+  return `${protocol === "https:" ? "wss" : "ws"}://${host}/ws`;
 }
 
 export interface ConnectionHandlers {

@@ -19,3 +19,6 @@ shots/
 web/test-results/
 web/playwright-report/
 *.log
+
+# packaged game
+dist/

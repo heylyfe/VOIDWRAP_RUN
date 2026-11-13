@@ -66,6 +66,13 @@ builds non-deterministic. The human turned SAC off; builds are clean since.
 | run flow + protocol v3 | OVERSEER | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | merged | Tuning/RunInfo/Draft/DraftPick, Gift.kind, currency; content.rs (shared design/content.json, stacked+clamped RunMods); run.rs (lobby → vote → generated level → normal gifts → golden gifts → beacon → lobby, lives, greater curses every 10); game.rs rewrite (votes, spawn ring, hub safety); client run state, draft/status UI, motion-driven animation, grades, fog mods. Found+fixed two codec stale-buffer bugs (string growth) via golden tests |
 
 **Takeover rule fired twice this round** (T-027 Inkling generator, T-028 GLM UI) — both on second failed verification, both fixed directly by OVERSEER and logged.
+| T-030 spectator camera/HUD | GLM | plan | 1 + 1 | ✓ | ✓ | ✓ | ✓ | ✓ | merged, 1 rejection | r0: 8 tests contradicted the spec (dt clamp, camera height sign); code correct |
+| T-031 beginner guide + README | GLM | plan | 1 + follow-up + 1 | ✓ | ✓ | ✓ | n/a | ✓ | merged, 1 rejection | HOW-TO-PLAY.md accepted first time. README: OVERSEER ticket omitted the current file (GLM correctly refused to invent) -> T-031b; r0 described the developer route as the player route (npm/Node/localhost:3000) -> rejected; protected sections verified byte-identical |
+| multiplayer spectators (protocol v4) | OVERSEER | — | — | ✓ | ✓ | ✓ | ✓ (server tests) | ✓ | merged | PlayerView.mode; beacon/out-of-lives -> invisible spectator; level ends when nobody is active (lobby if anyone finished, else run over); joiners mid-level wait. Client: free-fly + follow camera (F/G), avatar hidden. Spectator HUD not yet exercised in a real 2-browser session |
+| single-program + distribution | OVERSEER | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | merged | server serves the static web export (one address = whole game), PORT/VOIDWRAP_HOST, browser auto-open; PLAY / PLAY-WITH-FRIENDS launchers; tools/package.mjs (4.8 MB package smoke-tested from dist/); npm start (no just needed); release workflow (Windows zip + Linux tarball, pre-release for alpha/beta/rc tags); Dockerfile + render.yaml (free Render plan) with a CI job that builds and smoke-tests the container |
+
+**Routing change (human, 2026-11-13):** Inkling 2 Small (max effort, unlimited) takes most work from now on, incl.
+implementation, in several parallel slots; OVERSEER keeps specs, integration and the verification gate.
 
 **Open risk:** frame rate with post-processing measured only under headless SOFTWARE rendering (~7 fps vs ~59 without);
 needs a real-GPU measurement (debug panel FPS readout) before the 60 fps target can be claimed.

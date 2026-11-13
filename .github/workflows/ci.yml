@@ -33,3 +33,18 @@ jobs:
           tool: just
       - run: pnpm install --frozen-lockfile
       - run: just verify
+
+  docker:
+    name: docker image builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker build -t voidwrap-run .
+      - name: Container serves the game
+        run: |
+          docker run -d --name vw -p 7878:7878 voidwrap-run
+          for i in $(seq 1 30); do curl -fs http://localhost:7878/health && break; sleep 1; done
+          curl -fs http://localhost:7878/ | grep -q "VOIDWRAP RUN"
+          curl -fsI http://localhost:7878/sim.wasm | grep -qi "application/wasm"
+

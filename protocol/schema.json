@@ -3,7 +3,7 @@
   "constants": {
     "PROTOCOL_VERSION": [
       "u16",
-      3
+      4
     ],
     "TICK_HZ": [
       "u32",
@@ -88,6 +88,22 @@
     "CARD_CURSE": [
       "u8",
       2
+    ],
+    "PLAYER_ACTIVE": [
+      "u8",
+      0
+    ],
+    "PLAYER_FINISHED": [
+      "u8",
+      1
+    ],
+    "PLAYER_DEAD": [
+      "u8",
+      2
+    ],
+    "PLAYER_WAITING": [
+      "u8",
+      3
     ]
   },
   "types": [
@@ -278,10 +294,11 @@
           "Vec3"
         ],
         [
-          "alive",
-          "bool"
+          "mode",
+          "u8"
         ]
-      ]
+      ],
+      "$comment": "mode: PLAYER_ACTIVE playing; PLAYER_FINISHED reached the beacon (spectating); PLAYER_DEAD out of lives (spectating); PLAYER_WAITING joined mid-level (spectating until the next lobby)."
     },
     {
       "name": "EnemyView",
@@ -679,7 +696,7 @@
                 "y": 0,
                 "z": 0
               },
-              "alive": true
+              "mode": 0
             }
           ],
           "enemies": [],

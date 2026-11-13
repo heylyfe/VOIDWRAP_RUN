@@ -2,7 +2,7 @@
 /* eslint-disable */
 import { Reader, Writer } from "./codec";
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 export const TICK_HZ = 20;
 export const PHYSICS_HZ = 60;
 export const MAX_INPUTS_PER_MSG = 32;
@@ -24,6 +24,10 @@ export const GIFT_GOLDEN = 1;
 export const CARD_ENEMY = 0;
 export const CARD_UPGRADE = 1;
 export const CARD_CURSE = 2;
+export const PLAYER_ACTIVE = 0;
+export const PLAYER_FINISHED = 1;
+export const PLAYER_DEAD = 2;
+export const PLAYER_WAITING = 3;
 
 export interface Vec3 {
   x: number;
@@ -263,24 +267,25 @@ export function decodeLevelData(bytes: Uint8Array): LevelData {
   return v;
 }
 
+/** mode: PLAYER_ACTIVE playing; PLAYER_FINISHED reached the beacon (spectating); PLAYER_DEAD out of lives (spectating); PLAYER_WAITING joined mid-level (spectating until the next lobby). */
 export interface PlayerView {
   id: number;
   pos: Vec3;
   vel: Vec3;
-  alive: boolean;
+  mode: number;
 }
 export function writePlayerView(w: Writer, v: PlayerView): void {
   w.u32(v.id);
   writeVec3(w, v.pos);
   writeVec3(w, v.vel);
-  w.bool(v.alive);
+  w.u8(v.mode);
 }
 export function readPlayerView(r: Reader): PlayerView {
   return {
     id: r.u32(),
     pos: readVec3(r),
     vel: readVec3(r),
-    alive: r.bool(),
+    mode: r.u8(),
   };
 }
 export function encodePlayerView(v: PlayerView): Uint8Array<ArrayBuffer> {

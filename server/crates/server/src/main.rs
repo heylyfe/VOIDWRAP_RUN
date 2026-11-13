@@ -22,11 +22,19 @@ async fn main() {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .init();
 
-    let port: u16 = std::env::var("VOIDWRAP_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
+    // Where to listen. Hosting platforms set PORT and need every interface; locally the default is this
+    // computer only. VOIDWRAP_HOST=0.0.0.0 opens the game to other computers (LAN multiplayer).
+    let hosted_port: Option<u16> = std::env::var("PORT").ok().and_then(|p| p.parse().ok());
+    let port: u16 = hosted_port
+        .or_else(|| std::env::var("VOIDWRAP_PORT").ok().and_then(|p| p.parse().ok()))
         .unwrap_or(7878);
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let default_host = if hosted_port.is_some() { "0.0.0.0" } else { "127.0.0.1" };
+    let host: std::net::IpAddr = std::env::var("VOIDWRAP_HOST")
+        .ok()
+        .and_then(|h| h.parse().ok())
+        .unwrap_or_else(|| default_host.parse().unwrap_or(std::net::IpAddr::from([127, 0, 0, 1])));
+    let addr = SocketAddr::from((host, port));
+    let web_dir = net::find_web_dir();
 
     let (game_tx, game_rx) = mpsc::channel(GAME_INBOX_CAPACITY);
     // Dev/QA aid: start every run at a later level (e.g. to review each colour theme).
@@ -60,8 +68,23 @@ async fn main() {
         }
     };
     tracing::info!("VOIDWRAP RUN server listening on ws://{addr}/ws");
+    match &web_dir {
+        Some(dir) => {
+            let shown = if host.is_unspecified() || host.is_loopback() {
+                "localhost".to_string()
+            } else {
+                host.to_string()
+            };
+            tracing::info!("serving the game from {}", dir.display());
+            tracing::info!(">>> open http://{shown}:{port} in your browser to play <<<");
+            if std::env::var_os("VOIDWRAP_OPEN_BROWSER").is_some() {
+                open_browser(&format!("http://localhost:{port}"));
+            }
+        }
+        None => tracing::info!("no built web client found (dev mode): run the web dev server separately"),
+    }
 
-    let app = net::router(game_tx);
+    let app = net::router(game_tx, web_dir);
     let serve = axum::serve(listener, app).with_graceful_shutdown(async {
         let _ = tokio::signal::ctrl_c().await;
         tracing::info!("shutting down");
@@ -70,4 +93,18 @@ async fn main() {
         tracing::error!("server error: {e}");
     }
     game.abort();
+}
+
+/// Best-effort: open the game in the default browser (used by the PLAY launchers). Failure is harmless.
+fn open_browser(url: &str) {
+    let result = if cfg!(target_os = "windows") {
+        std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn()
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(url).spawn()
+    } else {
+        std::process::Command::new("xdg-open").arg(url).spawn()
+    };
+    if let Err(e) = result {
+        tracing::warn!("could not open a browser ({e}); open {url} yourself");
+    }
 }

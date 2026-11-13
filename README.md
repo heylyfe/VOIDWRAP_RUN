@@ -10,19 +10,30 @@ Every run drops you into a freshly generated sprawl of floating platforms hangin
 
 ## Status
 
-The project is at milestone M1 (playable solo vertical slice):
+The project is a pre-release alpha. Working:
 
-- Three hand-built levels of floating platforms; level 4 onward repeats them with a higher level number.
-- Five gifts per level, with a gift counter.
-- An exit beacon that opens once every gift in the level is collected and takes you to the next level.
-- A red chaser enemy that wakes after 3 seconds and ends the run on touch.
-- Falling into the void ends the run.
-- A run summary (level reached, gifts collected, cause) with Run again.
-- Movement with coyote time, jump buffering, variable jump height, and a dash.
+- A lobby with enemy, upgrade, and curse voting
+- Randomly generated levels
+- Gifts, golden gifts, and an exit beacon
+- Lives
+- Spectator mode in multiplayer on the same network
+- Animations
+- Per-level visual themes
 
-Still planned: procedural level generation, enemy drafting, curses, upgrades, classes, altars, shop, co-op multiplayer, accounts and cosmetics.
+Still planned: a shop for golden-gift money, classes, altars, more enemy types, level events, online multiplayer, accounts, cosmetics.
 
-## Quick start
+## Play
+
+1. Open https://github.com/heylyfe/VOIDWRAP_RUN/releases, click the newest version's file ending in `-windows.zip`.
+2. In Downloads, right-click it -> "Extract All..." -> "Extract", open the `VOIDWRAP_RUN` folder inside.
+3. Double-click PLAY (if "Windows protected your PC" appears: "More info" -> "Run anyway").
+4. The browser opens the game; keep the black window open while you play.
+
+For detailed help, see [HOW-TO-PLAY.md](HOW-TO-PLAY.md).
+
+To host a game for friends online for free, see the "Host online for free" section of [HOW-TO-PLAY.md](HOW-TO-PLAY.md#host-online-for-free).
+
+## Build from source
 
 Prerequisites:
 
@@ -33,24 +44,18 @@ Prerequisites:
 
 Then:
 
-1. `just setup` — adds the wasm target and installs web dependencies
-2. `just run` — builds and starts the game server (ws://127.0.0.1:7878/ws) and the web client; open http://localhost:3000
-
-To run the full check suite at any time: `just verify` — format, clippy, Rust tests, TypeScript typecheck, eslint, web tests.
+- `npm start` — build the game and run it
+- `npm run dev` — run a development build
+- `just verify` (optional) — the full check suite: format, clippy, Rust tests, TypeScript typecheck, eslint, web tests
 
 ## Controls
-
-Current:
 
 - WASD — move
 - Mouse — look (click the game to capture the mouse)
 - Space — jump (hold for higher)
 - Shift or right-click — dash
 
-Planned:
-
-- E — interact
-- Tab — run overlay
+For the full control list, see [HOW-TO-PLAY.md](HOW-TO-PLAY.md).
 
 ## Development
 
