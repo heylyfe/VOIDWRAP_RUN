@@ -3,7 +3,7 @@
   "constants": {
     "PROTOCOL_VERSION": [
       "u16",
-      2
+      3
     ],
     "TICK_HZ": [
       "u32",
@@ -44,6 +44,50 @@
     "DEATH_ENEMY": [
       "u8",
       1
+    ],
+    "PHASE_ENEMY_DRAFT": [
+      "u8",
+      0
+    ],
+    "PHASE_PLAYING": [
+      "u8",
+      1
+    ],
+    "PHASE_REWARD_DRAFT": [
+      "u8",
+      2
+    ],
+    "PHASE_OVER": [
+      "u8",
+      3
+    ],
+    "MAX_DRAFT_PICKS": [
+      "u32",
+      4
+    ],
+    "MAX_ID_LEN": [
+      "u32",
+      32
+    ],
+    "GIFT_NORMAL": [
+      "u8",
+      0
+    ],
+    "GIFT_GOLDEN": [
+      "u8",
+      1
+    ],
+    "CARD_ENEMY": [
+      "u8",
+      0
+    ],
+    "CARD_UPGRADE": [
+      "u8",
+      1
+    ],
+    "CARD_CURSE": [
+      "u8",
+      2
     ]
   },
   "types": [
@@ -172,6 +216,10 @@
         [
           "pos",
           "Vec3"
+        ],
+        [
+          "kind",
+          "u8"
         ]
       ]
     },
@@ -271,6 +319,101 @@
       ]
     },
     {
+      "name": "Tuning",
+      "$comment": "Movement multipliers from upgrades/curses. Applied identically by the server and the WASM predictor.",
+      "struct": [
+        [
+          "run_speed_mul",
+          "f32"
+        ],
+        [
+          "jump_mul",
+          "f32"
+        ],
+        [
+          "gravity_mul",
+          "f32"
+        ],
+        [
+          "dash_speed_mul",
+          "f32"
+        ],
+        [
+          "dash_cooldown_mul",
+          "f32"
+        ],
+        [
+          "air_jumps",
+          "u8"
+        ]
+      ]
+    },
+    {
+      "name": "DraftCard",
+      "$comment": "A card offered in a draft. id refers to design/content.json; kind 0 enemy, 1 upgrade, 2 curse.",
+      "struct": [
+        [
+          "kind",
+          "u8"
+        ],
+        [
+          "id",
+          "string"
+        ]
+      ]
+    },
+    {
+      "name": "RunInfo",
+      "$comment": "Run-wide state, sent whenever it changes.",
+      "struct": [
+        [
+          "phase",
+          "u8"
+        ],
+        [
+          "level",
+          "u32"
+        ],
+        [
+          "lives",
+          "u32"
+        ],
+        [
+          "currency",
+          "u32"
+        ],
+        [
+          "tuning",
+          "Tuning"
+        ],
+        [
+          "fog_density_mul",
+          "f32"
+        ],
+        [
+          "enemies",
+          [
+            "vec",
+            "string"
+          ]
+        ],
+        [
+          "upgrades",
+          [
+            "vec",
+            "string"
+          ]
+        ],
+        [
+          "curses",
+          [
+            "vec",
+            "string"
+          ]
+        ]
+      ]
+    },
+    {
       "name": "ClientMsg",
       "enum": [
         [
@@ -310,6 +453,18 @@
         [
           "Restart",
           []
+        ],
+        [
+          "DraftPick",
+          [
+            [
+              "picks",
+              [
+                "vec",
+                "u8"
+              ]
+            ]
+          ]
         ]
       ]
     },
@@ -414,6 +569,35 @@
               "RunSummary"
             ]
           ]
+        ],
+        [
+          "RunState",
+          [
+            [
+              "info",
+              "RunInfo"
+            ]
+          ]
+        ],
+        [
+          "Draft",
+          [
+            [
+              "enemy_picks",
+              "u8"
+            ],
+            [
+              "reward_picks",
+              "u8"
+            ],
+            [
+              "cards",
+              [
+                "vec",
+                "DraftCard"
+              ]
+            ]
+          ]
         ]
       ]
     }
@@ -462,10 +646,10 @@
             "pos": {
               "x": 1.5,
               "y": -2.25,
-              "z": 0.0
+              "z": 0
             },
             "vel": {
-              "x": 0.0,
+              "x": 0,
               "y": 9.75,
               "z": -3.5
             },
@@ -477,23 +661,23 @@
             "ability_cooldown_frames": 300,
             "ability_active_frames": 0,
             "ability_dir": {
-              "x": 0.0,
-              "y": 0.0,
-              "z": 1.0
+              "x": 0,
+              "y": 0,
+              "z": 1
             }
           },
           "players": [
             {
               "id": 1,
               "pos": {
-                "x": 1.0,
-                "y": 2.0,
-                "z": 3.0
+                "x": 1,
+                "y": 2,
+                "z": 3
               },
               "vel": {
-                "x": 0.0,
-                "y": 0.0,
-                "z": 0.0
+                "x": 0,
+                "y": 0,
+                "z": 0
               },
               "alive": true
             }
@@ -525,6 +709,72 @@
             "level_reached": 12,
             "gifts_collected": 57,
             "cause": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "client_draft_pick",
+      "type": "ClientMsg",
+      "value": {
+        "DraftPick": {
+          "picks": [
+            0,
+            2
+          ]
+        }
+      }
+    },
+    {
+      "name": "server_draft",
+      "type": "ServerMsg",
+      "value": {
+        "Draft": {
+          "enemy_picks": 2,
+          "reward_picks": 1,
+          "cards": [
+            {
+              "kind": 0,
+              "id": "snapshrike"
+            },
+            {
+              "kind": 1,
+              "id": "twin_feather"
+            },
+            {
+              "kind": 2,
+              "id": "heavy_air"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "server_run_state",
+      "type": "ServerMsg",
+      "value": {
+        "RunState": {
+          "info": {
+            "phase": 1,
+            "level": 7,
+            "lives": 2,
+            "currency": 31,
+            "tuning": {
+              "run_speed_mul": 1.15,
+              "jump_mul": 1,
+              "gravity_mul": 0.9,
+              "dash_speed_mul": 1,
+              "dash_cooldown_mul": 0.75,
+              "air_jumps": 1
+            },
+            "fog_density_mul": 1.25,
+            "enemies": [
+              "snapshrike"
+            ],
+            "upgrades": [
+              "twin_feather"
+            ],
+            "curses": []
           }
         }
       }

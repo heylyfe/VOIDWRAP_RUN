@@ -46,8 +46,18 @@ try {
   const t1 = await tickOf();
   console.log(`capture: client saw ${t1 - t0} server ticks in ~1 s`);
   if (t1 - t0 < 15) errors.push(`tick rate too low at the client: ${t1 - t0}/s`);
+  // Lobby: the draft screen over the spawn hub. Pick two hunters and one reward by hotkey, then Continue.
+  await page.getByTestId("draft-screen").waitFor({ timeout: 15_000 });
+  await page.waitForTimeout(600);
+  await shot("01-lobby");
+  for (const key of ["Digit1", "Digit2", "Digit5"]) await page.keyboard.press(key);
+  await page.waitForTimeout(200);
+  await shot("01b-lobby-picked");
+  await page.getByTestId("draft-continue").click();
+  await page.getByTestId("draft-screen").waitFor({ state: "detached", timeout: 15_000 });
+  await page.getByTestId("gift-counter").waitFor({ timeout: 15_000 });
   await page.mouse.click(640, 360); // focus (pointer lock is not available headless)
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(600);
   await shot("01-spawn");
   const fps = await page.evaluate(() => new Promise((resolve) => {
     let n = 0;
@@ -62,6 +72,8 @@ try {
   console.log(`capture: gift counter "${counter?.trim()}"`);
   console.log(`capture: HUD level=${level} gifts=${gifts}`);
   if (level !== (process.env.CAPTURE_LEVEL ?? "1") || gifts !== "5 / 5") errors.push(`unexpected HUD: level=${level} gifts=${gifts}`);
+  const currency = await page.getByTestId("currency").textContent();
+  console.log(`capture: run status currency=${currency?.trim()}`);
   await page.keyboard.down("KeyW");
   await page.waitForTimeout(500);
   await page.keyboard.press("Space");
@@ -70,17 +82,22 @@ try {
   await page.keyboard.up("KeyW");
   await page.waitForTimeout(400);
   await shot("03-stopped");
-  // Walk off the +X edge of the spawn platform into the void.
-  await page.keyboard.down("KeyD");
-  await page.waitForTimeout(1200);
-  await page.keyboard.up("KeyD");
+  // Run off the side of the 12x12 spawn platform into the void (it is never surrounded on every side).
+  for (const key of ["KeyD", "KeyA", "KeyS"]) {
+    if (await page.getByTestId("run-summary").isVisible().catch(() => false)) break;
+    await page.keyboard.down(key);
+    await page.waitForTimeout(2500);
+    await page.keyboard.up(key);
+  }
   await shot("04-falling");
   await page.getByTestId("run-summary").waitFor({ timeout: 10_000 });
   await shot("05-run-summary");
   await page.getByTestId("run-again").click();
   await page.getByTestId("run-summary").waitFor({ state: "detached", timeout: 10_000 });
+  // A new run starts back in the lobby.
+  await page.getByTestId("draft-screen").waitFor({ timeout: 10_000 });
   await page.waitForTimeout(500);
-  await shot("06-new-run");
+  await shot("06-new-run-lobby");
 } catch (e) {
   errors.push(`flow: ${e.message}`);
   await shot("99-failure").catch(() => {});

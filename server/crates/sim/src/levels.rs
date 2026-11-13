@@ -30,6 +30,7 @@ fn gift(id: u16, x: f32, top: f32, z: f32) -> Gift {
     Gift {
         id,
         pos: Vec3::new(x, top + 1.0, z),
+        kind: protocol::GIFT_NORMAL,
     }
 }
 

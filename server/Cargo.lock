@@ -550,6 +550,8 @@ dependencies = [
  "axum",
  "futures-util",
  "protocol",
+ "serde",
+ "serde_json",
  "sim",
  "tokio",
  "tracing",

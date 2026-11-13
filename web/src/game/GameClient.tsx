@@ -3,14 +3,19 @@
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Group } from "three";
-import { DEATH_ENEMY, type LevelData } from "@/protocol/generated";
+import { DEATH_ENEMY, GIFT_GOLDEN, PHASE_ENEMY_DRAFT, PHASE_PLAYING, type LevelData } from "@/protocol/generated";
+import { gradeForTheme } from "@/content";
+import { DraftScreen } from "@/hud/DraftScreen";
 import { GameHud } from "@/hud/GameHud";
+import { RunStatus } from "@/hud/RunStatus";
 import { LevelBanner } from "@/hud/LevelBanner";
 import { RunSummary } from "@/hud/RunSummary";
 import type { DeathCause } from "@/hud/format";
 import { Atmosphere } from "@/scene/Atmosphere";
 import { Beacon } from "@/scene/Beacon";
 import { BlockyAvatar } from "@/scene/BlockyAvatar";
+import type { AvatarMotion } from "@/scene/avatarPose";
+import { DashStreak } from "@/scene/DashStreak";
 import { Chaser } from "@/scene/Chaser";
 import { Crystals } from "@/scene/Crystals";
 import { Debris } from "@/scene/Debris";
@@ -50,21 +55,47 @@ function levelBounds(level: LevelData): { center: { x: number; y: number; z: num
   return { center, radius: Math.max(20, Math.hypot(maxX - minX, maxZ - minZ) / 2 + 10) };
 }
 
-function World({ session, level }: { session: GameSession; level: LevelData }) {
+/** Mutable motion record per avatar, read by the animation in useFrame (no React re-renders). */
+function newMotion(): { current: AvatarMotion } {
+  return { current: { speed: 0, vy: 0, grounded: true, dashing: false } };
+}
+
+function World({ session, level, themeLevel }: { session: GameSession; level: LevelData; themeLevel: number }) {
   const player = useRef<Group>(null);
   const remotes = useRef<(Group | null)[]>([]);
   const enemies = useRef<(Group | null)[]>([]);
   const camera = useThree((s) => s.camera);
-  const [moving, setMoving] = useState(false);
+  const motion = useMemo(newMotion, []);
+  const remoteMotion = useMemo(() => Array.from({ length: MAX_REMOTE }, newMotion), []);
+  const remoteLast = useRef<{ x: number; y: number; z: number; ok: boolean }[]>(
+    Array.from({ length: MAX_REMOTE }, () => ({ x: 0, y: 0, z: 0, ok: false })),
+  );
   const giftsTaken = useGameStore((s) => s.giftsTaken);
-  const beaconOpen = giftsTaken.length >= level.gifts.length;
-  const theme = themeForLevel(level.level);
+  const fogMul = useGameStore((s) => s.runInfo?.fogDensityMul ?? 1);
+  const normalGifts = useMemo(() => level.gifts.filter((g) => g.kind !== GIFT_GOLDEN), [level]);
+  const normalLeft = normalGifts.filter((g) => !giftsTaken.includes(g.id)).length;
+  // The beacon opens and golden (currency) gifts appear once every normal gift is collected.
+  const beaconOpen = normalGifts.length > 0 && normalLeft === 0;
+  const baseTheme = themeForLevel(themeLevel);
+  const theme = useMemo(
+    () => ({ ...baseTheme, fog: { ...baseTheme.fog, near: baseTheme.fog.near / fogMul, far: baseTheme.fog.far / fogMul } }),
+    [baseTheme, fogMul],
+  );
+  const grade = gradeForTheme(baseTheme.id);
   const bounds = useMemo(() => levelBounds(level), [level]);
 
   useFrame((_, dt) => {
     session.update(dt);
     const p = session.playerPosition(dt);
     const g = player.current;
+    const c = session.playerController();
+    if (c) {
+      const m = motion.current;
+      m.speed = Math.hypot(c.vel.x, c.vel.z);
+      m.vy = c.vel.y;
+      m.grounded = c.grounded;
+      m.dashing = c.abilityActiveFrames > 0;
+    }
     if (p && g) {
       g.position.set(p.x, p.y, p.z);
       const v = session.playerVelocity();
@@ -76,7 +107,6 @@ function World({ session, level }: { session: GameSession; level: LevelData }) {
         d = Math.atan2(Math.sin(d), Math.cos(d)); // shortest turn
         g.rotation.y += d * Math.min(1, dt * 14);
       }
-      if (speed > MOVING_SPEED !== moving) setMoving(speed > MOVING_SPEED);
       const cp = Math.cos(session.pitch);
       camera.position.set(
         p.x + Math.sin(session.yaw) * cp * CAMERA_DISTANCE,
@@ -88,14 +118,34 @@ function World({ session, level }: { session: GameSession; level: LevelData }) {
     const now = performance.now();
     let i = 0;
     for (const o of session.remotePlayers(now).values()) {
-      const r = remotes.current[i++];
-      if (!r) break;
+      const r = remotes.current[i];
+      const last = remoteLast.current[i];
+      const rm = remoteMotion[i];
+      i++;
+      if (!r || !last || !rm) break;
       r.visible = true;
+      // Estimate motion from the interpolated path so remote avatars animate too.
+      if (last.ok && dt > 0) {
+        const vx = (o.x - last.x) / dt;
+        const vz = (o.z - last.z) / dt;
+        const m = rm.current;
+        m.speed = Math.hypot(vx, vz);
+        m.vy = (o.y - last.y) / dt;
+        m.grounded = Math.abs(m.vy) < 0.5;
+        m.dashing = m.speed > 15;
+        if (m.speed > MOVING_SPEED) r.rotation.y = Math.atan2(-vx, -vz);
+      }
+      last.x = o.x;
+      last.y = o.y;
+      last.z = o.z;
+      last.ok = true;
       r.position.set(o.x, o.y, o.z);
     }
     for (; i < MAX_REMOTE; i++) {
       const r = remotes.current[i];
+      const last = remoteLast.current[i];
       if (r) r.visible = false;
+      if (last) last.ok = false;
     }
     let e = 0;
     for (const o of session.enemyPositions(now).values()) {
@@ -119,16 +169,23 @@ function World({ session, level }: { session: GameSession; level: LevelData }) {
       <directionalLight position={[8, 20, 6]} intensity={1.6} />
       <Platforms platforms={level.platforms} theme={theme} />
       <Crystals platforms={level.platforms} theme={theme} seed={level.seed + 7} />
-      {level.gifts.map((gift) => (
-        <GiftBox key={gift.id} position={gift.pos} taken={giftsTaken.includes(gift.id)} />
-      ))}
-      <Beacon position={level.beacon} open={beaconOpen} />
+      {level.gifts.map((gift) => {
+        const golden = gift.kind === GIFT_GOLDEN;
+        const hidden = giftsTaken.includes(gift.id) || (golden && !beaconOpen);
+        return (
+          <group key={gift.id} scale={golden ? 1.25 : 1}>
+            <GiftBox position={golden ? scaled(gift.pos, 1 / 1.25) : gift.pos} taken={hidden} />
+          </group>
+        );
+      })}
+      {normalGifts.length > 0 && <Beacon position={level.beacon} open={beaconOpen} />}
       <group ref={player}>
-        <BlockyAvatar moving={moving} />
+        <BlockyAvatar motion={motion} />
+        <DashStreak motion={motion} color={theme.accent} />
       </group>
       {Array.from({ length: MAX_REMOTE }, (_, i) => (
         <group key={i} ref={(g) => void (remotes.current[i] = g)} visible={false}>
-          <BlockyAvatar bodyColor={PALETTE.edgeGlowCyan} />
+          <BlockyAvatar bodyColor={PALETTE.edgeGlowCyan} motion={remoteMotion[i]} />
         </group>
       ))}
       {Array.from({ length: MAX_ENEMIES }, (_, i) => (
@@ -136,10 +193,14 @@ function World({ session, level }: { session: GameSession; level: LevelData }) {
           <Chaser position={ORIGIN} />
         </group>
       ))}
-      <Effects />
+      <Effects grade={grade} />
       <FpsProbe />
     </>
   );
+}
+
+function scaled(v: { x: number; y: number; z: number }, k: number) {
+  return { x: v.x * k, y: v.y * k, z: v.z * k };
 }
 
 /** Counts rendered frames and publishes fps to the store twice a second. */
@@ -180,7 +241,14 @@ export default function GameClient() {
   const [level, setLevel] = useState<LevelData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const container = useRef<HTMLDivElement>(null);
-  const { status, pointerLocked, runOver, giftsTaken, giftsTotal } = useGameStore();
+  const { status, pointerLocked, runOver, giftsTaken, runInfo, draft } = useGameStore();
+  const drafting = !!draft && runInfo?.phase === PHASE_ENEMY_DRAFT;
+  // The lobby hub is shown in the colours of the level about to be played.
+  const runLevel = runInfo?.level ?? level?.level ?? 1;
+  const normalIds = useMemo(() => (level ? level.gifts.filter((g) => g.kind !== GIFT_GOLDEN).map((g) => g.id) : []), [level]);
+  const normalTotal = normalIds.length;
+  const normalLeft = normalIds.filter((id) => !giftsTaken.includes(id)).length;
+  const playing = runInfo ? runInfo.phase === PHASE_PLAYING : true;
 
   useEffect(() => {
     let disposed = false;
@@ -199,10 +267,10 @@ export default function GameClient() {
     };
   }, []);
 
-  // Free the mouse for the run summary.
+  // Free the mouse for the run summary and the lobby draft.
   useEffect(() => {
-    if (runOver && document.pointerLockElement) document.exitPointerLock();
-  }, [runOver]);
+    if ((runOver || drafting) && document.pointerLockElement) document.exitPointerLock();
+  }, [runOver, drafting]);
 
   useEffect(() => {
     if (!session) return;
@@ -248,32 +316,56 @@ export default function GameClient() {
   }, [session]);
 
   const restart = useCallback(() => session?.restart(), [session]);
+  const submitDraft = useCallback((picks: number[]) => session?.submitDraft(picks), [session]);
 
   return (
     <div
       ref={container}
       className="relative h-screen w-screen overflow-hidden bg-[#07060d]"
       onClick={() => {
-        if (!useGameStore.getState().runOver) void container.current?.requestPointerLock();
+        const st = useGameStore.getState();
+        const inDraft = !!st.draft && st.runInfo?.phase === PHASE_ENEMY_DRAFT;
+        if (!st.runOver && !inDraft) void container.current?.requestPointerLock();
       }}
       onContextMenu={(e) => e.preventDefault()}
     >
       {session && level ? (
         <Canvas camera={{ fov: 70, near: 0.1, far: 1000 }} dpr={[1, 2]}>
-          <World session={session} level={level} />
+          <World session={session} level={level} themeLevel={runLevel} />
         </Canvas>
       ) : (
         <div className="flex h-full items-center justify-center font-mono text-white/70">
           {loadError ?? "entering the void…"}
         </div>
       )}
-      {level && (
+      {level && playing && normalTotal > 0 && (
         <>
-          <GameHud level={level.level} giftsRemaining={giftsTotal - giftsTaken.length} giftsTotal={giftsTotal} />
-          <LevelBanner level={level.level} />
+          <GameHud level={runLevel} giftsRemaining={normalLeft} giftsTotal={normalTotal} />
+          <LevelBanner level={runLevel} />
         </>
       )}
-      {!pointerLocked && status === "connected" && !runOver && (
+      {runInfo && playing && (
+        <RunStatus
+          currency={runInfo.currency}
+          lives={runInfo.lives}
+          enemies={runInfo.enemies}
+          curses={runInfo.curses}
+          upgrades={runInfo.upgrades}
+        />
+      )}
+      {drafting && draft && runInfo && (
+        <DraftScreen
+          cards={draft.cards}
+          enemyPicks={draft.enemyPicks}
+          rewardPicks={draft.rewardPicks}
+          nextLevel={runInfo.level}
+          currency={runInfo.currency}
+          lives={runInfo.lives}
+          waiting={draft.submitted}
+          onSubmit={submitDraft}
+        />
+      )}
+      {!pointerLocked && status === "connected" && !runOver && !drafting && (
         <div className="pointer-events-none absolute bottom-8 left-1/2 -translate-x-1/2 rounded bg-black/60 px-4 py-2 font-mono text-sm text-white">
           click to aim · WASD move · Space jump · Shift dash
         </div>

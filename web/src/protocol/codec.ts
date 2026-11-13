@@ -76,7 +76,8 @@ export class Writer {
   string(v: string): void {
     const bytes = TEXT_ENC.encode(v);
     this.len64(bytes.length);
-    this.buf.set(bytes, this.reserve(bytes.length));
+    const at = this.reserve(bytes.length); // reserve first: growing replaces this.buf
+    this.buf.set(bytes, at);
   }
   vec<T>(items: readonly T[], each: (x: T) => void): void {
     this.len64(items.length);

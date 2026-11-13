@@ -5,7 +5,8 @@
 //! generated TypeScript codec, through one shared I/O buffer:
 //!
 //! 1. JS calls `vw_io_buf(len)` → pointer to a `len`-byte buffer in WASM memory.
-//! 2. JS writes encoded bytes there, then calls `vw_load_level(len)` / `vw_set_state(len)`.
+//! 2. JS writes encoded bytes there, then calls `vw_load_level(len)` / `vw_set_state(len)`
+//!    / `vw_set_tuning(len)`.
 //! 3. `vw_step(...)` advances the predicted controller one physics frame.
 //! 4. `vw_get_state()` encodes the state into the I/O buffer and returns its length;
 //!    JS reads it from the pointer returned by `vw_io_ptr()`.
@@ -13,7 +14,7 @@
 //! `#[unsafe(no_mangle)]` is the only unsafe-flagged construct; there are no `unsafe` blocks.
 #![allow(unsafe_code)]
 
-use protocol::{ControllerState, InputFrame, LevelData, Vec3};
+use protocol::{ControllerState, InputFrame, LevelData, Tuning, Vec3};
 use sim::controller;
 use sim::world::World;
 use std::cell::RefCell;
@@ -25,6 +26,7 @@ struct Bridge {
     io: Vec<u8>,
     world: World,
     state: ControllerState,
+    tuning: Tuning,
 }
 
 thread_local! {
@@ -32,6 +34,7 @@ thread_local! {
         io: Vec::new(),
         world: World::default(),
         state: controller::spawn_state(Vec3::ZERO),
+        tuning: Tuning::default(),
     });
 }
 
@@ -86,6 +89,23 @@ pub extern "C" fn vw_set_state(len: u32) -> i32 {
     )
 }
 
+/// Replace the movement tuning with an encoded `Tuning`. Returns 0 / -1.
+///
+/// Decoded exactly like `vw_set_state`; the stored tuning is used by every
+/// following `vw_step` until it is replaced.
+#[unsafe(no_mangle)]
+pub extern "C" fn vw_set_tuning(len: u32) -> i32 {
+    BRIDGE.with_borrow_mut(
+        |b| match io_bytes(b, len).and_then(|x| protocol::decode::<Tuning>(x).ok()) {
+            Some(tuning) => {
+                b.tuning = tuning;
+                0
+            }
+            None => -1,
+        },
+    )
+}
+
 /// Advance the predicted state one physics frame. Out-of-range inputs are clamped
 /// exactly as the server would see them after i8/u8 decoding.
 #[unsafe(no_mangle)]
@@ -97,8 +117,10 @@ pub extern "C" fn vw_step(move_x: i32, move_z: i32, buttons: i32) {
         buttons: buttons.clamp(0, 255) as u8,
     };
     BRIDGE.with_borrow_mut(|b| {
-        let Bridge { world, state, .. } = b;
-        controller::step(state, &input, world);
+        let Bridge {
+            world, state, tuning, ..
+        } = b;
+        controller::step_with(state, &input, world, tuning);
     });
 }
 
@@ -126,6 +148,19 @@ mod tests {
         let level = sim::levels::bootstrap();
         let len = write_io(&protocol::encode(&level).unwrap());
         assert_eq!(vw_load_level(len), 0);
+
+        // Non-default tuning: the bridge must apply exactly what the native step does.
+        let tuning = Tuning {
+            run_speed_mul: 1.2,
+            jump_mul: 1.1,
+            gravity_mul: 1.0,
+            dash_speed_mul: 1.0,
+            dash_cooldown_mul: 1.0,
+            air_jumps: 1,
+        };
+        let len = write_io(&protocol::encode(&tuning).unwrap());
+        assert_eq!(vw_set_tuning(len), 0);
+
         let start = controller::spawn_state(Vec3::new(0.0, 2.0, 0.0));
         let len = write_io(&protocol::encode(&start).unwrap());
         assert_eq!(vw_set_state(len), 0);
@@ -133,7 +168,7 @@ mod tests {
         let world = World::from_level(&level);
         let mut native = start;
         for i in 0..90u8 {
-            let (mx, mz, btn) = (i32::from(i % 7) * 30 - 90, 127, i32::from(i % 20 == 0));
+            let (mx, mz, btn) = (i32::from(i % 7) * 30 - 90, 127, i32::from(i.is_multiple_of(20)));
             vw_step(mx, mz, btn);
             let input = InputFrame {
                 seq: 0,
@@ -141,7 +176,7 @@ mod tests {
                 move_z: mz as i8,
                 buttons: btn as u8,
             };
-            controller::step(&mut native, &input, &world);
+            controller::step_with(&mut native, &input, &world, &tuning);
         }
         let len = vw_get_state() as usize;
         let bytes = BRIDGE.with_borrow(|b| b.io[..len].to_vec());
@@ -153,6 +188,7 @@ mod tests {
         assert!(vw_io_buf(MAX_IO_BYTES + 1).is_null());
         let len = write_io(&[1, 2, 3]);
         assert_eq!(vw_set_state(len), -1);
+        assert_eq!(vw_set_tuning(len), -1);
         assert_eq!(vw_load_level(len + 100), -1);
     }
 }

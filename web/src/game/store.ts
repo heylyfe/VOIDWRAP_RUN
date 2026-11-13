@@ -1,6 +1,14 @@
 // HUD-facing client state. The hot path (positions, prediction) lives outside React/zustand.
 import { create } from "zustand";
-import type { RunSummary } from "@/protocol/generated";
+import type { DraftCard, RunInfo, RunSummary } from "@/protocol/generated";
+
+export interface DraftOffer {
+  enemyPicks: number;
+  rewardPicks: number;
+  cards: DraftCard[];
+  /** True once this client has submitted its picks and waits for the other players. */
+  submitted: boolean;
+}
 
 export type ConnStatus = "connecting" | "connected" | "closed";
 
@@ -21,6 +29,10 @@ export interface GameStore {
   runOver: RunSummary | null;
   /** Rendered frames per second (measured in the canvas). */
   fps: number;
+  /** Run-wide state from the server (phase, currency, lives, drafted cards, tuning). */
+  runInfo: RunInfo | null;
+  /** The current lobby draft offer, if any. */
+  draft: DraftOffer | null;
   set(patch: Partial<Omit<GameStore, "set">>): void;
 }
 
@@ -37,5 +49,7 @@ export const useGameStore = create<GameStore>((set) => ({
   giftsTaken: [],
   runOver: null,
   fps: 0,
+  runInfo: null,
+  draft: null,
   set: (patch) => set(patch),
 }));

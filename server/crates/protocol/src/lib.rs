@@ -49,6 +49,20 @@ impl Vec3 {
     }
 }
 
+impl Default for Tuning {
+    /// Neutral tuning: the base movement with no upgrades or curses.
+    fn default() -> Self {
+        Tuning {
+            run_speed_mul: 1.0,
+            jump_mul: 1.0,
+            gravity_mul: 1.0,
+            dash_speed_mul: 1.0,
+            dash_cooldown_mul: 1.0,
+            air_jumps: 0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

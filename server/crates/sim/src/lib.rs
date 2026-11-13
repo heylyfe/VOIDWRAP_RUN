@@ -7,6 +7,7 @@
 //! inside the step path — only `+ - * / sqrt`, which IEEE-754 makes bit-exact.
 
 pub mod controller;
+pub mod levelgen;
 pub mod levels;
 pub mod rules;
 pub mod tuning;

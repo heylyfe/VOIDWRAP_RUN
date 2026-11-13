@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 pub const TICK_HZ: u32 = 20;
 pub const PHYSICS_HZ: u32 = 60;
 pub const MAX_INPUTS_PER_MSG: u32 = 32;
@@ -14,6 +14,17 @@ pub const BTN_ABILITY: u8 = 2;
 pub const BTN_INTERACT: u8 = 4;
 pub const DEATH_VOID: u8 = 0;
 pub const DEATH_ENEMY: u8 = 1;
+pub const PHASE_ENEMY_DRAFT: u8 = 0;
+pub const PHASE_PLAYING: u8 = 1;
+pub const PHASE_REWARD_DRAFT: u8 = 2;
+pub const PHASE_OVER: u8 = 3;
+pub const MAX_DRAFT_PICKS: u32 = 4;
+pub const MAX_ID_LEN: u32 = 32;
+pub const GIFT_NORMAL: u8 = 0;
+pub const GIFT_GOLDEN: u8 = 1;
+pub const CARD_ENEMY: u8 = 0;
+pub const CARD_UPGRADE: u8 = 1;
+pub const CARD_CURSE: u8 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Vec3 {
@@ -63,6 +74,7 @@ pub struct Platform {
 pub struct Gift {
     pub id: u16,
     pub pos: Vec3,
+    pub kind: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -99,12 +111,45 @@ pub struct RunSummary {
     pub cause: u8,
 }
 
+/// Movement multipliers from upgrades/curses. Applied identically by the server and the WASM predictor.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Tuning {
+    pub run_speed_mul: f32,
+    pub jump_mul: f32,
+    pub gravity_mul: f32,
+    pub dash_speed_mul: f32,
+    pub dash_cooldown_mul: f32,
+    pub air_jumps: u8,
+}
+
+/// A card offered in a draft. id refers to design/content.json; kind 0 enemy, 1 upgrade, 2 curse.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DraftCard {
+    pub kind: u8,
+    pub id: String,
+}
+
+/// Run-wide state, sent whenever it changes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunInfo {
+    pub phase: u8,
+    pub level: u32,
+    pub lives: u32,
+    pub currency: u32,
+    pub tuning: Tuning,
+    pub fog_density_mul: f32,
+    pub enemies: Vec<String>,
+    pub upgrades: Vec<String>,
+    pub curses: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ClientMsg {
     Hello { protocol_version: u16, name: String },
     Inputs { frames: Vec<InputFrame> },
     Ping { t: u32 },
     Restart,
+    DraftPick { picks: Vec<u8> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -115,6 +160,8 @@ pub enum ServerMsg {
     Pong { t: u32 },
     Error { code: u16, message: String },
     RunOver { summary: RunSummary },
+    RunState { info: RunInfo },
+    Draft { enemy_picks: u8, reward_picks: u8, cards: Vec<DraftCard> },
 }
 
 #[cfg(test)]
@@ -130,6 +177,9 @@ pub(crate) fn fixture_encode(type_name: &str, value: serde_json::Value) -> Resul
         "PlayerView" => crate::encode(&serde_json::from_value::<PlayerView>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "EnemyView" => crate::encode(&serde_json::from_value::<EnemyView>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "RunSummary" => crate::encode(&serde_json::from_value::<RunSummary>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
+        "Tuning" => crate::encode(&serde_json::from_value::<Tuning>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
+        "DraftCard" => crate::encode(&serde_json::from_value::<DraftCard>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
+        "RunInfo" => crate::encode(&serde_json::from_value::<RunInfo>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "ClientMsg" => crate::encode(&serde_json::from_value::<ClientMsg>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "ServerMsg" => crate::encode(&serde_json::from_value::<ServerMsg>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         other => Err(format!("unknown type {other}")),

@@ -35,3 +35,14 @@ pub const DASH_COOLDOWN_FRAMES: u16 = 45;
 
 /// Feet-to-surface distance still treated as "resting on" a solid top.
 pub const GROUND_EPSILON: f32 = 0.001;
+
+/// Defensive lower bound applied to every `Tuning` multiplier.
+pub const TUNING_MUL_MIN: f32 = 0.25;
+/// Defensive upper bound applied to every `Tuning` multiplier.
+pub const TUNING_MUL_MAX: f32 = 3.0;
+/// Defensive upper bound applied to `Tuning::air_jumps`.
+pub const TUNING_AIR_JUMPS_MAX: u8 = 3;
+/// Shortest dash cooldown a tuned `dash_cooldown_mul` may produce, in frames.
+pub const DASH_COOLDOWN_MIN_FRAMES: u16 = 10;
+/// Longest dash cooldown a tuned `dash_cooldown_mul` may produce, in frames.
+pub const DASH_COOLDOWN_MAX_FRAMES: u16 = 600;

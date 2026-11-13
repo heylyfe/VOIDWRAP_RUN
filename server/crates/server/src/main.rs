@@ -4,6 +4,7 @@
 //! tick loop. Each WebSocket connection is a pair of small tasks that only exchange
 //! bounded channel messages with the game task — no shared mutable state, no locks.
 
+mod content;
 mod game;
 mod net;
 mod run;
@@ -37,7 +38,19 @@ async fn main() {
     if start_level != 1 {
         tracing::warn!("VOIDWRAP_START_LEVEL={start_level}: runs start at level {start_level} (dev/QA only)");
     }
-    let game = tokio::spawn(game::run(game_rx, start_level));
+    // Seed draft offers and level layouts from the clock: every run is different.
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() ^ (d.as_secs() as u32))
+        .unwrap_or(0x5eed);
+    let state = match game::Game::starting_at(start_level, seed) {
+        Ok(g) => g,
+        Err(e) => {
+            tracing::error!("cannot start: {e}");
+            std::process::exit(1);
+        }
+    };
+    let game = tokio::spawn(game::run(game_rx, state));
 
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,

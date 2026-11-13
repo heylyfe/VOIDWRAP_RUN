@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DecodeError } from "./codec";
-import { CODECS, decodeClientMsg, encodeClientMsg } from "./generated";
+import { CODECS, decodeClientMsg, decodeServerMsg, encodeClientMsg, encodeServerMsg } from "./generated";
 
 const protocolDir = join(__dirname, "../../../protocol");
 type FieldList = [string, unknown][];
@@ -21,7 +21,7 @@ function fromSerde(ty: unknown, v: unknown): unknown {
     return v === null ? null : fromSerde(ty[1], v);
   }
   const t = typeByName.get(ty as string);
-  if (!t) return v; // primitive
+  if (!t) return ty === "f32" && typeof v === "number" ? Math.fround(v) : v; // primitive; f32 rounds like the wire
   const fields = (list: FieldList, body: unknown) =>
     Object.fromEntries(list.map(([f, fty]) => [camel(f), fromSerde(fty, (body as Record<string, unknown>)[f])]));
   if (t.struct) return fields(t.struct, v);
@@ -52,6 +52,15 @@ describe("codec hardening", () => {
     expect(() => decodeClientMsg(ok.slice(0, 3))).toThrow(DecodeError);
     const huge = new Uint8Array([1, 0, 0, 0, 255, 255, 255, 255, 255, 255, 0, 0]);
     expect(() => decodeClientMsg(huge)).toThrow(DecodeError);
+  });
+
+  it("survives buffer growth in the middle of strings and vectors", () => {
+    const long = "void".repeat(50);
+    const msg = { type: "Error" as const, code: 1, message: long };
+    const back = decodeServerMsg(encodeServerMsg(msg));
+    expect(back).toEqual(msg);
+    const many = { type: "Inputs" as const, frames: Array.from({ length: 30 }, (_, i) => ({ seq: i, moveX: -1, moveZ: 1, buttons: 0 })) };
+    expect(decodeClientMsg(encodeClientMsg(many))).toEqual(many);
   });
 
   it("refuses to encode out-of-range integers", () => {

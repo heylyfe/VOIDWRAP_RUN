@@ -2,8 +2,10 @@
 // fixed-step client loop. Rendering reads from it every frame; React only sees HUD state.
 import {
   MAX_INPUTS_PER_MSG,
+  PHASE_ENEMY_DRAFT,
   PHYSICS_HZ,
   PROTOCOL_VERSION,
+  type ControllerState,
   type InputFrame,
   type LevelData,
   type ServerMsg,
@@ -112,7 +114,26 @@ export class GameSession {
       case "RunOver":
         store.set({ runOver: msg.summary });
         return;
+      case "RunState":
+        this.sim.setTuning(msg.info.tuning);
+        store.set({ runInfo: msg.info });
+        if (msg.info.phase !== PHASE_ENEMY_DRAFT) store.set({ draft: null });
+        return;
+      case "Draft":
+        store.set({
+          draft: { enemyPicks: msg.enemyPicks, rewardPicks: msg.rewardPicks, cards: msg.cards, submitted: false },
+          runOver: null,
+        });
+        return;
     }
+  }
+
+  /** Submit this player's draft picks (indices into the offered cards). */
+  submitDraft(picks: number[]): void {
+    const store = useGameStore.getState();
+    if (!store.draft || store.draft.submitted) return;
+    this.conn.send({ type: "DraftPick", picks });
+    store.set({ draft: { ...store.draft, submitted: true } });
   }
 
   /** Ask the server for a fresh run (honoured once the whole team is down). */
@@ -146,6 +167,11 @@ export class GameSession {
 
   enemyPositions(now: number): Map<number, Vec3> {
     return this.enemies.sample(now);
+  }
+
+  /** Full predicted controller state of the local player (animation reads grounded/dash). */
+  playerController(): ControllerState | null {
+    return this.predictor.state;
   }
 
   /** Predicted velocity of the local player (for facing and walk animation). */

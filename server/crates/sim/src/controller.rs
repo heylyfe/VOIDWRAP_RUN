@@ -4,14 +4,18 @@
 //! velocity, coyote time, jump buffering, variable jump height (jump cut) and a
 //! dash class ability. Collision is axis-separated AABB against [`World`].
 //!
+//! [`step_with`] applies a [`Tuning`] on top of that (upgrades and curses): run,
+//! jump, gravity and dash-speed multipliers, a dash-cooldown multiplier and extra
+//! air jumps. [`step`] is the same step with the neutral default tuning.
+//!
 //! [`step`] is the contract shared by the authoritative server and the WASM
 //! client prediction. Both must produce bit-identical results, so the step path
-//! only uses `+ - * /`, `sqrt`, `abs`, `min`, `max` and comparisons: no
+//! only uses `+ - * /`, `sqrt`, `abs`, `min`, `max`, `clamp` and comparisons: no
 //! transcendental functions, no randomness, no time, no allocation.
 
 use crate::tuning::*;
 use crate::world::{World, overlaps};
-use protocol::{Aabb, BTN_ABILITY, BTN_JUMP, ControllerState, InputFrame, Vec3};
+use protocol::{Aabb, BTN_ABILITY, BTN_JUMP, ControllerState, InputFrame, Tuning, Vec3};
 
 /// A fresh controller standing at `pos`.
 pub fn spawn_state(pos: Vec3) -> ControllerState {
@@ -55,19 +59,41 @@ pub fn wish_dir(input: &InputFrame) -> (f32, f32) {
     }
 }
 
-/// Advance one fixed physics frame of [`DT`] seconds.
+/// Advance one fixed physics frame of [`DT`] seconds with the neutral tuning.
+///
+/// Thin wrapper over [`step_with`] so every existing caller keeps working; with
+/// the default tuning the result is bit-identical to the pre-tuning controller.
+pub fn step(state: &mut ControllerState, input: &InputFrame, world: &World) {
+    step_with(state, input, world, &Tuning::default());
+}
+
+/// Advance one fixed physics frame of [`DT`] seconds under `tuning`.
 ///
 /// Step order (identical on server and client):
 ///   1. timers & edge detection
 ///   2. dash start
-///   3. jump (buffer + coyote)
+///   3. jump (buffer + coyote, then air jumps)
 ///   4. horizontal velocity
 ///   5. vertical velocity (gravity / jump cut / dash)
 ///   6. collide Y, then X, then Z
-///   7. grounded & coyote refresh, ability timer tick
+///   7. grounded & coyote refresh, air jump reset, ability timer tick
 ///   8. `prev_buttons = input.buttons`
-pub fn step(state: &mut ControllerState, input: &InputFrame, world: &World) {
+///
+/// Every multiplier is clamped to [`TUNING_MUL_MIN`]..=[`TUNING_MUL_MAX`] (NaN
+/// becomes the neutral 1.0) and `air_jumps` to `0..=TUNING_AIR_JUMPS_MAX`, so a
+/// malformed tuning can never produce a non-finite or absurd step.
+pub fn step_with(state: &mut ControllerState, input: &InputFrame, world: &World, tuning: &Tuning) {
     let was_grounded = state.grounded;
+
+    // Defensive, deterministic clamps. With the default tuning every product
+    // below is exactly the untuned constant (`x * 1.0 == x`), which is what keeps
+    // `step` bit-identical to the pre-tuning controller.
+    let run_speed = RUN_SPEED * clamp_mul(tuning.run_speed_mul);
+    let jump_velocity = JUMP_VELOCITY * clamp_mul(tuning.jump_mul);
+    let gravity = GRAVITY * clamp_mul(tuning.gravity_mul);
+    let dash_speed = DASH_SPEED * clamp_mul(tuning.dash_speed_mul);
+    let dash_cooldown = tuned_dash_cooldown(clamp_mul(tuning.dash_cooldown_mul));
+    let air_jumps = tuning.air_jumps.min(TUNING_AIR_JUMPS_MAX);
 
     // 1. Timers and button edges.
     state.ability_cooldown_frames = state.ability_cooldown_frames.saturating_sub(1);
@@ -82,16 +108,25 @@ pub fn step(state: &mut ControllerState, input: &InputFrame, world: &World) {
     if ability_pressed && state.ability_cooldown_frames == 0 && state.ability_active_frames == 0 {
         state.ability_dir = dash_dir(wx, wz, &state.vel);
         state.ability_active_frames = DASH_FRAMES;
-        state.ability_cooldown_frames = DASH_COOLDOWN_FRAMES;
+        state.ability_cooldown_frames = dash_cooldown;
     }
 
     // 3. Jump: consume the buffer on the first step a jump is allowed.
     if state.jump_buffer_frames > 0 && (state.grounded || state.coyote_frames > 0) {
-        state.vel.y = JUMP_VELOCITY;
+        state.vel.y = jump_velocity;
         state.grounded = false;
         state.coyote_frames = 0;
         state.jump_buffer_frames = 0;
         state.ability_active_frames = 0; // jumping cancels a dash
+    } else if state.jump_buffer_frames > 0 && state.air_jumps_used < air_jumps {
+        // Air jump: only reachable when the ground/coyote rules said no. Coyote
+        // jumps take the branch above and therefore never spend an air jump.
+        state.vel.y = jump_velocity;
+        state.grounded = false;
+        state.coyote_frames = 0;
+        state.jump_buffer_frames = 0;
+        state.ability_active_frames = 0; // an air jump cancels a dash too
+        state.air_jumps_used += 1;
     } else if state.jump_buffer_frames > 0 && !jump_pressed {
         // The arming step itself does not tick, so a press N steps before
         // touchdown still fires on the first step a jump is allowed.
@@ -102,18 +137,18 @@ pub fn step(state: &mut ControllerState, input: &InputFrame, world: &World) {
 
     // 4. Horizontal velocity (instant, ground and air).
     if dashing {
-        state.vel.x = state.ability_dir.x * DASH_SPEED;
-        state.vel.z = state.ability_dir.z * DASH_SPEED;
+        state.vel.x = state.ability_dir.x * dash_speed;
+        state.vel.z = state.ability_dir.z * dash_speed;
     } else {
-        state.vel.x = wx * RUN_SPEED;
-        state.vel.z = wz * RUN_SPEED;
+        state.vel.x = wx * run_speed;
+        state.vel.z = wz * run_speed;
     }
 
-    // 5. Vertical velocity.
+    // 5. Vertical velocity. Terminal fall speed is deliberately not tuned.
     if dashing {
         state.vel.y = 0.0;
     } else {
-        state.vel.y = (state.vel.y - GRAVITY * DT).max(-MAX_FALL_SPEED);
+        state.vel.y = (state.vel.y - gravity * DT).max(-MAX_FALL_SPEED);
         if input.buttons & BTN_JUMP == 0 && state.vel.y > 0.0 {
             state.vel.y = state.vel.y.min(JUMP_CUT_VELOCITY);
         }
@@ -128,6 +163,7 @@ pub fn step(state: &mut ControllerState, input: &InputFrame, world: &World) {
     state.grounded = landed || resting_on_solid(state, world);
     if state.grounded {
         state.coyote_frames = COYOTE_FRAMES;
+        state.air_jumps_used = 0;
     } else if !was_grounded {
         // Only steps that began airborne consume coyote time, so the step that
         // walks off a ledge still leaves the whole window available.
@@ -137,6 +173,35 @@ pub fn step(state: &mut ControllerState, input: &InputFrame, world: &World) {
 
     // 8. Remember buttons for edge detection.
     state.prev_buttons = input.buttons;
+}
+
+/// Clamp a tuning multiplier into [`TUNING_MUL_MIN`]..=[`TUNING_MUL_MAX`], mapping
+/// NaN to the neutral 1.0.
+///
+/// Written with comparisons plus `clamp` only: `min`/`max` return the *other*
+/// operand when one side is NaN, so they cannot detect NaN, while comparisons are
+/// false for NaN — which is exactly what the final `else` branch keys on. No
+/// transcendental function is involved, so the result is identical on every target.
+fn clamp_mul(value: f32) -> f32 {
+    if value >= TUNING_MUL_MIN {
+        value.clamp(TUNING_MUL_MIN, TUNING_MUL_MAX)
+    } else if value <= TUNING_MUL_MAX {
+        TUNING_MUL_MIN
+    } else {
+        1.0
+    }
+}
+
+/// Dash cooldown in frames for a multiplier already passed through [`clamp_mul`].
+///
+/// `(x + 0.5) as u16` is a deterministic round-half-up: `as` truncates toward zero
+/// and saturates, and `x` is non-negative, so `f32::round` (whose behaviour is not
+/// guaranteed to be identical on every target) is not needed. The result is then
+/// clamped to [`DASH_COOLDOWN_MIN_FRAMES`]..=[`DASH_COOLDOWN_MAX_FRAMES`].
+fn tuned_dash_cooldown(mul: f32) -> u16 {
+    let scaled = DASH_COOLDOWN_FRAMES as f32 * mul;
+    let rounded = (scaled + 0.5) as u16;
+    rounded.clamp(DASH_COOLDOWN_MIN_FRAMES, DASH_COOLDOWN_MAX_FRAMES)
 }
 
 /// Unit horizontal dash direction: wish direction, else current horizontal
@@ -257,6 +322,17 @@ mod tests {
         World::from_level(&levels::bootstrap())
     }
 
+    /// A large flat slab with no edges, for tests that must not fall off.
+    fn flat_world() -> World {
+        World {
+            solids: vec![Aabb {
+                min: Vec3::new(-100.0, -1.0, -100.0),
+                max: Vec3::new(100.0, 0.0, 100.0),
+            }],
+            kill_y: -200.0,
+        }
+    }
+
     /// Runs +X until the controller leaves the ground. On return the controller
     /// is airborne and the next step is airborne step 1.
     fn run_off_ledge(s: &mut ControllerState, w: &World, seq: &mut u32) {
@@ -281,6 +357,29 @@ mod tests {
         }
         assert!(s.grounded, "controller never landed");
         n
+    }
+
+    /// Counts how many air jumps fire while spamming jump edges from `start_y`.
+    fn count_air_jumps(tuning: &Tuning, start_y: f32, steps: u32) -> u32 {
+        let w = flat_world();
+        let mut s = spawn_state(Vec3::new(0.0, start_y, 0.0));
+        let mut seq = 0;
+        for _ in 0..3 {
+            step_with(&mut s, &idle(seq), &w, tuning);
+            seq += 1;
+        }
+        assert!(!s.grounded, "controller must still be airborne");
+        let mut fired = 0;
+        for i in 0..steps {
+            let buttons = if i.is_multiple_of(2) { BTN_JUMP } else { 0 };
+            let before = s.air_jumps_used;
+            step_with(&mut s, &input(seq, 0, 0, buttons), &w, tuning);
+            seq += 1;
+            if s.air_jumps_used > before {
+                fired += 1;
+            }
+        }
+        fired
     }
 
     #[test]
@@ -575,5 +674,191 @@ mod tests {
             s
         };
         assert_eq!(run(), run());
+    }
+
+    #[test]
+    fn step_matches_step_with_default_tuning() {
+        let w = world();
+        let default = Tuning::default();
+        let mut plain = spawn_state(Vec3::new(0.0, 2.0, 0.0));
+        let mut tuned = spawn_state(Vec3::new(0.0, 2.0, 0.0));
+        for i in 0..600 {
+            let frame = scripted(i);
+            step(&mut plain, &frame, &w);
+            step_with(&mut tuned, &frame, &w, &default);
+            assert_eq!(plain, tuned, "states diverged at step {i}");
+        }
+    }
+
+    #[test]
+    fn nan_tuning_falls_back_to_neutral() {
+        let w = world();
+        let nan = Tuning {
+            run_speed_mul: f32::NAN,
+            jump_mul: f32::NAN,
+            gravity_mul: f32::NAN,
+            dash_speed_mul: f32::NAN,
+            dash_cooldown_mul: f32::NAN,
+            air_jumps: 0,
+        };
+        let mut plain = spawn_state(Vec3::new(0.0, 2.0, 0.0));
+        let mut tuned = spawn_state(Vec3::new(0.0, 2.0, 0.0));
+        for i in 0..600 {
+            let frame = scripted(i);
+            step(&mut plain, &frame, &w);
+            step_with(&mut tuned, &frame, &w, &nan);
+        }
+        assert_eq!(plain, tuned, "NaN multipliers must behave like the neutral tuning");
+    }
+
+    #[test]
+    fn tuning_clamps_are_defensive() {
+        assert_eq!(clamp_mul(f32::NAN), 1.0);
+        assert_eq!(clamp_mul(0.0), TUNING_MUL_MIN);
+        assert_eq!(clamp_mul(1.0), 1.0);
+        assert_eq!(clamp_mul(100.0), TUNING_MUL_MAX);
+        assert_eq!(tuned_dash_cooldown(1.0), DASH_COOLDOWN_FRAMES);
+        assert_eq!(tuned_dash_cooldown(0.0), DASH_COOLDOWN_MIN_FRAMES);
+        assert_eq!(tuned_dash_cooldown(100.0), DASH_COOLDOWN_MAX_FRAMES);
+    }
+
+    #[test]
+    fn air_jumps_fire_exactly_air_jumps_times() {
+        assert_eq!(count_air_jumps(&Tuning::default(), 40.0, 40), 0);
+        for allowed in 1..=3u8 {
+            let tuning = Tuning {
+                air_jumps: allowed,
+                ..Tuning::default()
+            };
+            assert_eq!(count_air_jumps(&tuning, 40.0, 40), u32::from(allowed));
+        }
+        let clamped = Tuning {
+            air_jumps: 200,
+            ..Tuning::default()
+        };
+        assert_eq!(count_air_jumps(&clamped, 40.0, 40), 3, "air_jumps clamps to 3");
+    }
+
+    #[test]
+    fn air_jumps_reset_on_landing() {
+        let w = flat_world();
+        let tuning = Tuning {
+            air_jumps: 1,
+            ..Tuning::default()
+        };
+        let mut s = spawn_state(Vec3::new(0.0, 6.0, 0.0));
+        let mut seq = 0;
+
+        // Fall, then spend the single air jump.
+        step_with(&mut s, &idle(seq), &w, &tuning);
+        seq += 1;
+        step_with(&mut s, &input(seq, 0, 0, BTN_JUMP), &w, &tuning);
+        seq += 1;
+        assert_eq!(s.air_jumps_used, 1);
+        assert!(s.vel.y > 0.0);
+
+        // A second press while still airborne must not fire.
+        step_with(&mut s, &idle(seq), &w, &tuning);
+        seq += 1;
+        step_with(&mut s, &input(seq, 0, 0, BTN_JUMP), &w, &tuning);
+        seq += 1;
+        assert_eq!(s.air_jumps_used, 1, "the air jump budget is spent");
+
+        // Land: the budget comes back.
+        let mut guard = 0;
+        while !s.grounded && guard < 2000 {
+            step_with(&mut s, &idle(seq), &w, &tuning);
+            seq += 1;
+            guard += 1;
+        }
+        assert!(s.grounded, "controller never landed");
+        assert_eq!(s.air_jumps_used, 0, "landing must reset the air jump budget");
+
+        // A ground jump does not consume an air jump; the next airborne press does.
+        step_with(&mut s, &input(seq, 0, 0, BTN_JUMP), &w, &tuning);
+        seq += 1;
+        assert!(s.vel.y > 0.0, "ground jump after landing");
+        assert_eq!(s.air_jumps_used, 0, "a ground jump must not consume an air jump");
+        step_with(&mut s, &idle(seq), &w, &tuning);
+        seq += 1;
+        step_with(&mut s, &input(seq, 0, 0, BTN_JUMP), &w, &tuning);
+        assert_eq!(s.air_jumps_used, 1, "the restored budget is usable again");
+    }
+
+    #[test]
+    fn jump_mul_raises_apex() {
+        let w = flat_world();
+        let apex = |tuning: &Tuning| -> f32 {
+            let mut s = spawn_state(Vec3::ZERO);
+            step_with(&mut s, &idle(0), &w, tuning);
+            assert!(s.grounded);
+            let mut max_y = s.pos.y;
+            for i in 0..120u32 {
+                step_with(&mut s, &input(1 + i, 0, 0, BTN_JUMP), &w, tuning);
+                if s.pos.y > max_y {
+                    max_y = s.pos.y;
+                }
+            }
+            max_y
+        };
+        let base = apex(&Tuning::default());
+        let boosted = apex(&Tuning {
+            jump_mul: 1.5,
+            ..Tuning::default()
+        });
+        assert!(
+            boosted > base,
+            "jump_mul 1.5 apex {boosted} must exceed base apex {base}"
+        );
+    }
+
+    #[test]
+    fn gravity_mul_lengthens_airtime() {
+        let w = flat_world();
+        let airtime = |tuning: &Tuning| -> u32 {
+            let mut s = spawn_state(Vec3::ZERO);
+            step_with(&mut s, &idle(0), &w, tuning);
+            assert!(s.grounded);
+            step_with(&mut s, &input(1, 0, 0, BTN_JUMP), &w, tuning);
+            assert!(s.vel.y > 0.0);
+            let mut n = 0;
+            // Hold jump so the jump cut cannot shorten the arc.
+            while !s.grounded && n < 2000 {
+                step_with(&mut s, &input(2 + n, 0, 0, BTN_JUMP), &w, tuning);
+                n += 1;
+            }
+            assert!(s.grounded, "controller never landed");
+            n
+        };
+        let base = airtime(&Tuning::default());
+        let floaty = airtime(&Tuning {
+            gravity_mul: 0.8,
+            ..Tuning::default()
+        });
+        assert!(
+            floaty > base,
+            "gravity_mul 0.8 airtime {floaty} must exceed base airtime {base}"
+        );
+    }
+
+    #[test]
+    fn dash_cooldown_mul_halves_cooldown() {
+        let w = flat_world();
+        let cooldown = |tuning: &Tuning| -> u16 {
+            let mut s = spawn_state(Vec3::ZERO);
+            step_with(&mut s, &idle(0), &w, tuning);
+            assert!(s.grounded);
+            step_with(&mut s, &run_x(1, BTN_ABILITY), &w, tuning);
+            assert!(s.ability_active_frames > 0);
+            s.ability_cooldown_frames
+        };
+        let base = cooldown(&Tuning::default());
+        let halved = cooldown(&Tuning {
+            dash_cooldown_mul: 0.5,
+            ..Tuning::default()
+        });
+        assert_eq!(base, DASH_COOLDOWN_FRAMES);
+        // 45 * 0.5 = 22.5 rounds half-up to 23.
+        assert_eq!(halved, DASH_COOLDOWN_FRAMES.div_ceil(2));
     }
 }

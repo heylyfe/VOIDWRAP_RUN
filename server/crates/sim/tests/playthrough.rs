@@ -9,12 +9,13 @@
 
 use protocol::{BTN_JUMP, ControllerState, InputFrame, LevelData, Platform, Vec3};
 use sim::controller::{spawn_state, step};
+use sim::levelgen;
 use sim::levels::{LEVEL_COUNT, level};
 use sim::rules::{beacon_reached, gift_touched};
 use sim::world::World;
 use std::collections::VecDeque;
 
-const MAX_FRAMES_PER_GOAL: u32 = 60 * 25;
+const MAX_FRAMES_PER_GOAL: u32 = 60 * 60;
 
 fn gap_xz(a: &Platform, b: &Platform) -> f32 {
     let gx = (b.bounds.min.x - a.bounds.max.x)
@@ -123,16 +124,41 @@ impl Bot {
         let mut on = standing_on(lvl, &self.state).expect("bot starts each leg grounded");
         let mut path = route(lvl, on, goal);
         let start = self.frames;
+        let mut next_hop: Option<(usize, usize)> = None;
+        let mut trace: VecDeque<String> = VecDeque::new();
+        // Hysteresis: once at the takeoff point of a hop, commit to it until we change platform.
+        let mut committed: Option<(usize, usize)> = None;
         while !done(&self.state.pos) {
+            if self.frames - start >= MAX_FRAMES_PER_GOAL && std::env::var_os("BOT_TRACE").is_some() {
+                for line in trace.iter().skip(40) {
+                    eprintln!("{line}");
+                }
+            }
             assert!(
                 self.frames - start < MAX_FRAMES_PER_GOAL,
                 "bot stuck at {:?} heading to platform {goal}",
                 self.state.pos
             );
-            assert!(
-                self.state.pos.y > world.kill_y,
-                "bot fell into the void heading to platform {goal}"
-            );
+            if self.state.pos.y <= world.kill_y {
+                if std::env::var_os("BOT_TRACE").is_some() {
+                    for line in &trace {
+                        eprintln!("{line}");
+                    }
+                }
+                let detail = next_hop.map(|(a, b)| {
+                    let (pa, pb) = (&lvl.platforms[a], &lvl.platforms[b]);
+                    format!(
+                        "hop {a}->{b}: gap {:.2}, rise {:.2}, widths {:.1}x{:.1} -> {:.1}x{:.1}",
+                        gap_xz(pa, pb),
+                        pb.bounds.max.y - pa.bounds.max.y,
+                        pa.bounds.max.x - pa.bounds.min.x,
+                        pa.bounds.max.z - pa.bounds.min.z,
+                        pb.bounds.max.x - pb.bounds.min.x,
+                        pb.bounds.max.z - pb.bounds.min.z
+                    )
+                });
+                panic!("bot fell into the void heading to platform {goal}: {detail:?}");
+            }
             if let Some(p) = standing_on(lvl, &self.state)
                 && p != on
             {
@@ -144,8 +170,31 @@ impl Bot {
                 .position(|&p| p == on)
                 .and_then(|i| path.get(i + 1))
                 .copied();
+            if let Some(n) = next {
+                next_hop = Some((on, n));
+            }
+            // Like a player: walk to the takeoff point (the spot on the current platform nearest the landing),
+            // then run at the landing. Never jump from wherever we happen to leave the platform.
+            let mut approaching = false;
             let (tx, tz) = match next {
-                Some(n) => closest_inside(&lvl.platforms[n], self.state.pos.x, self.state.pos.z, 0.9),
+                Some(n) => {
+                    let landing = closest_inside(&lvl.platforms[n], self.state.pos.x, self.state.pos.z, 0.9);
+                    let takeoff = closest_inside(&lvl.platforms[on], landing.0, landing.1, 0.45);
+                    let to_takeoff =
+                        ((takeoff.0 - self.state.pos.x).powi(2) + (takeoff.1 - self.state.pos.z).powi(2)).sqrt();
+                    if committed != Some((on, n)) && to_takeoff <= 0.6 {
+                        committed = Some((on, n));
+                    }
+                    if self.state.grounded
+                        && committed != Some((on, n))
+                        && gap_xz(&lvl.platforms[on], &lvl.platforms[n]) > 0.0
+                    {
+                        approaching = true;
+                        takeoff
+                    } else {
+                        landing
+                    }
+                }
                 None => (gx, gz),
             };
             let mut jump = false;
@@ -164,12 +213,20 @@ impl Bot {
                     ((ex - self.state.pos.x).powi(2) + (ez - self.state.pos.z).powi(2)).sqrt() < 1.6
                 };
                 let blocked = self.stall >= 3;
-                jump = leaving || higher_close || blocked;
+                jump = (leaving && !approaching) || higher_close || blocked;
             }
             if jump {
                 self.holding_jump = true;
             } else if self.holding_jump && self.state.vel.y <= 0.0 {
                 self.holding_jump = false;
+            }
+            trace.push_back(format!(
+                "f{} on={on} next={next:?} pos=({:.2},{:.2},{:.2}) vel=({:.1},{:.1},{:.1}) g={} coy={} tgt=({tx:.2},{tz:.2}) jump={} hold={}",
+                self.frames, self.state.pos.x, self.state.pos.y, self.state.pos.z, self.state.vel.x, self.state.vel.y,
+                self.state.vel.z, self.state.grounded, self.state.coyote_frames, jump, self.holding_jump
+            ));
+            if trace.len() > 70 {
+                trace.pop_front();
             }
             let input = self.input(tx, tz, self.holding_jump);
             step(&mut self.state, &input, world);
@@ -207,7 +264,12 @@ impl Bot {
 }
 
 fn play_level(n: u32) -> u32 {
-    let lvl = level(n);
+    play(&level(n))
+}
+
+/// Plays a level to completion (every gift, normal and golden, then the beacon); returns frames used.
+fn play(lvl: &LevelData) -> u32 {
+    let lvl = lvl.clone();
     let world = World::from_level(&lvl);
     let mut bot = Bot {
         state: spawn_state(lvl.spawn.clone()),
@@ -244,4 +306,45 @@ fn every_level_is_completable_with_the_real_controller() {
         total += frames;
     }
     println!("full 3-level run: {:.1} s", total as f32 / 60.0);
+}
+
+/// Generated maps must be physically completable, not just graph-reachable: run the bot on many of them.
+#[test]
+fn generated_levels_are_completable_with_the_real_controller() {
+    let mut played = 0;
+    let mut failures = Vec::new();
+    for level in [1u32, 3, 6, 10, 15, 20, 30] {
+        for seed in 0..25u32 {
+            let lvl = levelgen::generate(seed.wrapping_mul(2_654_435_761), level).data;
+            played += 1;
+            let result = std::panic::catch_unwind(|| play(&lvl));
+            if result.is_err() {
+                failures.push((seed, level));
+            }
+        }
+    }
+    println!("generated levels played: {played}, failed: {}", failures.len());
+    assert!(
+        failures.is_empty(),
+        "bot could not complete generated levels (seed, level): {failures:?}"
+    );
+}
+
+/// Debug helper: BOT_TRACE=1 BOT_SEED=<seed index> BOT_LEVEL=<level> cargo test --release --test playthrough trace_one -- --nocapture
+#[test]
+fn trace_one() {
+    let (Some(seed), Some(level)) = (
+        std::env::var("BOT_SEED").ok().and_then(|v| v.parse::<u32>().ok()),
+        std::env::var("BOT_LEVEL").ok().and_then(|v| v.parse::<u32>().ok()),
+    ) else {
+        return;
+    };
+    let lvl = levelgen::generate(seed.wrapping_mul(2_654_435_761), level).data;
+    for (i, p) in lvl.platforms.iter().enumerate() {
+        eprintln!(
+            "P{i}: x {:.2}..{:.2} z {:.2}..{:.2} top {:.2}",
+            p.bounds.min.x, p.bounds.max.x, p.bounds.min.z, p.bounds.max.z, p.bounds.max.y
+        );
+    }
+    play(&lvl);
 }

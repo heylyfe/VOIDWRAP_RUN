@@ -4,8 +4,10 @@ import {
   decodeControllerState,
   encodeControllerState,
   encodeLevelData,
+  encodeTuning,
   type ControllerState,
   type LevelData,
+  type Tuning,
 } from "@/protocol/generated";
 
 /** One fixed physics step of the character controller. */
@@ -14,6 +16,8 @@ export interface Stepper {
   setState(state: ControllerState): void;
   step(moveX: number, moveZ: number, buttons: number): void;
   getState(): ControllerState;
+  /** Movement multipliers from upgrades/curses; must match the server's for exact prediction. */
+  setTuning(tuning: Tuning): void;
 }
 
 interface SimExports {
@@ -24,9 +28,19 @@ interface SimExports {
   vw_set_state(len: number): number;
   vw_step(moveX: number, moveZ: number, buttons: number): void;
   vw_get_state(): number;
+  vw_set_tuning(len: number): number;
 }
 
-const REQUIRED = ["memory", "vw_io_buf", "vw_io_ptr", "vw_load_level", "vw_set_state", "vw_step", "vw_get_state"];
+const REQUIRED = [
+  "memory",
+  "vw_io_buf",
+  "vw_io_ptr",
+  "vw_load_level",
+  "vw_set_state",
+  "vw_step",
+  "vw_get_state",
+  "vw_set_tuning",
+];
 
 export class WasmStepper implements Stepper {
   private constructor(private readonly x: SimExports) {}
@@ -57,6 +71,10 @@ export class WasmStepper implements Stepper {
 
   setState(state: ControllerState): void {
     if (this.x.vw_set_state(this.write(encodeControllerState(state))) !== 0) throw new Error("sim rejected state");
+  }
+
+  setTuning(tuning: Tuning): void {
+    if (this.x.vw_set_tuning(this.write(encodeTuning(tuning))) !== 0) throw new Error("sim rejected tuning");
   }
 
   step(moveX: number, moveZ: number, buttons: number): void {

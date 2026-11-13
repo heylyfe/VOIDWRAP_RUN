@@ -2,7 +2,7 @@
 /* eslint-disable */
 import { Reader, Writer } from "./codec";
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 export const TICK_HZ = 20;
 export const PHYSICS_HZ = 60;
 export const MAX_INPUTS_PER_MSG = 32;
@@ -13,6 +13,17 @@ export const BTN_ABILITY = 2;
 export const BTN_INTERACT = 4;
 export const DEATH_VOID = 0;
 export const DEATH_ENEMY = 1;
+export const PHASE_ENEMY_DRAFT = 0;
+export const PHASE_PLAYING = 1;
+export const PHASE_REWARD_DRAFT = 2;
+export const PHASE_OVER = 3;
+export const MAX_DRAFT_PICKS = 4;
+export const MAX_ID_LEN = 32;
+export const GIFT_NORMAL = 0;
+export const GIFT_GOLDEN = 1;
+export const CARD_ENEMY = 0;
+export const CARD_UPGRADE = 1;
+export const CARD_CURSE = 2;
 
 export interface Vec3 {
   x: number;
@@ -185,15 +196,18 @@ export function decodePlatform(bytes: Uint8Array): Platform {
 export interface Gift {
   id: number;
   pos: Vec3;
+  kind: number;
 }
 export function writeGift(w: Writer, v: Gift): void {
   w.u16(v.id);
   writeVec3(w, v.pos);
+  w.u8(v.kind);
 }
 export function readGift(r: Reader): Gift {
   return {
     id: r.u16(),
     pos: readVec3(r),
+    kind: r.u8(),
   };
 }
 export function encodeGift(v: Gift): Uint8Array<ArrayBuffer> {
@@ -340,11 +354,126 @@ export function decodeRunSummary(bytes: Uint8Array): RunSummary {
   return v;
 }
 
+/** Movement multipliers from upgrades/curses. Applied identically by the server and the WASM predictor. */
+export interface Tuning {
+  runSpeedMul: number;
+  jumpMul: number;
+  gravityMul: number;
+  dashSpeedMul: number;
+  dashCooldownMul: number;
+  airJumps: number;
+}
+export function writeTuning(w: Writer, v: Tuning): void {
+  w.f32(v.runSpeedMul);
+  w.f32(v.jumpMul);
+  w.f32(v.gravityMul);
+  w.f32(v.dashSpeedMul);
+  w.f32(v.dashCooldownMul);
+  w.u8(v.airJumps);
+}
+export function readTuning(r: Reader): Tuning {
+  return {
+    runSpeedMul: r.f32(),
+    jumpMul: r.f32(),
+    gravityMul: r.f32(),
+    dashSpeedMul: r.f32(),
+    dashCooldownMul: r.f32(),
+    airJumps: r.u8(),
+  };
+}
+export function encodeTuning(v: Tuning): Uint8Array<ArrayBuffer> {
+  const w = new Writer();
+  writeTuning(w, v);
+  return w.finish();
+}
+export function decodeTuning(bytes: Uint8Array): Tuning {
+  const r = new Reader(bytes);
+  const v = readTuning(r);
+  r.end();
+  return v;
+}
+
+/** A card offered in a draft. id refers to design/content.json; kind 0 enemy, 1 upgrade, 2 curse. */
+export interface DraftCard {
+  kind: number;
+  id: string;
+}
+export function writeDraftCard(w: Writer, v: DraftCard): void {
+  w.u8(v.kind);
+  w.string(v.id);
+}
+export function readDraftCard(r: Reader): DraftCard {
+  return {
+    kind: r.u8(),
+    id: r.string(),
+  };
+}
+export function encodeDraftCard(v: DraftCard): Uint8Array<ArrayBuffer> {
+  const w = new Writer();
+  writeDraftCard(w, v);
+  return w.finish();
+}
+export function decodeDraftCard(bytes: Uint8Array): DraftCard {
+  const r = new Reader(bytes);
+  const v = readDraftCard(r);
+  r.end();
+  return v;
+}
+
+/** Run-wide state, sent whenever it changes. */
+export interface RunInfo {
+  phase: number;
+  level: number;
+  lives: number;
+  currency: number;
+  tuning: Tuning;
+  fogDensityMul: number;
+  enemies: string[];
+  upgrades: string[];
+  curses: string[];
+}
+export function writeRunInfo(w: Writer, v: RunInfo): void {
+  w.u8(v.phase);
+  w.u32(v.level);
+  w.u32(v.lives);
+  w.u32(v.currency);
+  writeTuning(w, v.tuning);
+  w.f32(v.fogDensityMul);
+  w.vec(v.enemies, (x) => w.string(x));
+  w.vec(v.upgrades, (x) => w.string(x));
+  w.vec(v.curses, (x) => w.string(x));
+}
+export function readRunInfo(r: Reader): RunInfo {
+  return {
+    phase: r.u8(),
+    level: r.u32(),
+    lives: r.u32(),
+    currency: r.u32(),
+    tuning: readTuning(r),
+    fogDensityMul: r.f32(),
+    enemies: r.vec(() => r.string()),
+    upgrades: r.vec(() => r.string()),
+    curses: r.vec(() => r.string()),
+  };
+}
+export function encodeRunInfo(v: RunInfo): Uint8Array<ArrayBuffer> {
+  const w = new Writer();
+  writeRunInfo(w, v);
+  return w.finish();
+}
+export function decodeRunInfo(bytes: Uint8Array): RunInfo {
+  const r = new Reader(bytes);
+  const v = readRunInfo(r);
+  r.end();
+  return v;
+}
+
 export type ClientMsg =
   | { type: "Hello"; protocolVersion: number; name: string }
   | { type: "Inputs"; frames: InputFrame[] }
   | { type: "Ping"; t: number }
   | { type: "Restart" }
+  | { type: "DraftPick"; picks: number[] }
 ;
 export function writeClientMsg(w: Writer, v: ClientMsg): void {
   switch (v.type) {
@@ -364,6 +493,10 @@ export function writeClientMsg(w: Writer, v: ClientMsg): void {
     case "Restart":
       w.u32(3);
       return;
+    case "DraftPick":
+      w.u32(4);
+      w.vec(v.picks, (x) => w.u8(x));
+      return;
   }
 }
 export function readClientMsg(r: Reader): ClientMsg {
@@ -377,6 +510,8 @@ export function readClientMsg(r: Reader): ClientMsg {
       return { type: "Ping", t: r.u32() };
     case 3:
       return { type: "Restart" };
+    case 4:
+      return { type: "DraftPick", picks: r.vec(() => r.u8()) };
     default:
       throw new Error(`ClientMsg: unknown variant tag ${tag}`);
   }
@@ -400,6 +535,8 @@ export type ServerMsg =
   | { type: "Pong"; t: number }
   | { type: "Error"; code: number; message: string }
   | { type: "RunOver"; summary: RunSummary }
+  | { type: "RunState"; info: RunInfo }
+  | { type: "Draft"; enemyPicks: number; rewardPicks: number; cards: DraftCard[] }
 ;
 export function writeServerMsg(w: Writer, v: ServerMsg): void {
   switch (v.type) {
@@ -436,6 +573,16 @@ export function writeServerMsg(w: Writer, v: ServerMsg): void {
       w.u32(5);
       writeRunSummary(w, v.summary);
       return;
+    case "RunState":
+      w.u32(6);
+      writeRunInfo(w, v.info);
+      return;
+    case "Draft":
+      w.u32(7);
+      w.u8(v.enemyPicks);
+      w.u8(v.rewardPicks);
+      w.vec(v.cards, (x) => writeDraftCard(w, x));
+      return;
   }
 }
 export function readServerMsg(r: Reader): ServerMsg {
@@ -453,6 +600,10 @@ export function readServerMsg(r: Reader): ServerMsg {
       return { type: "Error", code: r.u16(), message: r.string() };
     case 5:
       return { type: "RunOver", summary: readRunSummary(r) };
+    case 6:
+      return { type: "RunState", info: readRunInfo(r) };
+    case 7:
+      return { type: "Draft", enemyPicks: r.u8(), rewardPicks: r.u8(), cards: r.vec(() => readDraftCard(r)) };
     default:
       throw new Error(`ServerMsg: unknown variant tag ${tag}`);
   }
@@ -481,6 +632,9 @@ export const CODECS = {
   PlayerView: { encode: encodePlayerView, decode: decodePlayerView },
   EnemyView: { encode: encodeEnemyView, decode: decodeEnemyView },
   RunSummary: { encode: encodeRunSummary, decode: decodeRunSummary },
+  Tuning: { encode: encodeTuning, decode: decodeTuning },
+  DraftCard: { encode: encodeDraftCard, decode: decodeDraftCard },
+  RunInfo: { encode: encodeRunInfo, decode: decodeRunInfo },
   ClientMsg: { encode: encodeClientMsg, decode: decodeClientMsg },
   ServerMsg: { encode: encodeServerMsg, decode: decodeServerMsg },
 } as const;
