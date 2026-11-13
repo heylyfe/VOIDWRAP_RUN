@@ -32,6 +32,8 @@ export class GameSession {
 
   private readonly predictor: Predictor;
   private readonly remote = new SnapshotBuffer();
+  private readonly enemies = new SnapshotBuffer();
+  private needsReset = true;
   private readonly conn: Connection;
   private accumulator = 0;
   private outbox: InputFrame[] = [];
@@ -72,18 +74,30 @@ export class GameSession {
         store.set({ playerId: msg.playerId });
         return;
       case "Level":
+        // New run or next level: everyone is teleported to the spawn, so the next
+        // snapshot hard-resets prediction instead of reconciling across the jump.
         this.sim.loadLevel(msg.data);
         this.level = msg.data;
+        this.needsReset = true;
+        this.accumulator = 0;
         this.onLevel(msg.data);
+        store.set({ level: msg.data.level, giftsTotal: msg.data.gifts.length, giftsTaken: [], runOver: null });
         return;
       case "Snapshot": {
-        if (!this.level) return;
-        if (this.predictor.state === null) this.predictor.reset(msg.you);
-        else this.predictor.reconcile(msg.lastInputSeq, msg.you);
+        if (!this.level || msg.level !== this.level.level) return; // stale: from before a level change
+        if (this.needsReset || this.predictor.state === null) {
+          this.predictor.reset(msg.you);
+          this.needsReset = false;
+        } else {
+          this.predictor.reconcile(msg.lastInputSeq, msg.you);
+        }
+        const now = performance.now();
         this.remote.push(
-          performance.now(),
-          msg.players.filter((p) => p.id !== this.playerId),
+          now,
+          msg.players.filter((p) => p.id !== this.playerId && p.alive),
         );
+        this.enemies.push(now, msg.enemies);
+        if (msg.giftsTaken.length !== store.giftsTaken.length) store.set({ giftsTaken: msg.giftsTaken });
         store.set({ serverTick: msg.tick, playerCount: msg.players.length });
         return;
       }
@@ -96,14 +110,20 @@ export class GameSession {
         store.set({ error: msg.message });
         return;
       case "RunOver":
-        // Wired up with the run flow (M1 integration).
+        store.set({ runOver: msg.summary });
         return;
     }
+  }
+
+  /** Ask the server for a fresh run (honoured once the whole team is down). */
+  restart(): void {
+    this.conn.send({ type: "Restart" });
   }
 
   /** Advance the fixed-step loop by one rendered frame and flush inputs to the server. */
   update(dtSeconds: number): void {
     if (!this.level || this.predictor.state === null) return;
+    if (useGameStore.getState().runOver) return; // dead: no input, frozen in place
     this.accumulator += Math.min(dtSeconds, MAX_FRAME_DT);
     while (this.accumulator >= DT) {
       const { moveX, moveZ } = wishFromKeys(this.keys, this.yaw);
@@ -122,6 +142,15 @@ export class GameSession {
 
   remotePlayers(now: number): Map<number, Vec3> {
     return this.remote.sample(now);
+  }
+
+  enemyPositions(now: number): Map<number, Vec3> {
+    return this.enemies.sample(now);
+  }
+
+  /** Predicted velocity of the local player (for facing and walk animation). */
+  playerVelocity(): Vec3 | null {
+    return this.predictor.state?.vel ?? null;
   }
 
   dispose(): void {

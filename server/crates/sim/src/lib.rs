@@ -8,6 +8,7 @@
 
 pub mod controller;
 pub mod levels;
+pub mod rules;
 pub mod tuning;
 pub mod world;
 

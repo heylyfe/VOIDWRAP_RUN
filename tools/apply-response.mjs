@@ -12,8 +12,14 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 export function parseFiles(text) {
   const files = [];
   const re = /^=== FILE: (.+?) ===\r?\n([\s\S]*?)^=== END FILE ===\s*$/gm;
-  for (const m of text.matchAll(re)) files.push({ path: m[1].trim(), content: m[2] });
+  for (const m of text.matchAll(re)) files.push({ path: m[1].trim(), content: stripFence(m[2]) });
   return files;
+}
+
+/** Models sometimes wrap a FILE body in one markdown fence (```ts ... ```); remove exactly that wrapper. */
+export function stripFence(content) {
+  const m = content.match(/^```[\w.+-]*\r?\n([\s\S]*?)\r?\n```\s*$/);
+  return m ? `${m[1]}\n` : content;
 }
 
 export function checkPath(path, allow) {

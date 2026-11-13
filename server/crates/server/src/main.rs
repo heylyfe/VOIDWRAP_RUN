@@ -6,6 +6,7 @@
 
 mod game;
 mod net;
+mod run;
 
 use std::net::SocketAddr;
 use tokio::sync::mpsc;

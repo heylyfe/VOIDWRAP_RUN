@@ -46,15 +46,32 @@ try {
   const t1 = await tickOf();
   console.log(`capture: client saw ${t1 - t0} server ticks in ~1 s`);
   if (t1 - t0 < 15) errors.push(`tick rate too low at the client: ${t1 - t0}/s`);
+  await page.mouse.click(640, 360); // focus (pointer lock is not available headless)
+  await page.waitForTimeout(300);
   await shot("01-spawn");
+  const level = await page.getByTestId("level-number").textContent();
+  const gifts = await page.getByTestId("gifts-remaining").textContent();
+  console.log(`capture: HUD level=${level} gifts=${gifts}`);
+  if (level !== "1" || gifts !== "5 / 5") errors.push(`unexpected HUD: level=${level} gifts=${gifts}`);
   await page.keyboard.down("KeyW");
-  await page.waitForTimeout(700);
+  await page.waitForTimeout(500);
   await page.keyboard.press("Space");
-  await page.waitForTimeout(200);
+  await page.waitForTimeout(250);
   await shot("02-moving");
   await page.keyboard.up("KeyW");
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(400);
   await shot("03-stopped");
+  // Walk off the +X edge of the spawn platform into the void.
+  await page.keyboard.down("KeyD");
+  await page.waitForTimeout(1200);
+  await page.keyboard.up("KeyD");
+  await shot("04-falling");
+  await page.getByTestId("run-summary").waitFor({ timeout: 10_000 });
+  await shot("05-run-summary");
+  await page.getByTestId("run-again").click();
+  await page.getByTestId("run-summary").waitFor({ state: "detached", timeout: 10_000 });
+  await page.waitForTimeout(500);
+  await shot("06-new-run");
 } catch (e) {
   errors.push(`flow: ${e.message}`);
   await shot("99-failure").catch(() => {});

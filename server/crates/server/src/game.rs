@@ -5,12 +5,16 @@
 //! `STEPS_PER_TICK` step tokens (capped, so short network jitter can catch up but a
 //! client can never run faster than real time), and the server consumes that many
 //! queued frames. Snapshots carry the last applied `seq` so the client can reconcile.
+//!
+//! Tick order: player movement -> gift pickup -> enemies move -> deaths (void, enemy touch)
+//! -> beacon (advance level) -> snapshots. Game rules live in [`crate::run::Run`].
 
+use crate::run::Run;
 use protocol::{
-    BTN_ABILITY, BTN_INTERACT, BTN_JUMP, ClientMsg, ControllerState, InputFrame, LevelData, MAX_INPUTS_PER_MSG,
-    MAX_NAME_LEN, PHYSICS_HZ, PROTOCOL_VERSION, PlayerView, ServerMsg, TICK_HZ,
+    BTN_ABILITY, BTN_INTERACT, BTN_JUMP, ClientMsg, ControllerState, InputFrame, MAX_INPUTS_PER_MSG, MAX_NAME_LEN,
+    PHYSICS_HZ, PROTOCOL_VERSION, PlayerView, RunSummary, ServerMsg, TICK_HZ, Vec3,
 };
-use sim::{controller, levels, world::World};
+use sim::controller;
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -44,6 +48,24 @@ struct Player {
     last_applied_seq: u32,
     tokens: u32,
     starved_ticks: u32,
+    alive: bool,
+}
+
+impl Player {
+    /// Put the player back on `spawn`, alive. Input bookkeeping is kept so seqs stay monotonic.
+    fn respawn(&mut self, spawn: &Vec3) {
+        self.state = controller::spawn_state(spawn.clone());
+        self.alive = true;
+        self.starved_ticks = 0;
+    }
+
+    fn centre(&self) -> Vec3 {
+        Vec3::new(
+            self.state.pos.x,
+            self.state.pos.y + sim::tuning::PLAYER_HEIGHT / 2.0,
+            self.state.pos.z,
+        )
+    }
 }
 
 struct Conn {
@@ -54,8 +76,7 @@ struct Conn {
 pub struct Game {
     tick: u32,
     conns: BTreeMap<ConnId, Conn>,
-    level: LevelData,
-    world: World,
+    run: Run,
     next_player_id: u32,
 }
 
@@ -67,13 +88,10 @@ impl Default for Game {
 
 impl Game {
     pub fn new() -> Self {
-        let level = levels::bootstrap();
-        let world = World::from_level(&level);
         Game {
             tick: 0,
             conns: BTreeMap::new(),
-            level,
-            world,
+            run: Run::start(),
             next_player_id: 1,
         }
     }
@@ -151,12 +169,13 @@ impl Game {
                     conn.player = Some(Player {
                         id: player_id,
                         name,
-                        state: controller::spawn_state(self.level.spawn.clone()),
+                        state: controller::spawn_state(self.run.level.spawn.clone()),
                         inputs: VecDeque::new(),
                         last_recv_seq: None,
                         last_applied_seq: 0,
                         tokens: 0,
                         starved_ticks: 0,
+                        alive: true,
                     });
                 }
                 self.send(
@@ -167,7 +186,7 @@ impl Game {
                         tick: self.tick,
                     },
                 );
-                let level = self.level.clone();
+                let level = self.run.level.clone();
                 self.send(id, &ServerMsg::Level { data: level });
             }
             _ if !joined => self.reject(id, 400, "hello required first"),
@@ -191,25 +210,58 @@ impl Game {
             }
             ClientMsg::Ping { t } => self.send(id, &ServerMsg::Pong { t }),
             ClientMsg::Restart => {
-                let spawn = self.level.spawn.clone();
-                if let Some(p) = conn.player.as_mut() {
-                    p.state = controller::spawn_state(spawn);
+                // A new run starts only once the whole team is down; otherwise ignore.
+                let anyone_alive = self.conns.values().filter_map(|c| c.player.as_ref()).any(|p| p.alive);
+                if !anyone_alive {
+                    tracing::info!(conn = id, "new run");
+                    self.run = Run::start();
+                    self.respawn_all_and_send_level();
                 }
             }
         }
     }
 
+    /// Respawn every player on the current level's spawn and send everyone the level.
+    fn respawn_all_and_send_level(&mut self) {
+        let spawn = self.run.level.spawn.clone();
+        for p in self.conns.values_mut().filter_map(|c| c.player.as_mut()) {
+            p.respawn(&spawn);
+        }
+        let level = ServerMsg::Level {
+            data: self.run.level.clone(),
+        };
+        for id in self.joined_ids() {
+            self.send(id, &level);
+        }
+    }
+
+    fn joined_ids(&self) -> Vec<ConnId> {
+        self.conns
+            .iter()
+            .filter(|(_, c)| c.player.is_some())
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
     /// Advance the simulation one 20 Hz tick and broadcast snapshots.
     pub fn tick(&mut self) {
         self.tick = self.tick.wrapping_add(1);
-        let spawn = self.level.spawn.clone();
-        for conn in self.conns.values_mut() {
-            let Some(p) = conn.player.as_mut() else { continue };
+
+        // 1. Movement.
+        for p in self.conns.values_mut().filter_map(|c| c.player.as_mut()) {
             p.tokens = (p.tokens + STEPS_PER_TICK).min(MAX_STEP_TOKENS);
+            if !p.alive {
+                // Dead players' inputs are acknowledged and dropped so the client's queue drains.
+                if let Some(last) = p.inputs.back() {
+                    p.last_applied_seq = last.seq;
+                }
+                p.inputs.clear();
+                continue;
+            }
             let mut stepped = 0;
             while p.tokens > 0 {
                 let Some(f) = p.inputs.pop_front() else { break };
-                controller::step(&mut p.state, &f, &self.world);
+                controller::step(&mut p.state, &f, &self.run.world);
                 p.last_applied_seq = f.seq;
                 p.tokens -= 1;
                 stepped += 1;
@@ -224,18 +276,67 @@ impl Game {
                         buttons: 0,
                     };
                     for _ in 0..STEPS_PER_TICK.min(p.tokens) {
-                        controller::step(&mut p.state, &neutral, &self.world);
+                        controller::step(&mut p.state, &neutral, &self.run.world);
                         p.tokens -= 1;
                     }
                 }
             } else {
                 p.starved_ticks = 0;
             }
-            if p.state.pos.y < self.world.kill_y {
-                p.state = controller::spawn_state(spawn.clone());
+        }
+
+        // 2. Gifts (shared by the team).
+        for conn in self.conns.values() {
+            if let Some(p) = conn.player.as_ref().filter(|p| p.alive) {
+                self.run.collect_gifts(&p.state.pos);
             }
         }
 
+        // 3. Enemies chase the living.
+        let targets: Vec<Vec3> = self
+            .conns
+            .values()
+            .filter_map(|c| c.player.as_ref())
+            .filter(|p| p.alive)
+            .map(Player::centre)
+            .collect();
+        self.run.step_enemies(&targets);
+
+        // 4. Deaths.
+        let mut deaths: Vec<(ConnId, u8)> = Vec::new();
+        for (id, conn) in &mut self.conns {
+            let Some(p) = conn.player.as_mut().filter(|p| p.alive) else {
+                continue;
+            };
+            if let Some(cause) = self.run.hazard(&p.state.pos) {
+                p.alive = false;
+                p.state.vel = Vec3::ZERO;
+                deaths.push((*id, cause));
+            }
+        }
+        for (id, cause) in deaths {
+            tracing::info!(conn = id, cause, level = self.run.number(), "player died");
+            let summary = RunSummary {
+                level_reached: self.run.number(),
+                gifts_collected: self.run.gifts_collected,
+                cause,
+            };
+            self.send(id, &ServerMsg::RunOver { summary });
+        }
+
+        // 5. Beacon: a living player in the open beacon takes the whole team onward.
+        let through_beacon = self
+            .conns
+            .values()
+            .filter_map(|c| c.player.as_ref())
+            .any(|p| p.alive && self.run.beacon_reached(&p.state.pos));
+        if through_beacon {
+            self.run.advance();
+            tracing::info!(level = self.run.number(), "level cleared");
+            self.respawn_all_and_send_level();
+        }
+
+        // 6. Snapshots.
         let players: Vec<PlayerView> = self
             .conns
             .values()
@@ -244,22 +345,22 @@ impl Game {
                 id: p.id,
                 pos: p.state.pos.clone(),
                 vel: p.state.vel.clone(),
-                alive: true,
+                alive: p.alive,
             })
             .collect();
-        let ids: Vec<ConnId> = self.conns.keys().copied().collect();
-        for id in ids {
+        let enemies = self.run.enemy_views();
+        for id in self.joined_ids() {
             let Some(p) = self.conns.get(&id).and_then(|c| c.player.as_ref()) else {
                 continue;
             };
             let msg = ServerMsg::Snapshot {
                 tick: self.tick,
-                level: self.level.level,
+                level: self.run.number(),
                 last_input_seq: p.last_applied_seq,
                 you: p.state.clone(),
                 players: players.clone(),
-                enemies: vec![],
-                gifts_taken: vec![],
+                enemies: enemies.clone(),
+                gifts_taken: self.run.gifts_taken.clone(),
             };
             self.send(id, &msg);
         }
@@ -477,6 +578,77 @@ mod tests {
             g.tick();
         }
         assert!(g.conns[&1].player.as_ref().unwrap().state.pos.y < 10.0);
+    }
+
+    fn player(g: &mut Game, id: ConnId) -> &mut Player {
+        g.conns.get_mut(&id).unwrap().player.as_mut().unwrap()
+    }
+
+    #[test]
+    fn falling_into_the_void_ends_the_run_and_restart_begins_a_new_one() {
+        let mut g = Game::new();
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        drain(&mut rx);
+        let kill_y = g.run.world.kill_y;
+        player(&mut g, 1).state.pos.y = kill_y - 5.0;
+        g.tick();
+        let died = drain(&mut rx).into_iter().any(|m| {
+            matches!(m, ServerMsg::RunOver { summary } if summary.level_reached == 1 && summary.cause == protocol::DEATH_VOID)
+        });
+        assert!(died);
+        assert!(!player(&mut g, 1).alive);
+        // Dead players do not die twice.
+        g.tick();
+        assert!(!drain(&mut rx).iter().any(|m| matches!(m, ServerMsg::RunOver { .. })));
+        g.handle(GameEvent::Message {
+            id: 1,
+            msg: ClientMsg::Restart,
+        });
+        assert!(player(&mut g, 1).alive);
+        assert!(
+            drain(&mut rx)
+                .iter()
+                .any(|m| matches!(m, ServerMsg::Level { data } if data.level == 1))
+        );
+    }
+
+    #[test]
+    fn restart_is_ignored_while_alive() {
+        let mut g = Game::new();
+        let _rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        player(&mut g, 1).state.pos.x = 3.25;
+        g.handle(GameEvent::Message {
+            id: 1,
+            msg: ClientMsg::Restart,
+        });
+        assert_eq!(player(&mut g, 1).state.pos.x, 3.25);
+    }
+
+    #[test]
+    fn gifts_then_beacon_advance_the_level() {
+        let mut g = Game::new();
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        let gifts = g.run.level.gifts.clone();
+        for gift in &gifts {
+            player(&mut g, 1).state.pos = Vec3::new(gift.pos.x, gift.pos.y - 0.9, gift.pos.z);
+            g.tick();
+        }
+        assert!(g.run.all_gifts_taken());
+        let beacon = g.run.level.beacon.clone();
+        player(&mut g, 1).state.pos = beacon;
+        g.tick();
+        assert_eq!(g.run.number(), 2);
+        assert_eq!(g.run.gifts_collected, 5);
+        assert!(
+            drain(&mut rx)
+                .iter()
+                .any(|m| matches!(m, ServerMsg::Level { data } if data.level == 2))
+        );
+        let spawn = g.run.level.spawn.clone();
+        assert_eq!(player(&mut g, 1).state.pos, spawn);
     }
 
     #[test]
