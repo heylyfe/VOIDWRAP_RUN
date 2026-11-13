@@ -1,0 +1,23 @@
+[package]
+name = "server"
+description = "VOIDWRAP RUN authoritative game server"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "voidwrap-server"
+path = "src/main.rs"
+
+[dependencies]
+protocol.workspace = true
+sim.workspace = true
+axum = { version = "0.8.9", features = ["ws"] }
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "time", "net", "sync", "signal"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+
+[lints]
+workspace = true

@@ -1,0 +1,16 @@
+[package]
+name = "sim-wasm"
+description = "WASM build of the movement controller for client-side prediction"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+protocol.workspace = true
+sim.workspace = true
+
+[lints]
+workspace = true

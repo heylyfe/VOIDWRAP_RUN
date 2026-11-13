@@ -1,0 +1,10 @@
+{
+  "name": "voidwrap-run",
+  "private": true,
+  "description": "VOIDWRAP RUN is a fast-paced 3D roguelite collectathon platformer.",
+  "packageManager": "pnpm@12.18.0",
+  "scripts": {
+    "gen": "node tools/protocol-gen.mjs",
+    "run": "node tools/run.mjs"
+  }
+}
