@@ -3,10 +3,16 @@
 import { useEffect, useMemo, useRef } from "react";
 import type { JSX } from "react";
 import { useFrame } from "@react-three/fiber";
-import { BoxGeometry, Color, MeshStandardMaterial, Object3D } from "three";
-import type { InstancedMesh } from "three";
+import {
+  BufferAttribute,
+  Color,
+  IcosahedronGeometry,
+  MeshStandardMaterial,
+  Object3D,
+} from "three";
+import type { BufferGeometry, InstancedMesh } from "three";
 import type { Theme } from "./theme";
-import { mulberry32 } from "./rng";
+import { hashString, mulberry32 } from "./rng";
 
 export interface DebrisItem {
   position: [number, number, number];
@@ -27,8 +33,39 @@ const BOB_SPEED = 0.8;
 const CLUSTER_FRACTION = 0.3;
 const CLUSTER_SPREAD = 2.0;
 
+/** Seed of the single shared rock silhouette; every Debris instance reuses it. */
+const ROCK_JITTER_SEED = 0x5eed;
+const ROCK_MIN_FACTOR = 0.7;
+const ROCK_MAX_FACTOR = 1.15;
+/** Positions are quantised before hashing so duplicated vertices agree. */
+const ROCK_QUANTISATION = 1000;
+
+/** Per-instance axis stretch so no two rocks share the same silhouette. */
+const MIN_AXIS_SCALE = 0.75;
+const MAX_AXIS_SCALE = 1.25;
+
+const RIM_STRENGTH = 0.6;
+
+const RIM_FRAGMENT_PARS = `
+uniform vec3 uRimColor;
+uniform float uRimStrength;
+`;
+
+const RIM_FRAGMENT_APPLY = `
+  {
+    vec3 rimViewDirection = normalize( vViewPosition );
+    float rimFresnel = pow( 1.0 - clamp( dot( normal, rimViewDirection ), 0.0, 1.0 ), 3.0 );
+    outgoingLight += uRimColor * rimFresnel * uRimStrength;
+  }
+`;
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+/** Deterministic float in [0, 1) derived from a string key. */
+function unitHash(key: string): number {
+  return hashString(key) / 4294967296;
 }
 
 /**
@@ -108,6 +145,47 @@ export function debrisLayout(
   return items;
 }
 
+/**
+ * One shared jagged rock: an icosahedron whose vertices are pushed in and out
+ * by a per-position hash. `IcosahedronGeometry` is non-indexed, so the same
+ * corner appears once per adjacent face; hashing the quantised position (not
+ * the vertex index) gives every copy the same factor, which keeps the faces
+ * welded and the silhouette crack-free.
+ */
+function buildRockGeometry(): BufferGeometry {
+  const geometry = new IcosahedronGeometry(1, 0);
+  const attribute = geometry.getAttribute("position");
+  if (!(attribute instanceof BufferAttribute)) {
+    throw new Error("IcosahedronGeometry is missing a position attribute");
+  }
+
+  const factors = new Map<string, number>();
+  for (let i = 0; i < attribute.count; i += 1) {
+    const x = attribute.getX(i);
+    const y = attribute.getY(i);
+    const z = attribute.getZ(i);
+    const key = [
+      Math.round(x * ROCK_QUANTISATION),
+      Math.round(y * ROCK_QUANTISATION),
+      Math.round(z * ROCK_QUANTISATION),
+    ].join(":");
+
+    let factor = factors.get(key);
+    if (factor === undefined) {
+      factor =
+        ROCK_MIN_FACTOR +
+        unitHash(`rock:${ROCK_JITTER_SEED}:${key}`) * (ROCK_MAX_FACTOR - ROCK_MIN_FACTOR);
+      factors.set(key, factor);
+    }
+
+    attribute.setXYZ(i, x * factor, y * factor, z * factor);
+  }
+
+  attribute.needsUpdate = true;
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
 export function Debris(props: {
   theme: Theme;
   center: { x: number; y: number; z: number };
@@ -123,21 +201,45 @@ export function Debris(props: {
     [seed, count, centerX, centerY, centerZ, radius],
   );
 
-  const geometry = useMemo(() => new BoxGeometry(1, 1, 1), []);
+  const geometry = useMemo(() => buildRockGeometry(), []);
 
-  const material = useMemo(
-    () =>
-      new MeshStandardMaterial({
-        color: new Color(theme.debris),
-        roughness: 0.6,
-        metalness: 0.2,
-        emissive: new Color(theme.accent),
-        emissiveIntensity: 0.05,
-      }),
-    [theme.debris, theme.accent],
-  );
+  // Non-uniform per-instance stretch, derived from the item index only, so the
+  // rocks differ without any per-frame randomness or allocation.
+  const axisScales = useMemo(() => {
+    const values = new Float32Array(layout.length * 3);
+    for (let i = 0; i < layout.length; i += 1) {
+      values[i * 3] = MIN_AXIS_SCALE + unitHash(`rock-x:${i}`) * (MAX_AXIS_SCALE - MIN_AXIS_SCALE);
+      values[i * 3 + 1] =
+        MIN_AXIS_SCALE + unitHash(`rock-y:${i}`) * (MAX_AXIS_SCALE - MIN_AXIS_SCALE);
+      values[i * 3 + 2] =
+        MIN_AXIS_SCALE + unitHash(`rock-z:${i}`) * (MAX_AXIS_SCALE - MIN_AXIS_SCALE);
+    }
+    return values;
+  }, [layout]);
 
-  const dummy = useMemo(() => new Object3D(), []);
+  const material = useMemo(() => {
+    const rimColor = new Color(theme.accent);
+    const rockMaterial = new MeshStandardMaterial({
+      color: new Color(theme.debris),
+      roughness: 0.9,
+      flatShading: true,
+    });
+
+    // Fresnel rim light: bright accent on the silhouette edges, nothing on the
+    // faces pointing at the camera. Injected into the standard material so the
+    // rocks keep their normal lighting and fog.
+    rockMaterial.onBeforeCompile = (shader) => {
+      shader.uniforms.uRimColor = { value: rimColor };
+      shader.uniforms.uRimStrength = { value: RIM_STRENGTH };
+      shader.fragmentShader = shader.fragmentShader
+        .replace("#include <common>", `#include <common>\n${RIM_FRAGMENT_PARS}`)
+        .replace("#include <opaque_fragment>", `${RIM_FRAGMENT_APPLY}\n#include <opaque_fragment>`);
+    };
+
+    return rockMaterial;
+  }, [theme.debris, theme.accent]);
+
+  const dummyRef = useRef<Object3D>(new Object3D());
   const meshRef = useRef<InstancedMesh>(null);
 
   useEffect(
@@ -157,6 +259,7 @@ export function Debris(props: {
   useFrame((state) => {
     const mesh = meshRef.current;
     if (!mesh) return;
+    const dummy = dummyRef.current;
     const time = state.clock.elapsedTime;
 
     for (let i = 0; i < layout.length; i += 1) {
@@ -175,7 +278,11 @@ export function Debris(props: {
         centerZ + offsetX * sin + offsetZ * cos,
       );
       dummy.rotation.set(item.spin[0] * time, item.spin[1] * time, item.spin[2] * time);
-      dummy.scale.setScalar(item.scale);
+      dummy.scale.set(
+        item.scale * (axisScales[i * 3] ?? 1),
+        item.scale * (axisScales[i * 3 + 1] ?? 1),
+        item.scale * (axisScales[i * 3 + 2] ?? 1),
+      );
       dummy.updateMatrix();
       mesh.setMatrixAt(i, dummy.matrix);
     }

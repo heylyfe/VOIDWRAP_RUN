@@ -74,18 +74,31 @@ void main() {
   float height = smoothstep(-0.15, 0.85, dir.y);
   vec3 base = mix(uHorizon, uZenith, height);
 
-  // Soft billowy clouds: slowly scrolling 3D domain sampled with fbm.
+  // Keep the zenith clearly brighter than the horizon band so the dome still
+  // reads as sky under the heavy cloud cover.
+  base = mix(base, uZenith, smoothstep(0.45, 1.0, dir.y) * 0.35);
+
+  // Hard-edged billows: a narrow smoothstep band turns the fbm into crisp cloud
+  // silhouettes instead of a milky wash.
   vec3 cloudDomain = dir * 3.0 + vec3(uTime * 0.01, 0.0, uTime * 0.006);
   float cloudNoise = fbm(cloudDomain);
-  float cloudMask = smoothstep(0.42, 0.82, cloudNoise);
-  vec3 colour = mix(base, uCloud, cloudMask * 0.65);
+  float cloudMask = smoothstep(0.42, 0.62, cloudNoise);
+  vec3 colour = mix(base, uCloud, cloudMask * 0.85);
 
-  // Darker marbled streaks: lower frequency, strongest near the horizon.
-  vec3 marbleDomain = dir * 1.35 + vec3(uTime * 0.004, uTime * 0.0025, 0.0);
-  float marbleNoise = fbm(marbleDomain);
-  float marbleMask = smoothstep(0.48, 0.9, marbleNoise);
-  float horizonWeight = 1.0 - smoothstep(-0.1, 0.8, dir.y);
-  colour = mix(colour, uCloudDark, marbleMask * horizonWeight * 0.55);
+  // Broad, low-frequency masses: big dark shapes that dominate the lower sky.
+  vec3 massDomain = dir * 0.85 + vec3(uTime * 0.003, 0.0, uTime * 0.002);
+  float massNoise = fbm(massDomain);
+  float massMask = smoothstep(0.38, 0.72, massNoise);
+  float lowerSky = 1.0 - smoothstep(-0.05, 0.75, dir.y);
+  colour = mix(colour, uCloudDark, massMask * lowerSky * 0.75);
+
+  // Storm wall: noise stretched along x so the bands read as long horizontal
+  // streaks rather than blobs.
+  vec3 streakDomain = vec3(dir.x * 0.6, dir.y * 6.0, dir.z * 0.6) + vec3(uTime * 0.02, 0.0, 0.0);
+  float streakNoise = fbm(streakDomain);
+  float streakMask = smoothstep(0.45, 0.75, streakNoise);
+  float streakBand = 1.0 - smoothstep(0.0, 0.55, abs(dir.y - 0.12));
+  colour = mix(colour, uCloudDark, streakMask * streakBand * 0.35);
 
   gl_FragColor = vec4(colour, 1.0);
 

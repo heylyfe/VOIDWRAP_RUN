@@ -16,7 +16,7 @@ export function Effects(): JSX.Element {
   const aberrationOffset = useMemo(() => new Vector2(0.0011, 0.0008), []);
 
   return (
-    <EffectComposer multisampling={4}>
+    <EffectComposer multisampling={0} enableNormalPass={false}>
       <Bloom
         mipmapBlur
         luminanceThreshold={0.8}

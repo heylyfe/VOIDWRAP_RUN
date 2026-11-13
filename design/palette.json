@@ -6,9 +6,23 @@
       "id": "ashfall",
       "name": "Ashfall",
       "mood": "pale grey storm-cloud void, lavender checker roads, magenta sparks",
-      "sky": { "zenith": "#b1aeb5", "horizon": "#625e64", "cloud": "#d9d6dc", "cloudDark": "#49454a" },
-      "fog": { "color": "#837e85", "near": 25, "far": 120 },
-      "tile": { "light": "#ad71ce", "dark": "#1f1a23", "side": "#351650", "edge": "#d78fef" },
+      "sky": {
+        "zenith": "#8f8b95",
+        "horizon": "#4a464f",
+        "cloud": "#c9c5cf",
+        "cloudDark": "#2a2630"
+      },
+      "fog": {
+        "color": "#6d6873",
+        "near": 25,
+        "far": 120
+      },
+      "tile": {
+        "light": "#ad71ce",
+        "dark": "#1f1a23",
+        "side": "#351650",
+        "edge": "#d78fef"
+      },
       "accent": "#e040c0",
       "debris": "#141016"
     },
@@ -16,9 +30,23 @@
       "id": "fluxbloom",
       "name": "Fluxbloom",
       "mood": "saturated magenta haze, near-black and plum checkers, hot violet glow",
-      "sky": { "zenith": "#5e0361", "horizon": "#350335", "cloud": "#7b1089", "cloudDark": "#1d051d" },
-      "fog": { "color": "#45034a", "near": 20, "far": 100 },
-      "tile": { "light": "#7b1089", "dark": "#050106", "side": "#350335", "edge": "#e000ff" },
+      "sky": {
+        "zenith": "#3a0240",
+        "horizon": "#1a011d",
+        "cloud": "#8a0f9a",
+        "cloudDark": "#0b010d"
+      },
+      "fog": {
+        "color": "#2a0230",
+        "near": 16,
+        "far": 85
+      },
+      "tile": {
+        "light": "#8a14a0",
+        "dark": "#050106",
+        "side": "#350335",
+        "edge": "#e000ff"
+      },
       "accent": "#ff00ff",
       "debris": "#050106"
     },
@@ -26,28 +54,79 @@
       "id": "slagstone",
       "name": "Slagstone",
       "mood": "slate-blue marbled dusk, stark black-and-white checkers, blood-red danger",
-      "sky": { "zenith": "#574248", "horizon": "#3d3853", "cloud": "#8b817c", "cloudDark": "#232030" },
-      "fog": { "color": "#3d3853", "near": 22, "far": 110 },
-      "tile": { "light": "#f9f5f6", "dark": "#0d0a07", "side": "#332d30", "edge": "#c6c19c" },
+      "sky": {
+        "zenith": "#5a5a64",
+        "horizon": "#2e2e36",
+        "cloud": "#8c8c96",
+        "cloudDark": "#1a1a20"
+      },
+      "fog": {
+        "color": "#3a3a44",
+        "near": 22,
+        "far": 110
+      },
+      "tile": {
+        "light": "#f9f5f6",
+        "dark": "#0d0a07",
+        "side": "#332d30",
+        "edge": "#d8d8e8"
+      },
       "accent": "#c00020",
-      "debris": "#0d0a07"
+      "debris": "#1c1a22"
     },
     {
       "id": "tidegrave",
       "name": "Tidegrave",
       "mood": "deep teal underwater gloom, teal and orchid checkers, cold cyan glints",
-      "sky": { "zenith": "#064246", "horizon": "#040a0e", "cloud": "#0b7879", "cloudDark": "#051623" },
-      "fog": { "color": "#053034", "near": 18, "far": 95 },
-      "tile": { "light": "#0b7879", "dark": "#051623", "side": "#181041", "edge": "#b795d0" },
+      "sky": {
+        "zenith": "#064246",
+        "horizon": "#040a0e",
+        "cloud": "#0b7879",
+        "cloudDark": "#051623"
+      },
+      "fog": {
+        "color": "#053034",
+        "near": 18,
+        "far": 95
+      },
+      "tile": {
+        "light": "#0b7879",
+        "dark": "#051623",
+        "side": "#181041",
+        "edge": "#b795d0"
+      },
       "accent": "#40c0c0",
       "debris": "#040a0e"
     }
   ],
   "common": {
-    "gift": { "body": "#ffd23d", "ribbon": "#ff3db8", "glow": "#ffe680" },
-    "beacon": { "core": "#ffffff", "beam": "#fff6c6", "closed": "#8a8fb0" },
-    "enemy": { "body": "#ff2a3a", "glow": "#ff1a1a", "hazardRing": "#c00020" },
-    "player": { "body": "#ff3db8", "skin": "#ffd9b8", "legs": "#2b2b4a", "face": "#07060d" },
-    "ui": { "panel": "#120f1f", "panelTint": "#3a1d6e", "text": "#f4f1ff", "counter": "#fff6c6", "danger": "#ff4d4d" }
+    "gift": {
+      "body": "#ffd23d",
+      "ribbon": "#ff3db8",
+      "glow": "#ffe680"
+    },
+    "beacon": {
+      "core": "#ffffff",
+      "beam": "#fff6c6",
+      "closed": "#8a8fb0"
+    },
+    "enemy": {
+      "body": "#ff2a3a",
+      "glow": "#ff1a1a",
+      "hazardRing": "#c00020"
+    },
+    "player": {
+      "body": "#ff3db8",
+      "skin": "#ffd9b8",
+      "legs": "#2b2b4a",
+      "face": "#07060d"
+    },
+    "ui": {
+      "panel": "#120f1f",
+      "panelTint": "#3a1d6e",
+      "text": "#f4f1ff",
+      "counter": "#fff6c6",
+      "danger": "#ff4d4d"
+    }
   }
 }

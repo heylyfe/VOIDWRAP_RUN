@@ -53,6 +53,10 @@ builds non-deterministic. The human turned SAC off; builds are clean since.
 | T-020 glow pass | GLM | plan | 1 | ✓ | ✓ | ✓ | ✓ | ✓ | merged, 0 rejections | bloom/CA/vignette/noise, light-pillar beacon, glowing gifts + enemy aura, bottom-centre counter |
 | T-021 reference match | INKLING-VISION | zen + 8 images | 2 | ✓ | n/a | n/a | n/a | ✓ (triage) | review | 1st run exposed a DISPATCH BUG (same-basename attachments overwrote each other) → fixed; scores 6/4/5/6 per theme; gaps → next tickets |
 | VOIDWRAP_START_LEVEL | OVERSEER | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | merged | dev/QA aid to start runs at level n (theme review) |
+| palette tuning | OVERSEER | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | merged | per T-021: darker/denser Fluxbloom, lower-exposure Ashfall, neutral Slagstone sky + grey-violet debris + cool trim |
+| T-022 grime + light pools | GLM | plan | 1 | ✓ | ✓ | ✓ | ✓ | ✓ | merged, 0 rejections | 512px texture v2 (per-tile tint, scuffs, cracks, worn edges), additive LightPool under gifts/open beacon, calmer gift bloom, composer multisampling 0 |
+| T-023 rocks, crystals, clouds | DEEPSEEK | plan | 1 | ✓ | ✓ | ✓ | ✓ | ✓ | merged, 0 rejections | welded jagged rock geometry + fresnel rim via onBeforeCompile, emissive crystal clusters (never on walkable tops, tested), higher-contrast storm sky |
+| FPS readout | OVERSEER | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | merged | in-canvas probe → debug panel "N fps" for real-GPU measurement |
 
 **Open risk:** frame rate with post-processing measured only under headless SOFTWARE rendering (~7 fps vs ~59 without);
 needs a real-GPU measurement (debug panel FPS readout) before the 60 fps target can be claimed.

@@ -12,6 +12,7 @@ import { Atmosphere } from "@/scene/Atmosphere";
 import { Beacon } from "@/scene/Beacon";
 import { BlockyAvatar } from "@/scene/BlockyAvatar";
 import { Chaser } from "@/scene/Chaser";
+import { Crystals } from "@/scene/Crystals";
 import { Debris } from "@/scene/Debris";
 import { Effects } from "@/scene/Effects";
 import { GiftBox } from "@/scene/GiftBox";
@@ -117,6 +118,7 @@ function World({ session, level }: { session: GameSession; level: LevelData }) {
       <hemisphereLight args={[theme.sky.zenith, theme.sky.horizon, 1.1]} />
       <directionalLight position={[8, 20, 6]} intensity={1.6} />
       <Platforms platforms={level.platforms} theme={theme} />
+      <Crystals platforms={level.platforms} theme={theme} seed={level.seed + 7} />
       {level.gifts.map((gift) => (
         <GiftBox key={gift.id} position={gift.pos} taken={giftsTaken.includes(gift.id)} />
       ))}
@@ -135,17 +137,34 @@ function World({ session, level }: { session: GameSession; level: LevelData }) {
         </group>
       ))}
       <Effects />
+      <FpsProbe />
     </>
   );
 }
 
+/** Counts rendered frames and publishes fps to the store twice a second. */
+function FpsProbe() {
+  const acc = useRef({ frames: 0, time: 0 });
+  useFrame((_, dt) => {
+    const a = acc.current;
+    a.frames += 1;
+    a.time += dt;
+    if (a.time >= 0.5) {
+      useGameStore.getState().set({ fps: Math.round(a.frames / a.time) });
+      a.frames = 0;
+      a.time = 0;
+    }
+  });
+  return null;
+}
+
 function DebugPanel() {
-  const { status, error, serverTick, pingMs, playerCount } = useGameStore();
+  const { status, error, serverTick, pingMs, playerCount, fps } = useGameStore();
   return (
     <div className="pointer-events-none absolute bottom-3 left-3 font-mono text-xs text-white/60">
       <div>
         server: <span data-testid="conn-status">{status}</span> · tick:{" "}
-        <span data-testid="server-tick">{serverTick}</span> · ping {pingMs ?? "–"} ms · players {playerCount}
+        <span data-testid="server-tick">{serverTick}</span> · ping {pingMs ?? "–"} ms · players {playerCount} · <span data-testid="fps">{fps}</span> fps
       </div>
       {error && <div className="mt-1 rounded bg-red-900/80 px-2 py-1 text-sm text-white">{error}</div>}
     </div>

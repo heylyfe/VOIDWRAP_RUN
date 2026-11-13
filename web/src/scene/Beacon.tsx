@@ -6,6 +6,7 @@ import { useFrame } from "@react-three/fiber";
 import { AdditiveBlending } from "three";
 import type { Mesh, MeshStandardMaterial } from "three";
 import type { Vec3 } from "@/protocol/generated";
+import { LightPool } from "./LightPool";
 import { COMMON } from "./theme";
 
 interface FrameBarData {
@@ -39,6 +40,10 @@ const FRAME_EMISSIVE_CLOSED = 0.35;
 const BEAM_BASE_OPACITY = 0.28;
 const BEAM_OPACITY_RANGE = 0.14;
 const BEAM_SCALE_RANGE = 0.12;
+
+// Fake light spill around an open beacon's base.
+const POOL_RADIUS = 4.5;
+const POOL_INTENSITY = 0.55;
 
 const FRAME_BARS: ReadonlyArray<FrameBarData> = [
   {
@@ -105,6 +110,13 @@ export function Beacon(props: { position: Vec3; open: boolean }): JSX.Element {
       ))}
       {open ? (
         <>
+          <group position={[0, BASE_TOP_Y, 0]}>
+            <LightPool
+              color={COMMON.beacon.beam}
+              radius={POOL_RADIUS}
+              intensity={POOL_INTENSITY}
+            />
+          </group>
           <mesh position={[0, OPEN_PILLAR_CENTER_Y, 0]}>
             <cylinderGeometry
               args={[OPEN_PILLAR_CORE_RADIUS, OPEN_PILLAR_CORE_RADIUS, OPEN_PILLAR_HEIGHT, 12]}

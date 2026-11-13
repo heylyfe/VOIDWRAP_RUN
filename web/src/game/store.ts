@@ -19,6 +19,8 @@ export interface GameStore {
   giftsTaken: number[];
   /** Set when the local player died; cleared by the next Level message. */
   runOver: RunSummary | null;
+  /** Rendered frames per second (measured in the canvas). */
+  fps: number;
   set(patch: Partial<Omit<GameStore, "set">>): void;
 }
 
@@ -34,5 +36,6 @@ export const useGameStore = create<GameStore>((set) => ({
   giftsTotal: 0,
   giftsTaken: [],
   runOver: null,
+  fps: 0,
   set: (patch) => set(patch),
 }));
