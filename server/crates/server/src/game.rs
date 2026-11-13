@@ -78,6 +78,8 @@ pub struct Game {
     conns: BTreeMap<ConnId, Conn>,
     run: Run,
     next_player_id: u32,
+    /// Level every new run starts at (1 in production; `VOIDWRAP_START_LEVEL` for visual QA).
+    start_level: u32,
 }
 
 impl Default for Game {
@@ -88,11 +90,17 @@ impl Default for Game {
 
 impl Game {
     pub fn new() -> Self {
+        Self::starting_at(1)
+    }
+
+    pub fn starting_at(start_level: u32) -> Self {
+        let start_level = start_level.max(1);
         Game {
             tick: 0,
             conns: BTreeMap::new(),
-            run: Run::start(),
+            run: Run::start_at(start_level),
             next_player_id: 1,
+            start_level,
         }
     }
 
@@ -214,7 +222,7 @@ impl Game {
                 let anyone_alive = self.conns.values().filter_map(|c| c.player.as_ref()).any(|p| p.alive);
                 if !anyone_alive {
                     tracing::info!(conn = id, "new run");
-                    self.run = Run::start();
+                    self.run = Run::start_at(self.start_level);
                     self.respawn_all_and_send_level();
                 }
             }
@@ -383,8 +391,8 @@ fn sanitize_name(raw: &str) -> String {
 }
 
 /// Runs the game until every sender is gone.
-pub async fn run(mut rx: mpsc::Receiver<GameEvent>) {
-    let mut game = Game::new();
+pub async fn run(mut rx: mpsc::Receiver<GameEvent>, start_level: u32) {
+    let mut game = Game::starting_at(start_level);
     let period = Duration::from_millis(1000 / u64::from(TICK_HZ));
     let mut interval = tokio::time::interval(period);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);

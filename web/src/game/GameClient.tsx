@@ -1,19 +1,23 @@
 "use client";
 
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Group } from "three";
 import { DEATH_ENEMY, type LevelData } from "@/protocol/generated";
 import { GameHud } from "@/hud/GameHud";
 import { LevelBanner } from "@/hud/LevelBanner";
 import { RunSummary } from "@/hud/RunSummary";
 import type { DeathCause } from "@/hud/format";
+import { Atmosphere } from "@/scene/Atmosphere";
 import { Beacon } from "@/scene/Beacon";
 import { BlockyAvatar } from "@/scene/BlockyAvatar";
 import { Chaser } from "@/scene/Chaser";
+import { Debris } from "@/scene/Debris";
+import { Effects } from "@/scene/Effects";
 import { GiftBox } from "@/scene/GiftBox";
 import { PALETTE } from "@/scene/palette";
 import { Platforms } from "@/scene/Platforms";
+import { themeForLevel } from "@/scene/theme";
 import { bindingFor } from "./input";
 import { defaultServerUrl } from "./net";
 import { GameSession } from "./session";
@@ -29,6 +33,22 @@ const CAMERA_HEIGHT = 1.4;
 const MOVING_SPEED = 0.5;
 const ORIGIN = { x: 0, y: 0, z: 0 };
 
+/** Centre and horizontal radius of a level, for placing the debris swarm around it. */
+function levelBounds(level: LevelData): { center: { x: number; y: number; z: number }; radius: number } {
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of level.platforms) {
+    minX = Math.min(minX, p.bounds.min.x);
+    maxX = Math.max(maxX, p.bounds.max.x);
+    minY = Math.min(minY, p.bounds.min.y);
+    maxY = Math.max(maxY, p.bounds.max.y);
+    minZ = Math.min(minZ, p.bounds.min.z);
+    maxZ = Math.max(maxZ, p.bounds.max.z);
+  }
+  if (!Number.isFinite(minX)) return { center: ORIGIN, radius: 30 };
+  const center = { x: (minX + maxX) / 2, y: (minY + maxY) / 2, z: (minZ + maxZ) / 2 };
+  return { center, radius: Math.max(20, Math.hypot(maxX - minX, maxZ - minZ) / 2 + 10) };
+}
+
 function World({ session, level }: { session: GameSession; level: LevelData }) {
   const player = useRef<Group>(null);
   const remotes = useRef<(Group | null)[]>([]);
@@ -37,6 +57,8 @@ function World({ session, level }: { session: GameSession; level: LevelData }) {
   const [moving, setMoving] = useState(false);
   const giftsTaken = useGameStore((s) => s.giftsTaken);
   const beaconOpen = giftsTaken.length >= level.gifts.length;
+  const theme = themeForLevel(level.level);
+  const bounds = useMemo(() => levelBounds(level), [level]);
 
   useFrame((_, dt) => {
     session.update(dt);
@@ -89,12 +111,12 @@ function World({ session, level }: { session: GameSession; level: LevelData }) {
 
   return (
     <>
-      <color attach="background" args={[PALETTE.voidBackground]} />
-      <fog attach="fog" args={[PALETTE.voidBackground, 35, 110]} />
+      <Atmosphere theme={theme} />
+      <Debris theme={theme} center={bounds.center} radius={bounds.radius} seed={level.seed + 1} />
       <ambientLight intensity={0.7} />
-      <hemisphereLight args={["#8fd8ff", "#3a0830", 0.6]} />
+      <hemisphereLight args={[theme.sky.zenith, theme.sky.horizon, 1.1]} />
       <directionalLight position={[8, 20, 6]} intensity={1.6} />
-      <Platforms platforms={level.platforms} />
+      <Platforms platforms={level.platforms} theme={theme} />
       {level.gifts.map((gift) => (
         <GiftBox key={gift.id} position={gift.pos} taken={giftsTaken.includes(gift.id)} />
       ))}
@@ -112,6 +134,7 @@ function World({ session, level }: { session: GameSession; level: LevelData }) {
           <Chaser position={ORIGIN} />
         </group>
       ))}
+      <Effects />
     </>
   );
 }
@@ -217,7 +240,7 @@ export default function GameClient() {
       onContextMenu={(e) => e.preventDefault()}
     >
       {session && level ? (
-        <Canvas camera={{ fov: 70, near: 0.1, far: 250 }} dpr={[1, 2]}>
+        <Canvas camera={{ fov: 70, near: 0.1, far: 1000 }} dpr={[1, 2]}>
           <World session={session} level={level} />
         </Canvas>
       ) : (

@@ -28,7 +28,16 @@ async fn main() {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
     let (game_tx, game_rx) = mpsc::channel(GAME_INBOX_CAPACITY);
-    let game = tokio::spawn(game::run(game_rx));
+    // Dev/QA aid: start every run at a later level (e.g. to review each colour theme).
+    let start_level: u32 = std::env::var("VOIDWRAP_START_LEVEL")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1)
+        .clamp(1, 10_000);
+    if start_level != 1 {
+        tracing::warn!("VOIDWRAP_START_LEVEL={start_level}: runs start at level {start_level} (dev/QA only)");
+    }
+    let game = tokio::spawn(game::run(game_rx, start_level));
 
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,

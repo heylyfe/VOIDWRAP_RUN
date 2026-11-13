@@ -58,8 +58,10 @@ try {
   console.log(`capture: ~${Math.round(fps)} fps (headless software rendering; a lower bound, not a GPU measurement)`);
   const level = await page.getByTestId("level-number").textContent();
   const gifts = await page.getByTestId("gifts-remaining").textContent();
+  const counter = await page.getByTestId("gift-counter").textContent();
+  console.log(`capture: gift counter "${counter?.trim()}"`);
   console.log(`capture: HUD level=${level} gifts=${gifts}`);
-  if (level !== "1" || gifts !== "5 / 5") errors.push(`unexpected HUD: level=${level} gifts=${gifts}`);
+  if (level !== (process.env.CAPTURE_LEVEL ?? "1") || gifts !== "5 / 5") errors.push(`unexpected HUD: level=${level} gifts=${gifts}`);
   await page.keyboard.down("KeyW");
   await page.waitForTimeout(500);
   await page.keyboard.press("Space");

@@ -119,8 +119,9 @@ async function viaOpencode(model, ticketPath, images, sandbox, timeoutSec) {
   writeFileSync(join(sandbox, "opencode.json"), JSON.stringify({ permission: { "*": "deny" } }));
   const local = join(sandbox, "TICKET.md");
   copyFileSync(ticketPath, local);
-  const files = [local, ...images.map((img) => {
-    const dst = join(sandbox, basename(img));
+  // Prefix with the attachment index: different screenshots often share a basename (e.g. 01-spawn.png).
+  const files = [local, ...images.map((img, i) => {
+    const dst = join(sandbox, `image-${String(i + 1).padStart(2, "0")}-${basename(img)}`);
     copyFileSync(img, dst);
     return dst;
   })];

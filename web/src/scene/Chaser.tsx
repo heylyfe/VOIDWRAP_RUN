@@ -3,9 +3,10 @@
 import { useRef } from "react";
 import type { JSX } from "react";
 import { useFrame } from "@react-three/fiber";
-import type { Group, Mesh } from "three";
+import { AdditiveBlending } from "three";
+import type { Group, Mesh, MeshStandardMaterial } from "three";
 import type { Vec3 } from "@/protocol/generated";
-import { PALETTE } from "./palette";
+import { COMMON } from "./theme";
 
 const SHARD_OFFSETS: ReadonlyArray<readonly [number, number, number]> = [
   [0.95, 0.25, 0],
@@ -14,13 +15,17 @@ const SHARD_OFFSETS: ReadonlyArray<readonly [number, number, number]> = [
   [0, -0.95, -0.35],
 ];
 
-const CORE_COLOR = PALETTE.chaserRed;
-const SHARD_COLOR = "#c81e1e";
-const EMISSIVE = "#ff1a1a";
+const CORE_EMISSIVE = 2.2;
+const SHARD_EMISSIVE = 0.8;
+const AURA_RADIUS = 1.3;
+const AURA_BASE_OPACITY = 0.12;
+const AURA_SCALE_RANGE = 0.06;
 
 export function Chaser(props: { position: Vec3 }): JSX.Element {
   const coreRef = useRef<Mesh>(null);
   const shardsRef = useRef<Group>(null);
+  const auraMeshRef = useRef<Mesh>(null);
+  const auraMaterialRef = useRef<MeshStandardMaterial>(null);
 
   useFrame((state, delta) => {
     const core = coreRef.current;
@@ -32,6 +37,19 @@ export function Chaser(props: { position: Vec3 }): JSX.Element {
       shards.rotation.y -= delta * 1.8;
       shards.rotation.x = Math.sin(state.clock.elapsedTime * 1.3) * 0.35;
     }
+    const aura = auraMeshRef.current;
+    if (aura !== null) {
+      const scale = 1 + Math.sin(state.clock.elapsedTime * 2.1) * AURA_SCALE_RANGE;
+      aura.scale.x = scale;
+      aura.scale.y = scale;
+      aura.scale.z = scale;
+    }
+    const auraMaterial = auraMaterialRef.current;
+    if (auraMaterial !== null) {
+      auraMaterial.opacity =
+        AURA_BASE_OPACITY +
+        Math.sin(state.clock.elapsedTime * 2.1) * AURA_SCALE_RANGE * 0.5;
+    }
   });
 
   return (
@@ -39,9 +57,9 @@ export function Chaser(props: { position: Vec3 }): JSX.Element {
       <mesh ref={coreRef}>
         <octahedronGeometry args={[0.7]} />
         <meshStandardMaterial
-          color={CORE_COLOR}
-          emissive={EMISSIVE}
-          emissiveIntensity={0.6}
+          color={COMMON.enemy.body}
+          emissive={COMMON.enemy.glow}
+          emissiveIntensity={CORE_EMISSIVE}
           toneMapped={false}
         />
       </mesh>
@@ -50,14 +68,25 @@ export function Chaser(props: { position: Vec3 }): JSX.Element {
           <mesh key={index} position={offset as [number, number, number]}>
             <octahedronGeometry args={[0.14]} />
             <meshStandardMaterial
-              color={SHARD_COLOR}
-              emissive={EMISSIVE}
-              emissiveIntensity={0.8}
+              color={COMMON.enemy.body}
+              emissive={COMMON.enemy.glow}
+              emissiveIntensity={SHARD_EMISSIVE}
               toneMapped={false}
             />
           </mesh>
         ))}
       </group>
+      <mesh ref={auraMeshRef}>
+        <sphereGeometry args={[AURA_RADIUS, 16, 16]} />
+        <meshStandardMaterial
+          ref={auraMaterialRef}
+          color={COMMON.enemy.glow}
+          transparent
+          opacity={AURA_BASE_OPACITY}
+          blending={AdditiveBlending}
+          depthWrite={false}
+        />
+      </mesh>
     </group>
   );
 }

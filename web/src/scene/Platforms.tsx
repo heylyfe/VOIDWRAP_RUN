@@ -1,9 +1,12 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import type { JSX } from "react";
+import { BoxGeometry, MeshStandardMaterial } from "three";
+import type { Material } from "three";
 import type { Platform } from "@/protocol/generated";
-import { PALETTE, platformColor } from "./palette";
+import { themeTextures, worldScaledBoxGeometry } from "./checker";
+import type { Theme } from "./theme";
 
 interface EdgeBarData {
   size: [number, number, number];
@@ -14,16 +17,26 @@ interface PlatformBoxData {
   id: number;
   center: [number, number, number];
   size: [number, number, number];
-  top: string;
-  accent: string;
   edgeBars: EdgeBarData[];
 }
 
-const TOP_EMISSIVE = 0.08;
+interface ThemeMaterials {
+  /** One material per BoxGeometry face, in face order: +x, -x, +y, -y, +z, -z. */
+  byFace: [Material, Material, Material, Material, Material, Material];
+  /** Glowing perimeter trim material. */
+  edgeTrim: Material;
+  /** Every material created for the current theme, for disposal. */
+  all: readonly Material[];
+}
+
 const EDGE_BAR_THICKNESS = 0.08;
 const EDGE_BAR_HEIGHT = 0.08;
 const EDGE_BAR_OVERHANG = 0.04;
-const EDGE_BAR_EMISSIVE = 1.0;
+const EDGE_BAR_EMISSIVE = 1.4;
+const SIDE_TINT = "#9a9a9a";
+const TOP_ROUGHNESS = 0.85;
+const SIDE_ROUGHNESS = 0.9;
+const BOTTOM_ROUGHNESS = 1;
 
 // Four thin bars along the top perimeter. The bars along X straddle the
 // top edge (overhang EDGE_BAR_OVERHANG on each side); the bars along Z
@@ -71,41 +84,90 @@ function toBoxData(platform: Platform): PlatformBoxData {
     id: platform.id,
     center,
     size,
-    top: platformColor(platform.id),
-    accent:
-      platform.id % 2 === 0 ? PALETTE.edgeGlowCyan : PALETTE.edgeGlowMagenta,
     edgeBars: toEdgeBars(size),
   };
 }
 
+/** Materials shared by every platform of a theme (textures are module-cached). */
+function createThemeMaterials(theme: Theme): ThemeMaterials {
+  const textures = themeTextures(theme);
+  const top = new MeshStandardMaterial(
+    textures.top
+      ? { map: textures.top, roughness: TOP_ROUGHNESS }
+      : { color: theme.tile.light, roughness: TOP_ROUGHNESS },
+  );
+  const side = new MeshStandardMaterial(
+    textures.side
+      ? { map: textures.side, color: SIDE_TINT, roughness: SIDE_ROUGHNESS }
+      : { color: theme.tile.side, roughness: SIDE_ROUGHNESS },
+  );
+  const bottom = new MeshStandardMaterial({
+    color: theme.tile.dark,
+    roughness: BOTTOM_ROUGHNESS,
+  });
+  const edgeTrim = new MeshStandardMaterial({
+    color: theme.tile.edge,
+    emissive: theme.tile.edge,
+    emissiveIntensity: EDGE_BAR_EMISSIVE,
+  });
+  return {
+    // BoxGeometry face order: +x, -x, +y, -y, +z, -z.
+    byFace: [side, side, top, bottom, side, side],
+    edgeTrim,
+    all: [top, side, bottom, edgeTrim],
+  };
+}
+
+function disposeMaterials(materials: ThemeMaterials): void {
+  for (const material of materials.all) {
+    material.dispose();
+  }
+}
+
+function PlatformMesh(props: {
+  box: PlatformBoxData;
+  materials: ThemeMaterials;
+}): JSX.Element {
+  const { box, materials } = props;
+  // World-scaled UVs are memoised per platform box; disposed on change/unmount.
+  const geometry = useMemo(
+    () => worldScaledBoxGeometry(box.size[0], box.size[1], box.size[2]),
+    [box.size],
+  );
+  useEffect(() => () => geometry.dispose(), [geometry]);
+  return (
+    <group position={box.center}>
+      <mesh geometry={geometry} material={materials.byFace} />
+      {box.edgeBars.map((bar, index) => (
+        <EdgeTrimBar key={index} bar={bar} material={materials.edgeTrim} />
+      ))}
+    </group>
+  );
+}
+
+function EdgeTrimBar(props: { bar: EdgeBarData; material: Material }): JSX.Element {
+  const [x, y, z] = props.bar.size;
+  // World-scaled UVs do not matter for the flat trim bars, so a plain box does.
+  const geometry = useMemo(() => new BoxGeometry(x, y, z), [x, y, z]);
+  useEffect(() => () => geometry.dispose(), [geometry]);
+  return (
+    <mesh geometry={geometry} position={props.bar.position} material={props.material} />
+  );
+}
+
 export function Platforms(props: {
   platforms: readonly Platform[];
+  theme: Theme;
 }): JSX.Element {
   const boxes = useMemo(() => props.platforms.map(toBoxData), [props.platforms]);
+  // Materials are shared between all platforms and memoised per theme.
+  const materials = useMemo(() => createThemeMaterials(props.theme), [props.theme]);
+  useEffect(() => () => disposeMaterials(materials), [materials]);
 
   return (
     <group>
       {boxes.map((box) => (
-        <group key={box.id} position={box.center}>
-          <mesh>
-            <boxGeometry args={box.size} />
-            <meshStandardMaterial
-              color={box.top}
-              emissive={box.top}
-              emissiveIntensity={TOP_EMISSIVE}
-            />
-          </mesh>
-          {box.edgeBars.map((bar, index) => (
-            <mesh key={index} position={bar.position}>
-              <boxGeometry args={bar.size} />
-              <meshStandardMaterial
-                color={box.accent}
-                emissive={box.accent}
-                emissiveIntensity={EDGE_BAR_EMISSIVE}
-              />
-            </mesh>
-          ))}
-        </group>
+        <PlatformMesh key={box.id} box={box} materials={materials} />
       ))}
     </group>
   );

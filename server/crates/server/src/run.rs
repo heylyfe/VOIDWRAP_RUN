@@ -18,8 +18,14 @@ pub struct Run {
 
 impl Run {
     /// A fresh run at level 1.
+    #[cfg(test)]
     pub fn start() -> Self {
         Self::at_level(1, 0)
+    }
+
+    /// A fresh run starting at level `n` (dev/QA aid; clamped to >= 1).
+    pub fn start_at(n: u32) -> Self {
+        Self::at_level(n.max(1), 0)
     }
 
     fn at_level(n: u32, gifts_collected: u32) -> Self {

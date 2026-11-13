@@ -47,6 +47,15 @@ builds non-deterministic. The human turned SAC off; builds are clean since.
 | T-017 README M1 | GLM | plan | 1 | ✓ | ✓ | ✓ | n/a | ✓ | merged, 0 rejections | untouched sections verified byte-identical by section diff |
 | T-016 enemy spawns | DEEPSEEK | plan | 1 + 1 | ✓ | ✓ | ✓ (after r1) | ✓ | ✓ | merged, 1 rejection | r0: new test did not compile (moved out of non-Copy Vec3). r1 fixed; only spawn points changed (diffed) |
 | playthrough bot | OVERSEER | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | merged | sim/tests/playthrough.rs: levels 1–3 completed with the real controller (24.9 s total game time); runs in just verify |
+| visual direction | OVERSEER | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | merged | human-supplied reference board (kept outside the repo) → k-means palette → design/palette.json (4 themes) + design/VISUAL_DIRECTION.md; web/src/scene/theme.ts loader |
+| T-018 checker surfaces | GLM | plan | 1 | ✓ | ✓ | ✓ | ✓ | ✓ | merged, 0 rejections | world-scaled UVs, seeded grunge checker canvas textures, shared per-theme materials |
+| T-019 atmosphere + debris | DEEPSEEK | plan | 1 + 1 | ✓ | ✓ | ✓ (after r1) | ✓ | ✓ | merged, 1 rejection | r0: react-hooks/immutability (mutating memoised uniforms in useFrame) → r1 mutates via material ref. Integration bug (OVERSEER): camera far 250 < dome radius 450 hid the sky → far 1000 |
+| T-020 glow pass | GLM | plan | 1 | ✓ | ✓ | ✓ | ✓ | ✓ | merged, 0 rejections | bloom/CA/vignette/noise, light-pillar beacon, glowing gifts + enemy aura, bottom-centre counter |
+| T-021 reference match | INKLING-VISION | zen + 8 images | 2 | ✓ | n/a | n/a | n/a | ✓ (triage) | review | 1st run exposed a DISPATCH BUG (same-basename attachments overwrote each other) → fixed; scores 6/4/5/6 per theme; gaps → next tickets |
+| VOIDWRAP_START_LEVEL | OVERSEER | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | merged | dev/QA aid to start runs at level n (theme review) |
+
+**Open risk:** frame rate with post-processing measured only under headless SOFTWARE rendering (~7 fps vs ~59 without);
+needs a real-GPU measurement (debug panel FPS readout) before the 60 fps target can be claimed.
 
 **M1 exit demo (2026-11-13):** 3-level run proven completable by the playthrough bot; client capture flow green
 (spawn → move → death → summary → new run, no console errors, ~60 fps even under headless software rendering);
