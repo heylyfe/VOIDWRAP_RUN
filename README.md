@@ -10,13 +10,17 @@ Every run drops you into a freshly generated sprawl of floating platforms hangin
 
 ## Status
 
-This project is at milestone M0 (bootstrap). Only the foundations exist:
+The project is at milestone M1 (playable solo vertical slice):
 
-- A grey platform floating in the void with a controllable blocky player.
-- An authoritative game server ticking at 20 Hz.
-- Client-side prediction for movement.
+- Three hand-built levels of floating platforms; level 4 onward repeats them with a higher level number.
+- Five gifts per level, with a gift counter.
+- An exit beacon that opens once every gift in the level is collected and takes you to the next level.
+- A red chaser enemy that wakes after 3 seconds and ends the run on touch.
+- Falling into the void ends the run.
+- A run summary (level reached, gifts collected, cause) with Run again.
+- Movement with coyote time, jump buffering, variable jump height, and a dash.
 
-Not built yet, but on the roadmap: gifts, enemies, curses, classes, and multiplayer lobbies.
+Still planned: procedural level generation, enemy drafting, curses, upgrades, classes, altars, shop, co-op multiplayer, accounts and cosmetics.
 
 ## Quick start
 
@@ -40,11 +44,11 @@ Current:
 
 - WASD — move
 - Mouse — look (click the game to capture the mouse)
-- Space — jump
+- Space — jump (hold for higher)
+- Shift or right-click — dash
 
 Planned:
 
-- Shift / right-click — class ability
 - E — interact
 - Tab — run overlay
 
@@ -54,6 +58,7 @@ Planned:
 
 - `just setup` — adds the wasm target and installs web dependencies
 - `just run` — builds and starts the game server and the web client
+- `just capture` — drives the client headlessly and saves screenshots to `shots/`
 - `just verify` — the full check suite (format, clippy, Rust tests, TypeScript typecheck, eslint, web tests)
 - `just gen` — regenerate protocol code after editing `protocol/schema.json`
 

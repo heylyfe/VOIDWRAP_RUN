@@ -44,6 +44,7 @@ builds non-deterministic. The human turned SAC off; builds are clean since.
 | M1 integration | OVERSEER | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | merged | server run.rs + tick order (move → gifts → enemies → deaths → beacon → snapshots), RunOver/Restart flow, client run state, scene + HUD wiring, capture flow death → summary → new run |
 | T-014 visual QA | INKLING-VISION | zen + 5 images | 1 | ✓ | n/a | n/a | n/a | ✓ (triage) | 10 findings → 5 accepted, 2 deferred to M4 (falling cues, title backdrop), 2 discarded, 1 merged with OVERSEER finding; cross-checked by OVERSEER (second reviewer in place of NEMOTRON) |
 | T-015 visual fixes | GLM | plan | 1 | ✓ | ✓ | ✓ | ✓ | ✓ | merged, 0 rejections | edge-bar platform outlines, saturated red chaser, findable closed beacon, "GIFTS LEFT", banner moved to upper third; verified in new screenshots |
+| T-017 README M1 | GLM | plan | 1 | ✓ | ✓ | ✓ | n/a | ✓ | merged, 0 rejections | untouched sections verified byte-identical by section diff |
 | T-016 enemy spawns | DEEPSEEK | plan | 1 + 1 | ✓ | ✓ | ✓ (after r1) | ✓ | ✓ | merged, 1 rejection | r0: new test did not compile (moved out of non-Copy Vec3). r1 fixed; only spawn points changed (diffed) |
 | playthrough bot | OVERSEER | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | merged | sim/tests/playthrough.rs: levels 1–3 completed with the real controller (24.9 s total game time); runs in just verify |
 
