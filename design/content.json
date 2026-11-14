@@ -2,7 +2,7 @@
   "enemies": [
     {
       "id": "pallbearer",
-      "name": "The Pallbearer",
+      "name": "Footprint Chaser",
       "flavor": "A hearse that refuses to pass you.",
       "behavior": "Follows your old footprints and lunges when you stop. Keep moving forward; dash sideways at the toll.",
       "threat": 3,
@@ -10,7 +10,7 @@
     },
     {
       "id": "snapshrike",
-      "name": "Snapshrike",
+      "name": "Orbit Dasher",
       "flavor": "A thrown knife that learned hunger.",
       "behavior": "Orbits, then dashes in a straight line at you. Sidestep when its aim line freezes; pillars stop the dash.",
       "threat": 4,
@@ -18,7 +18,7 @@
     },
     {
       "id": "moteling",
-      "name": "Moteling",
+      "name": "Stillness Shrieker",
       "flavor": "A million motes that hush the world to hear you stop.",
       "behavior": "Marks the fastest player and shrieks if they move. Stand still until its ring snaps shut.",
       "threat": 2,
@@ -26,7 +26,7 @@
     },
     {
       "id": "rift_warden",
-      "name": "The Rift Warden",
+      "name": "Wall Drifter",
       "flavor": "A doorway from a dead world, still holding its post.",
       "behavior": "Drifts through walls and shoves everything away from it. Fight it on wide ground, never on a bridge.",
       "threat": 2,
@@ -34,7 +34,7 @@
     },
     {
       "id": "gale_wight",
-      "name": "Gale Wight",
+      "name": "Shell Bomber",
       "flavor": "The wind between platforms, loaded with a grudge.",
       "behavior": "Drops marked shells from above that explode on the floor. Move off the circle or hide under a bridge.",
       "threat": 4,
@@ -42,7 +42,7 @@
     },
     {
       "id": "lantern_leech",
-      "name": "Lantern Leech",
+      "name": "Gift Stinger",
       "flavor": "Its light is a promise it never intends to keep.",
       "behavior": "Flies to the gift you just picked up and stings anyone near it. Step away and let it gorge on nothing.",
       "threat": 3,
@@ -50,7 +50,7 @@
     },
     {
       "id": "turret",
-      "name": "Bolt Sentry",
+      "name": "Bolt Turret",
       "flavor": "It has been aiming at this spot since before you arrived.",
       "behavior": "Never moves; charges a bolt along a line it predicts. Break line of sight, then peek while it vents.",
       "threat": 3,
@@ -66,7 +66,7 @@
     },
     {
       "id": "corrupter",
-      "name": "Crumble Wisp",
+      "name": "Floor Rotter",
       "flavor": "Where it drifts, the floor forgets how to be a floor.",
       "behavior": "Rots the floor under you: slowed, no abilities. Cross fast and loot somewhere else.",
       "threat": 2,
@@ -285,6 +285,16 @@
       "threat": 5,
       "greater": true,
       "mods": { "enemy_speed_mul": 1.35, "enemy_size_mul": 1.3, "enemy_aggro_mul": 1.4 }
+    },
+    {
+      "id": "clustered_gifts",
+      "name": "Clustered Gifts",
+      "flavor": "The heaps lean toward each other in the dark, like bad gossip.",
+      "effect": "gifts cluster tighter: -40% minimum gift spacing",
+      "rarity": "rare",
+      "threat": 3,
+      "greater": false,
+      "mods": { "gift_spacing_mul": 0.6 }
     }
   ],
   "classes": [
@@ -425,13 +435,13 @@
       "id": "milestone_5",
       "level": 5,
       "name": "Tall Order",
-      "banner": "The tall silos open, and the Moteling's hush tightens to 1.8 s."
+      "banner": "The tall silos open, and the Stillness Shrieker's hush tightens to 1.8 s."
     },
     {
       "id": "milestone_6",
       "level": 6,
       "name": "Crowded Wake",
-      "banner": "One more Pallbearer wakes; every drafted enemy gains a copy every 3 levels."
+      "banner": "One more Footprint Chaser wakes; every drafted enemy gains a copy every 3 levels."
     },
     {
       "id": "milestone_7",
@@ -443,7 +453,7 @@
       "id": "milestone_8",
       "level": 8,
       "name": "Bombardier",
-      "banner": "The Gale Wight drops three shells instead of two."
+      "banner": "The Shell Bomber drops three shells instead of two."
     },
     {
       "id": "milestone_9",
@@ -467,13 +477,13 @@
       "id": "milestone_14",
       "level": 14,
       "name": "Swifter Wake",
-      "banner": "The Pallbearer hunts at 6.0 u/s instead of 5.2."
+      "banner": "The Footprint Chaser hunts at 6.0 u/s instead of 5.2."
     },
     {
       "id": "milestone_15",
       "level": 15,
       "name": "Elder Models",
-      "banner": "Snapshrike locks in 0.60 s; the Bolt Sentry charges in 0.80 s."
+      "banner": "Orbit Dasher locks in 0.60 s; the Bolt Turret charges in 0.80 s."
     },
     {
       "id": "milestone_17",

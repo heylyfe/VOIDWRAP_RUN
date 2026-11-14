@@ -12,10 +12,10 @@ and the roster turns into a timetable.
 Two of the nine cannot kill you at all. They shove you, slow you and take your abilities away; the void does the
 rest. Falling is still falling.
 
-Two attacks are heavy - the Gale Wight's volley and the Moteling's inhale. Only one heavy wind-up runs at a time,
+Two attacks are heavy - the Shell Bomber's volley and the Stillness Shrieker's inhale. Only one heavy wind-up runs at a time,
 so while one of them is charging, the other is waiting its turn.
 
-## The Pallbearer - threat 3/5
+## Footprint Chaser - threat 3/5
 
 **What it does.** It follows the trail you left a few seconds ago, not where you are now. When it reaches where you
 actually stand it stops, rears back, and drives straight through that spot.
@@ -31,7 +31,7 @@ guide whether they want to be or not; the rest of the team loots while it is bus
 
 **Lethal or not.** Lethal. Only the lunge kills. Bumping into it while it hunts just shoves you.
 
-## Snapshrike - threat 4/5
+## Orbit Dasher - threat 4/5
 
 **What it does.** It circles you at 4 to 7 metres, picks a line, then dashes down that line at 13.5 metres per
 second for up to 11 metres. It cannot turn during the dash.
@@ -48,7 +48,7 @@ cannot hit anyone but its target.
 
 **Lethal or not.** Lethal, during the dash only. Touching it while it circles shoves you.
 
-## Moteling - threat 2/5
+## Stillness Shrieker - threat 2/5
 
 **What it does.** It drifts, then circles whichever player has been moving fastest, and every 6 seconds it begins
 to inhale. When the inhale ends it shrieks at that one player.
@@ -64,7 +64,7 @@ cycle, so the job moves around.
 
 **Lethal or not.** Lethal, but only to the marked player, in a 4 metre burst.
 
-## The Rift Warden - threat 2/5
+## Wall Drifter - threat 2/5
 
 **What it does.** A doorframe that drifts through walls toward the nearest player. Inside 4 metres it ignites, then
 throws everything away from itself.
@@ -75,12 +75,12 @@ white and a low groan builds.
 **How to survive.** It does no damage. The fall does. Fight it on wide ground, step behind cover when the runes
 light, and never let it catch you on a narrow bridge.
 
-**Watch out with friends.** It shoves enemies too, so a well-timed pulse peels a Snapshrike off a teammate. One
+**Watch out with friends.** It shoves enemies too, so a well-timed pulse peels a Orbit Dasher off a teammate. One
 player can leash it while the others loot.
 
 **Lethal or not.** Not lethal. Displacement only: 8 metres per second away from it, plus a 0.9 second stagger.
 
-## Gale Wight - threat 4/5
+## Shell Bomber - threat 4/5
 
 **What it does.** It cruises above the map and drops shells on marked spots. Two shells solo, up to three with a
 full team, each aimed at a random living player.
@@ -97,7 +97,7 @@ whoever is running the gold.
 **Lethal or not.** Lethal. The 2.1 metre blast kills; from 2.1 to 4.2 metres it knocks you back 7 metres per
 second.
 
-## Lantern Leech - threat 3/5
+## Gift Stinger - threat 3/5
 
 **What it does.** It drifts harmlessly until someone picks up a gift within 30 metres. Then it locks that spot,
 glides to it at speed, and stings anything still standing there.
@@ -113,7 +113,7 @@ does not stack a second leech.
 
 **Lethal or not.** Lethal, a 1.5 metre sting, only while it is feeding.
 
-## Bolt Sentry - threat 3/5
+## Bolt Turret - threat 3/5
 
 **What it does.** It is bolted to a platform and never moves. It tracks the nearest player it can see and fires a
 bolt along a predicted line.
@@ -144,7 +144,7 @@ into a cluster of gifts at full speed.
 
 **Lethal or not.** Lethal, during the lunge.
 
-## Crumble Wisp - threat 2/5
+## Floor Rotter - threat 2/5
 
 **What it does.** It drifts to the platform nearest its target and frets it. A fretted tile stays solid, but it
 slows you 40% and locks your abilities for 8 seconds.
@@ -162,12 +162,12 @@ veins crawling outward across the floor with a rasp.
 
 | Enemy | Skill it tests | Lethal? | Warning time |
 |---|---|---|---|
-| The Pallbearer | Route planning | Yes | 1.2 s |
-| Snapshrike | Sidestepping a straight dash | Yes | 0.75 s |
-| Moteling | Standing still | Yes | 2.0 s |
-| The Rift Warden | Space control | No | 1.1 s |
-| Gale Wight | Repositioning under fire | Yes | 2.6 s |
-| Lantern Leech | Bait discipline | Yes | 1.4 s |
-| Bolt Sentry | Line of sight | Yes | 0.95 s |
+| Footprint Chaser | Route planning | Yes | 1.2 s |
+| Orbit Dasher | Sidestepping a straight dash | Yes | 0.75 s |
+| Stillness Shrieker | Standing still | Yes | 2.0 s |
+| Wall Drifter | Space control | No | 1.1 s |
+| Shell Bomber | Repositioning under fire | Yes | 2.6 s |
+| Gift Stinger | Bait discipline | Yes | 1.4 s |
+| Bolt Turret | Line of sight | Yes | 0.95 s |
 | False Gift | Looking before you grab | Yes | 0.9 s |
-| Crumble Wisp | Terrain discipline | No | 2.0 s + 1.5 s |
+| Floor Rotter | Terrain discipline | No | 2.0 s + 1.5 s |

@@ -13,13 +13,14 @@ use std::collections::BTreeMap;
 const CONTENT_JSON: &str = include_str!("../../../../design/content.json");
 
 /// Every mod key the run understands; the validator rejects anything else.
-const KNOWN_MODS: [&str; 15] = [
+const KNOWN_MODS: [&str; 16] = [
     "run_speed_mul",
     "jump_mul",
     "gravity_mul",
     "dash_speed_mul",
     "dash_cooldown_mul",
     "gift_radius_mul",
+    "gift_spacing_mul",
     "enemy_speed_mul",
     "enemy_aggro_mul",
     "enemy_grace_mul",
@@ -218,6 +219,9 @@ pub struct RunMods {
     pub dash_cooldown_mul: f32,
     pub air_jumps: u32,
     pub gift_radius_mul: f32,
+    /// Clustered Gifts curse: multiplier on the sim's minimum gift spacing (1.0 = scattered default).
+    /// Values below 1.0 place gifts closer together (the sim clamps to [0.25, 1.0]; this side to GENERIC_MUL_RANGE).
+    pub gift_spacing_mul: f32,
     pub extra_lives: u32,
     pub enemy_speed_mul: f32,
     pub enemy_aggro_mul: f32,
@@ -238,6 +242,7 @@ impl Default for RunMods {
             dash_cooldown_mul: 1.0,
             air_jumps: 0,
             gift_radius_mul: 1.0,
+            gift_spacing_mul: 1.0,
             extra_lives: 0,
             enemy_speed_mul: 1.0,
             enemy_aggro_mul: 1.0,
@@ -271,6 +276,7 @@ impl RunMods {
                 "dash_speed_mul" => self.dash_speed_mul *= v,
                 "dash_cooldown_mul" => self.dash_cooldown_mul *= v,
                 "gift_radius_mul" => self.gift_radius_mul *= v,
+                "gift_spacing_mul" => self.gift_spacing_mul *= v,
                 "enemy_speed_mul" => self.enemy_speed_mul *= v,
                 "enemy_aggro_mul" => self.enemy_aggro_mul *= v,
                 "enemy_grace_mul" => self.enemy_grace_mul *= v,
@@ -294,6 +300,8 @@ impl RunMods {
         self.dash_speed_mul = c(self.dash_speed_mul, GENERIC_MUL_RANGE);
         self.dash_cooldown_mul = c(self.dash_cooldown_mul, GENERIC_MUL_RANGE);
         self.gift_radius_mul = c(self.gift_radius_mul, GENERIC_MUL_RANGE);
+        // The curse ships 0.6; values above 1.0 (spreading) are folded away by the sim's 1.0 cap.
+        self.gift_spacing_mul = c(self.gift_spacing_mul, GENERIC_MUL_RANGE);
         self.enemy_speed_mul = c(self.enemy_speed_mul, GENERIC_MUL_RANGE);
         self.enemy_aggro_mul = c(self.enemy_aggro_mul, GENERIC_MUL_RANGE);
         self.enemy_grace_mul = c(self.enemy_grace_mul, GENERIC_MUL_RANGE);
@@ -367,6 +375,7 @@ mod tests {
             "dash_speed_mul",
             "dash_cooldown_mul",
             "gift_radius_mul",
+            "gift_spacing_mul",
             "enemy_speed_mul",
             "enemy_aggro_mul",
             "enemy_grace_mul",

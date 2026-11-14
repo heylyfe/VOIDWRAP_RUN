@@ -11,7 +11,8 @@ const errors = [];
 const err = (m) => errors.push(m);
 
 const MUL = ["run_speed_mul", "jump_mul", "gravity_mul", "dash_speed_mul", "dash_cooldown_mul", "gift_radius_mul",
-  "enemy_speed_mul", "enemy_aggro_mul", "enemy_grace_mul", "enemy_size_mul", "fog_density_mul", "beacon_radius_mul"];
+  "enemy_speed_mul", "enemy_aggro_mul", "enemy_grace_mul", "enemy_size_mul", "fog_density_mul", "beacon_radius_mul",
+  "gift_spacing_mul"];
 const ADD = ["air_jumps_add", "extra_lives_add", "extra_enemies_add"];
 // Movement floors/ceilings that keep every level completable (1.5-unit steps, 4-unit gaps).
 const PLAYABLE = { run_speed_mul: [0.8, 2], jump_mul: [0.85, 2], gravity_mul: [0.4, 1.25] };

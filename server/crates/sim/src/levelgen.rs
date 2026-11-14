@@ -1238,7 +1238,11 @@ struct GiftFill {
 }
 
 /// Accepts a gift candidate iff it stands on a NORMAL platform top (edge inset >= 0.5 u),
-/// is >= 2.0 u from other gifts horizontally and >= 2.5 u from the beacon.
+/// its body box does not overlap any wall, jump pad or ramp (any non-NORMAL platform volume),
+/// it is >= the effective minimum spacing from other gifts horizontally and >= 2.5 u from
+/// the beacon. Rejected candidates are not placed; the callers re-sample (the chunk-slot
+/// passes skip the slot; the top-up pass samples a fresh random site), so a stuck slot never
+/// yields a stuck gift.
 #[allow(clippy::too_many_arguments)]
 fn accept_candidate(
     platforms: &[Platform],
@@ -1248,6 +1252,7 @@ fn accept_candidate(
     elevated: bool,
     gifts: &mut Vec<Gift>,
     elevated_flags: &mut Vec<bool>,
+    spacing_mul: f32,
 ) -> bool {
     let top = pos.y - 0.3;
     let Some(i) = platform_top_under(platforms, pos.x, pos.z, top, 0.5) else {
@@ -1256,7 +1261,17 @@ fn accept_candidate(
     if platforms[i].kind != PLATFORM_NORMAL {
         return false;
     }
-    if grid.any_within(pos.x, pos.z, GIFT_MIN_SPACING - EPS) {
+    // T-062: spawn safety — no gift may spawn stuck inside/overlapping a wall, jump pad or ramp.
+    if !gift_body_clear(
+        platforms
+            .iter()
+            .filter(|p| p.kind != PLATFORM_NORMAL)
+            .map(|p| &p.bounds),
+        pos,
+    ) {
+        return false;
+    }
+    if grid.any_within(pos.x, pos.z, gift_min_spacing(spacing_mul) - EPS) {
         return false;
     }
     if h_dist(pos.x, pos.z, beacon.x, beacon.z) < GIFT_BEACON_CLEAR - EPS {
@@ -1275,6 +1290,9 @@ fn accept_candidate(
 
 /// A3: fill up to `min(gift_target(level, players), eligible_area / 9)` gifts from chunk
 /// slots (>= 20% elevated preferred first) then top up on random eligible platform tops.
+/// Minimum gift spacing honours the Clustered Gifts curse multiplier (`spacing_mul`);
+/// the grid cell width stays `GIFT_MIN_SPACING`, which remains >= the reduced spacing, so the
+/// `PointGrid` neighbour search stays correct under clustering.
 fn fill_gifts(
     platforms: &[Platform],
     slots: &[(Vec3, bool)],
@@ -1282,6 +1300,7 @@ fn fill_gifts(
     level: u32,
     players: u32,
     rng: &mut Rng,
+    spacing_mul: f32,
 ) -> GiftFill {
     let mut gifts = Vec::new();
     let mut elevated_flags: Vec<bool> = Vec::new();
@@ -1307,12 +1326,35 @@ fn fill_gifts(
             continue;
         }
         let (pos, elev) = slots[si];
-        if accept_candidate(platforms, &mut grid, beacon, pos, elev, &mut gifts, &mut elevated_flags) {
+        if accept_candidate(
+            platforms,
+            &mut grid,
+            beacon,
+            pos,
+            elev,
+            &mut gifts,
+            &mut elevated_flags,
+            spacing_mul,
+        ) {
             accepted_slot[si] = true;
         }
     }
-    // Pass B: all remaining slots.
-    for &si in &order {
+    // Pass B: all remaining slots. Under the Clustered Gifts curse (spacing_mul < 1.0) the
+    // remaining slots are taken nearest-first around the gifts already placed, so the level
+    // grows clumps instead of an even spread; uncursed placement keeps the shuffled order.
+    let clustered = spacing_mul < 1.0 - EPS;
+    let mut pass_b: Vec<usize> = order.iter().copied().filter(|&si| !accepted_slot[si]).collect();
+    if clustered {
+        let nearest = |si: usize| -> f32 {
+            let (pos, _) = slots[si];
+            gifts
+                .iter()
+                .map(|g| h_dist(pos.x, pos.z, g.pos.x, g.pos.z))
+                .fold(f32::INFINITY, f32::min)
+        };
+        pass_b.sort_by(|&a, &b| nearest(a).total_cmp(&nearest(b)).then(a.cmp(&b)));
+    }
+    for &si in &pass_b {
         if gifts.len() >= target {
             break;
         }
@@ -1320,7 +1362,16 @@ fn fill_gifts(
             continue;
         }
         let (pos, elev) = slots[si];
-        if accept_candidate(platforms, &mut grid, beacon, pos, elev, &mut gifts, &mut elevated_flags) {
+        if accept_candidate(
+            platforms,
+            &mut grid,
+            beacon,
+            pos,
+            elev,
+            &mut gifts,
+            &mut elevated_flags,
+            spacing_mul,
+        ) {
             accepted_slot[si] = true;
         }
     }
@@ -1365,6 +1416,7 @@ fn fill_gifts(
             false,
             &mut gifts,
             &mut elevated_flags,
+            spacing_mul,
         );
     }
     GiftFill { gifts }
@@ -1517,6 +1569,7 @@ fn assemble_level(
     target_area_u: f32,
     max_chunks: usize,
     max_junctions_u: u32,
+    spacing_mul: f32,
 ) -> Option<GeneratedLevel> {
     let mut rng = Rng::new(seed_mix(rng_seed, level));
     let tier = level_tier(level);
@@ -1666,7 +1719,7 @@ fn assemble_level(
     }
 
     // --- gifts (A3), altars (legacy).
-    let fill = fill_gifts(&platforms, &gift_slots, &beacon, level, players, &mut rng);
+    let fill = fill_gifts(&platforms, &gift_slots, &beacon, level, players, &mut rng, spacing_mul);
     let gifts = fill.gifts;
     let altar = choose_altar(
         &altar_slots,
@@ -1707,6 +1760,7 @@ fn try_build(
     level: u32,
     players: u32,
     event: u8,
+    spacing_mul: f32,
 ) -> Option<GeneratedLevel> {
     assemble_level(
         cat,
@@ -1718,6 +1772,7 @@ fn try_build(
         target_area(level),
         max_chunks_for(level),
         max_junctions(level),
+        spacing_mul,
     )
 }
 
@@ -1726,7 +1781,13 @@ fn try_build(
 /// degrade to the guaranteed-valid [`builtin_fallback`]; arm segments are only committed
 /// when they satisfy the placement rules.
 #[allow(clippy::needless_range_loop)]
-fn catalog_fallback(cat: &Catalog, run_seed: u32, level: u32, players: u32) -> Option<GeneratedLevel> {
+fn catalog_fallback(
+    cat: &Catalog,
+    run_seed: u32,
+    level: u32,
+    players: u32,
+    spacing_mul: f32,
+) -> Option<GeneratedLevel> {
     let hub = cat
         .chunks
         .iter()
@@ -1801,7 +1862,15 @@ fn catalog_fallback(cat: &Catalog, run_seed: u32, level: u32, players: u32) -> O
     }
     let spawn = spawn_point(&main_bounds, &beacon);
     let mut rng = Rng::new(seed_mix(run_seed, level));
-    let fill = fill_gifts(&platforms, &geom.gift_slots, &beacon, level, players, &mut rng);
+    let fill = fill_gifts(
+        &platforms,
+        &geom.gift_slots,
+        &beacon,
+        level,
+        players,
+        &mut rng,
+        spacing_mul,
+    );
     let kill_y = platforms.iter().map(|p| p.bounds.min.y).fold(f32::INFINITY, f32::min) - 15.0;
     let data = LevelData {
         level,
@@ -1818,7 +1887,7 @@ fn catalog_fallback(cat: &Catalog, run_seed: u32, level: u32, players: u32) -> O
 }
 
 /// Fallback built from scratch: 12x12 plaza + four straight 30 u arms (always valid).
-fn builtin_fallback(run_seed: u32, level: u32, players: u32) -> GeneratedLevel {
+fn builtin_fallback(run_seed: u32, level: u32, players: u32, spacing_mul: f32) -> GeneratedLevel {
     let mut platforms: Vec<Platform> = Vec::new();
     platforms.push(Platform {
         id: 0,
@@ -1860,7 +1929,7 @@ fn builtin_fallback(run_seed: u32, level: u32, players: u32) -> GeneratedLevel {
     let beacon = Vec3::new(33.0, 0.0, 0.0);
     let spawn = Vec3::new(0.0, 0.0, 0.0);
     let mut rng = Rng::new(seed_mix(run_seed, level));
-    let fill = fill_gifts(&platforms, &[], &beacon, level, players, &mut rng);
+    let fill = fill_gifts(&platforms, &[], &beacon, level, players, &mut rng, spacing_mul);
     let enemy_spawns = vec![
         Vec3::new(4.0, 2.0, 0.0),
         Vec3::new(2.83, 2.0, 2.83),
@@ -1916,10 +1985,18 @@ pub fn generate(seed: u32, level: u32) -> GeneratedLevel {
 }
 
 /// A fresh level for a player count (gift counts scale with players, amendment A3).
+/// Same `(seed, level, players)` -> identical output.
 pub fn generate_for(seed: u32, level: u32, players: u32) -> GeneratedLevel {
+    generate_for_with_spacing(seed, level, players, 1.0)
+}
+
+/// A fresh level whose gift placement honours the Clustered Gifts curse: `spacing_mul`
+/// scales the minimum gift spacing (clamped to [0.25, 1.0]; 1.0 = scattered, the default).
+/// Same `(seed, level, players, spacing_mul)` -> identical output.
+pub fn generate_for_with_spacing(seed: u32, level: u32, players: u32, spacing_mul: f32) -> GeneratedLevel {
     match catalog() {
-        Ok(cat) => generate_with_catalog(cat, seed, level, players),
-        Err(_) => builtin_fallback(seed, level, players),
+        Ok(cat) => generate_with_catalog_spacing(cat, seed, level, players, spacing_mul),
+        Err(_) => builtin_fallback(seed, level, players, spacing_mul),
     }
 }
 
@@ -2355,21 +2432,32 @@ fn commit_stub(
 /// guaranteed-valid fallbacks) against an explicit catalog instead of the shared one.
 /// Normal callers want [`generate`] / [`generate_for`].
 pub fn generate_with_catalog(cat: &Catalog, seed: u32, level: u32, players: u32) -> GeneratedLevel {
+    generate_with_catalog_spacing(cat, seed, level, players, 1.0)
+}
+
+/// [`generate_with_catalog`] with an explicit gift-spacing multiplier (Clustered Gifts curse).
+fn generate_with_catalog_spacing(
+    cat: &Catalog,
+    seed: u32,
+    level: u32,
+    players: u32,
+    spacing_mul: f32,
+) -> GeneratedLevel {
     let event = event_for(seed, level);
     for attempt in 0..MAX_ATTEMPTS {
         let aseed = attempt_seed(seed, attempt);
-        if let Some(cand) = try_build(cat, aseed, seed, level, players, event)
+        if let Some(cand) = try_build(cat, aseed, seed, level, players, event, spacing_mul)
             && validate(&cand.data).is_ok()
         {
             return cand;
         }
     }
-    if let Some(cand) = catalog_fallback(cat, seed, level, players)
+    if let Some(cand) = catalog_fallback(cat, seed, level, players, spacing_mul)
         && validate(&cand.data).is_ok()
     {
         return cand;
     }
-    builtin_fallback(seed, level, players)
+    builtin_fallback(seed, level, players, spacing_mul)
 }
 
 /// The directed platform graph used for reachability checks, exposed so integration tests
@@ -2612,5 +2700,88 @@ mod tests {
         assert_eq!(r.max.x, b.max.z);
         assert_eq!(r.min.z, -b.max.x);
         assert_eq!(r.max.z, -b.min.x);
+    }
+}
+
+/// Half-extent (XZ) of the gift body box used by the spawn-safety rule (T-062).
+const GIFT_BODY_HALF: f32 = 0.35;
+
+/// Height of the gift body box above its base (base = pos.y - 0.3).
+const GIFT_BODY_HEIGHT: f32 = 0.9;
+
+/// Lower clamp for the gift-spacing multiplier (0.25 => a 0.5 u minimum gift spacing at the
+/// 2.0 u base). The curse can only make gifts denser, never spread.
+const GIFT_SPACING_MUL_MIN: f32 = 0.25;
+
+/// The volume a spawned gift occupies: a small box rising from its support surface
+/// (base = pos.y - 0.3). Used by the gift spawn-safety rule.
+fn gift_body_aabb(pos: Vec3) -> Aabb {
+    let base = pos.y - 0.3;
+    Aabb {
+        min: Vec3::new(pos.x - GIFT_BODY_HALF, base + EPS, pos.z - GIFT_BODY_HALF),
+        max: Vec3::new(pos.x + GIFT_BODY_HALF, base + GIFT_BODY_HEIGHT, pos.z + GIFT_BODY_HALF),
+    }
+}
+
+/// True when no blocking volume overlaps the gift body box at `pos`.
+/// Kept free of `Platform` (pure AABBs in, bool out) so the spawn-safety rule stays
+/// trivially unit-testable. Blockers are the non-NORMAL platforms (walls, jump pads, ramps).
+fn gift_body_clear<'a>(blockers: impl Iterator<Item = &'a Aabb>, pos: Vec3) -> bool {
+    let body = gift_body_aabb(pos);
+    !blockers.into_iter().any(|b| aabb_intersect(&body, b))
+}
+
+/// Minimum gift spacing after the Clustered Gifts curse: the base constant scaled by
+/// `spacing_mul`, always within [`GIFT_MIN_SPACING` * 0.25, `GIFT_MIN_SPACING`] = [0.5 u, 2.0 u].
+fn gift_min_spacing(spacing_mul: f32) -> f32 {
+    let mul = if spacing_mul.is_finite() && spacing_mul > 0.0 {
+        spacing_mul.clamp(GIFT_SPACING_MUL_MIN, 1.0)
+    } else {
+        1.0
+    };
+    GIFT_MIN_SPACING * mul
+}
+
+/// Unit tests for the T-062 gift spawn-safety rule (pure geometry, no `Platform` needed).
+#[cfg(test)]
+mod gift_spawn_safety_tests {
+    use super::*;
+
+    fn aabb(min: (f32, f32, f32), max: (f32, f32, f32)) -> Aabb {
+        Aabb {
+            min: Vec3::new(min.0, min.1, min.2),
+            max: Vec3::new(max.0, max.1, max.2),
+        }
+    }
+
+    #[test]
+    fn gift_body_clear_rejects_wall_overlap() {
+        // Wall shares XZ with the gift and spans its body height.
+        let wall = aabb((0.0, 0.0, 0.0), (1.0, 3.0, 1.0));
+        let pos = Vec3::new(0.5, 0.3, 0.5); // base at y = 0
+        assert!(!gift_body_clear([&wall].into_iter(), pos));
+    }
+
+    #[test]
+    fn gift_body_clear_rejects_jump_pad_overlap() {
+        let pad = aabb((-0.5, 0.0, -0.5), (0.5, 0.4, 0.5));
+        let pos = Vec3::new(0.0, 0.3, 0.0);
+        assert!(!gift_body_clear([&pad].into_iter(), pos));
+    }
+
+    #[test]
+    fn gift_body_clear_accepts_unobstructed_site() {
+        let wall = aabb((5.0, 0.0, 5.0), (6.0, 3.0, 6.0));
+        let pos = Vec3::new(0.0, 0.3, 0.0);
+        assert!(gift_body_clear([&wall].into_iter(), pos));
+        assert!(gift_body_clear(std::iter::empty(), pos));
+    }
+
+    #[test]
+    fn gift_body_clear_allows_touching_face() {
+        // Wall min.x exactly at the body face x = 0.35: touching is not blocking (aabb_intersect semantics).
+        let wall = aabb((0.35, 0.0, -5.0), (1.0, 0.9, 5.0));
+        let pos = Vec3::new(0.0, 0.3, 0.0);
+        assert!(gift_body_clear([&wall].into_iter(), pos));
     }
 }

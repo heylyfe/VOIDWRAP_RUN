@@ -82,7 +82,7 @@ export function telegraphAlpha(t01: number): number {
   return 0.3 + 0.7 * clamp01(t01);
 }
 
-/** Moteling INHALE: warning ring starts at orbit radius and collapses onto the victim. */
+/** Moteling (Stillness Shrieker) INHALE: warning ring starts at orbit radius and collapses onto the victim. */
 export const MOTELING_RING_START = 5.0;
 export const MOTELING_RING_END = 0.45;
 export function motelingRingRadius(t01: number): number {
@@ -104,7 +104,7 @@ export const LEECH_FLARE_RADIUS = 0.9;
 export const MIMIC_HISS_RADIUS = 0.95;
 export const CORRUPTER_AURA_RADIUS = 2.0;
 
-/** Snapshrike freezes its line for the last 0.35 s of the 0.75 s LOCK window. */
+/** Orbit Dasher (snapshrike) freezes its line for the last 0.35 s of the 0.75 s LOCK window. */
 export const SNAPSHRIKE_LOCK_PROG = 0.4 / 0.75; // ≈ 0.533
 /** Alpha for the LOCK line: ramps while tracking, snaps solid once the line freezes. */
 export function snapshrikeAlpha(t01: number): number {

@@ -66,6 +66,11 @@ pub(crate) fn escalation_fog_mul(level: u32) -> f32 {
     fog
 }
 
+/// T-062 enemy scaling cap: per-level scaling adds at most this many enemies (reached at
+/// level 7), so late levels stay playable. Scaling copies stack with curse copies
+/// (`RunMods::extra_enemies`, capped at 6) and milestone escalation copies.
+const LEVEL_SCALING_ENEMY_CAP: u32 = 6;
+
 /// Extra enemy speed multiplier from the endless escalation row (+5% per 5 levels past 25).
 pub(crate) fn escalation_speed_mul(level: u32) -> f32 {
     if level > 25 {
@@ -595,7 +600,8 @@ impl Run {
 
     fn start_level(&mut self, content: &Content, players: u32) {
         let seed = self.rng.next_u32();
-        let generated = levelgen::generate_for(seed, self.level_num, players);
+        // T-062: the Clustered Gifts curse scales the minimum gift spacing for this level.
+        let generated = levelgen::generate_for_with_spacing(seed, self.level_num, players, self.mods.gift_spacing_mul);
         let spawn_slots = generated.enemy_spawns.len();
         self.level = generated.data;
         self.world = World::from_level(&self.level);
@@ -616,11 +622,18 @@ impl Run {
         // The shop lives in the lobby only; starting a level closes it.
         self.shop = None;
         self.event_friction_mul = event_friction_mul(content, self.level.event);
-        // Roster: drafted enemies + curse copies + escalation copies (design §5, from level 4 on).
+        // Roster: drafted enemies + curse copies + per-level scaling copies (T-062)
+        // + milestone escalation copies (design §5, from level 4 on).
         let mut roster: Vec<String> = self.drafted_enemies.clone();
         let drafted = self.drafted_enemies.len();
         if drafted > 0 {
             for k in 0..self.mods.extra_enemies as usize {
+                roster.push(self.drafted_enemies[k % drafted].clone());
+            }
+            // T-062: one extra enemy per level after level 1 (level_num - 1), cycling the
+            // drafted roster, capped at LEVEL_SCALING_ENEMY_CAP so late levels stay playable.
+            let scaling = self.level_num.saturating_sub(1).min(LEVEL_SCALING_ENEMY_CAP);
+            for k in 0..scaling as usize {
                 roster.push(self.drafted_enemies[k % drafted].clone());
             }
         }
@@ -1023,7 +1036,9 @@ mod tests {
         assert_eq!(run.upgrades.len() + run.curses.len(), 1);
         assert!(run.level.gifts.iter().all(|g| g.kind == protocol::GIFT_NORMAL));
         assert!(!run.level.gifts.is_empty());
-        assert_eq!(run.enemies.len() as u32, 2 + run.mods.extra_enemies);
+        // T-062 enemy scaling: one extra copy per level after level 1, capped.
+        let scaling = run.level_num.saturating_sub(1).min(LEVEL_SCALING_ENEMY_CAP);
+        assert_eq!(run.enemies.len() as u32, 2 + run.mods.extra_enemies + scaling);
         assert!(run.offer.is_none());
         assert!(run.shop.is_none(), "the shop closes while a level is being played");
     }
