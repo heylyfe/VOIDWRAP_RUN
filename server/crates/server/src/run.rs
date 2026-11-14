@@ -1028,7 +1028,8 @@ mod tests {
         run.collect_gifts(&feet(&gifts[0]));
         assert_eq!(run.currency, 0, "golden gifts are locked while normal gifts remain");
         assert!(!run.beacon_reached(&run.level.beacon.clone()));
-        for g in &gifts {
+        // gifts[0] was gathered by the probe above; gather the remaining normal gifts.
+        for g in &gifts[1..] {
             assert_eq!(run.collect_gifts(&feet(g)).len(), 1);
         }
         assert!(run.beacon_open());

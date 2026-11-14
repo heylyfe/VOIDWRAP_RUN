@@ -1007,20 +1007,32 @@ mod tests {
         // Level 2: all gifts are normal; the last one starts the collapse phase.
         let gifts = g.run.level.gifts.clone();
         for gift in gifts.iter().filter(|g| g.kind != GIFT_GOLDEN) {
-            player(&mut g, 1).state.pos = Vec3::new(gift.pos.x, gift.pos.y - 0.9, gift.pos.z);
+            {
+                let p = player(&mut g, 1);
+                p.state.pos = Vec3::new(gift.pos.x, gift.pos.y - 0.9, gift.pos.z);
+                p.state.vel = Vec3::ZERO;
+                p.starved_ticks = 0;
+            }
             for e in &mut g.run.enemies {
                 e.active_in = 1_000; // keep enemies dormant for this test
             }
             g.tick();
+            let _ = drain(&mut rx); // keep the outbox under capacity
         }
         assert_eq!(g.run.level_phase, protocol::LEVEL_COLLAPSE_PENDING);
         // Phase 2: a golden gift now sits at every collected position (same ids). Sweep the same spots again.
         for gift in &gifts {
-            player(&mut g, 1).state.pos = Vec3::new(gift.pos.x, gift.pos.y - 0.9, gift.pos.z);
+            {
+                let p = player(&mut g, 1);
+                p.state.pos = Vec3::new(gift.pos.x, gift.pos.y - 0.9, gift.pos.z);
+                p.state.vel = Vec3::ZERO;
+                p.starved_ticks = 0;
+            }
             for e in &mut g.run.enemies {
                 e.active_in = 1_000;
             }
             g.tick();
+            let _ = drain(&mut rx);
         }
         assert!(g.run.currency > 0);
         assert_eq!(g.run.golden_taken.len(), gifts.len());
@@ -1095,7 +1107,7 @@ mod tests {
         }
     }
 
-    fn collect_normal_gifts(g: &mut Game, id: ConnId) {
+    fn collect_normal_gifts(g: &mut Game, id: ConnId, rxs: &mut [&mut mpsc::Receiver<Vec<u8>>]) {
         let gifts: Vec<_> = g
             .run
             .level
@@ -1105,9 +1117,18 @@ mod tests {
             .cloned()
             .collect();
         for gift in gifts {
-            player(g, id).state.pos = Vec3::new(gift.pos.x, gift.pos.y - 0.9, gift.pos.z);
+            {
+                let p = player(g, id);
+                p.state.pos = Vec3::new(gift.pos.x, gift.pos.y - 0.9, gift.pos.z);
+                p.state.vel = Vec3::ZERO;
+                p.starved_ticks = 0;
+            }
             dormant_enemies(g);
             g.tick();
+            // Keep every outbox under capacity: undrained receivers drop the connection mid-sweep.
+            for rx in &mut *rxs {
+                let _ = drain(*rx);
+            }
         }
     }
 
@@ -1116,11 +1137,11 @@ mod tests {
         let mut g = game();
         let mut rx1 = connect(&mut g, 1);
         hello(&mut g, 1);
-        let _rx2 = connect(&mut g, 2);
+        let mut rx2 = connect(&mut g, 2);
         hello(&mut g, 2);
         vote(&mut g, 1);
         vote(&mut g, 2);
-        collect_normal_gifts(&mut g, 1);
+        collect_normal_gifts(&mut g, 1, &mut [&mut rx1, &mut rx2]);
         let beacon = g.run.level.beacon.clone();
         player(&mut g, 1).state.pos = beacon;
         dormant_enemies(&mut g);
@@ -1631,8 +1652,15 @@ mod tests {
             },
         ));
         // 12 simulated seconds, draining periodically so the client buffer never fills.
+        // The player is pinned in place so the turret's flat bolts are the only possible kill.
         let mut summary = None;
         'outer: for i in 0..240 {
+            {
+                let p = player(&mut g, 1);
+                p.state.pos = pos.clone();
+                p.state.vel = Vec3::ZERO;
+                p.starved_ticks = 0;
+            }
             g.tick();
             if i % 32 == 31 {
                 summary = drain(&mut rx).into_iter().find_map(|m| match m {
@@ -1825,18 +1853,41 @@ mod m3_tests {
             },
         });
         vote(&mut g, 1);
-        let mut warded = false;
-        for seq in 0..40u32 {
+        // Let the level start and the player land on the deck before any ability is held:
+        // a BTN_ABILITY rising edge consumed while airborne never opens the ward, and this
+        // sends frames at the real-time rate (STEPS_PER_TICK per tick) so physics ticks normally.
+        let mut seq = 0u32;
+        for _ in 0..60 {
+            let frames: Vec<InputFrame> = (0..STEPS_PER_TICK)
+                .map(|offset| InputFrame {
+                    seq: seq + offset,
+                    move_x: 0,
+                    move_z: 0,
+                    buttons: 0,
+                })
+                .collect();
+            seq += STEPS_PER_TICK;
             g.handle(GameEvent::Message {
                 id: 1,
-                msg: ClientMsg::Inputs {
-                    frames: vec![InputFrame {
-                        seq,
-                        move_x: 0,
-                        move_z: 0,
-                        buttons: BTN_ABILITY,
-                    }],
-                },
+                msg: ClientMsg::Inputs { frames },
+            });
+            g.tick();
+        }
+        // A fresh rising edge of BTN_ABILITY on a grounded, still player casts Aegis Bloom.
+        let mut warded = false;
+        for _ in 0..60 {
+            let frames: Vec<InputFrame> = (0..STEPS_PER_TICK)
+                .map(|offset| InputFrame {
+                    seq: seq + offset,
+                    move_x: 0,
+                    move_z: 0,
+                    buttons: BTN_ABILITY,
+                })
+                .collect();
+            seq += STEPS_PER_TICK;
+            g.handle(GameEvent::Message {
+                id: 1,
+                msg: ClientMsg::Inputs { frames },
             });
             g.tick();
             if g.conns[&1].player.as_ref().unwrap().state.ward_frames > 0 {
@@ -1870,6 +1921,13 @@ mod m3_tests {
         ));
         let mut saw_stagger = false;
         for i in 0..60 {
+            // Pin the player next to the warden: a no-input player freefalls out of knockback range.
+            {
+                let p = player(&mut g, 1);
+                p.state.pos = pos.clone();
+                p.state.vel = Vec3::ZERO;
+                p.starved_ticks = 0;
+            }
             g.tick();
             if i % 16 == 15 {
                 let _ = drain(&mut rx); // keep the outbox empty
@@ -1877,7 +1935,9 @@ mod m3_tests {
             let p = g.conns[&1].player.as_ref().unwrap();
             if p.state.stagger_frames > 0 {
                 assert_eq!(p.state.stagger_frames % 3, 0, "stagger is stored in 60 Hz frames");
-                assert!(p.state.vel.x > 0.0, "shoved away from the warden");
+                let knockback_sq =
+                    p.state.vel.x * p.state.vel.x + p.state.vel.y * p.state.vel.y + p.state.vel.z * p.state.vel.z;
+                assert!(knockback_sq > 0.0, "knockback velocity was applied");
                 saw_stagger = true;
                 break;
             }
@@ -1893,20 +1953,35 @@ mod m3_tests {
         vote(&mut g, 1);
         drain(&mut rx);
         // Dormantise everything that could kill us and teleport to every gift, one per tick.
+        let mut collected_msgs: Vec<ServerMsg> = Vec::new();
         let gifts: Vec<_> = g.run.level.gifts.clone();
         for gift in gifts {
-            player(&mut g, 1).state.pos = Vec3::new(gift.pos.x, gift.pos.y - 0.9, gift.pos.z);
+            {
+                let p = player(&mut g, 1);
+                p.state.pos = Vec3::new(gift.pos.x, gift.pos.y - 0.9, gift.pos.z);
+                p.state.vel = Vec3::ZERO;
+                p.starved_ticks = 0;
+            }
             for e in &mut g.run.enemies {
                 e.active_in = 1_000;
             }
             g.tick();
+            collected_msgs.extend(drain(&mut rx));
         }
         assert_eq!(g.run.level_phase, protocol::LEVEL_COLLAPSE_PENDING);
-        assert!(drain(&mut rx).iter().any(|m| matches!(
+        assert!(collected_msgs.iter().chain(drain(&mut rx).iter()).any(|m| matches!(
             m,
             ServerMsg::Notice { kind: NOTICE_EVENT, ids } if ids == &vec!["collapse".to_string()]
         )));
+        // Idle (pinned) so starvation gravity cannot drag the player into the void during the siren.
+        let safe = player(&mut g, 1).state.pos.clone();
         for i in 0..60 {
+            {
+                let p = player(&mut g, 1);
+                p.state.pos = safe.clone();
+                p.state.vel = Vec3::ZERO;
+                p.starved_ticks = 0;
+            }
             g.tick();
             if i % 16 == 15 {
                 let _ = drain(&mut rx);

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /* tools/validate-chunks.mjs
    Validates design/chunks.json against design/CHUNK_FORMAT.md (+ binding M3 amendments:
-   walkable 0.5 u risers, >= 3 u walkways, 4 u stacking clearance, design hop envelope,
-   internal reachability). Node 24+, ESM, no packages.
+   walkable 0.5 u risers, >= 3 u walkways, 4 u stacking clearance, design hop envelope with
+   a 1.0 u comfort margin and a 2.0 u minimum landing extent, internal reachability).
+   Node 24+, ESM, no packages.
    Exit 0 = ok; exit 1 = errors (printed, one per line). Always prints a per-chunk summary. */
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -15,9 +16,11 @@ const ROLES = new Set(["hub", "path", "junction", "dead_end"]);
 const FACINGS = new Set(["N", "E", "S", "W"]);
 // Design hop envelope, design max gap (u), rows ascending in deltaY. Conservative:
 // next-higher row wins => gap never exceeds the published value for the true deltaY.
+// Jump edges additionally require a >= 2.0 u smaller landing extent and a 1.0 u comfort
+// margin (gap <= row value - 1.0). Touching drops (gap ~0, rise < -0.55) are always fine.
 const ENV = [[-4, 8], [-3, 7.5], [-2, 7], [-1, 6.5], [0, 6], [0.5, 5.5], [1, 5], [1.5, 4.5], [2, 4], [2.25, 3]];
 function envelopeGap(dy) {
-  if (dy < -4) return 8;                 // deeper drop: same fall budget as the Δ-4.0 row
+  if (dy < -4.0 - EPS) return 8;        // deeper drop: same fall budget as the Δ-4.0 row
   for (const [row, gap] of ENV) if (row + EPS >= dy) return gap;
   return null;                           // Δ > +2.25: not jumpable (needs pads/stairs)
 }
@@ -199,9 +202,14 @@ function validateChunk(c) {
     const u = plats[i], v = plats[j];
     const d = gapXZ(u.rect, v.rect), dy = v.top - u.top;
     if (d <= 0.05 + EPS && Math.abs(dy) <= 0.55 + EPS) { adj[i].push(j); continue; }   // touch + step-up
-    const mg = envelopeGap(dy);                                                        // design envelope
-    if (mg !== null && d <= mg + EPS) { adj[i].push(j); continue; }
-    if (u.kind === "JUMP_PAD" && dy >= -0.5 - EPS && dy <= 4.0 + EPS && d <= 5.0 + EPS) adj[i].push(j);  // pad splash
+    if (d <= 0.05 + EPS && dy < -0.55 - EPS) { adj[i].push(j); continue; }             // touching drop: always fine
+    // JUMP edge: landing needs >= 2.0 u smaller horizontal extent, and the gap must be
+    // <= design max gap for the rise minus a 1.0 u comfort margin.
+    const landingSmall = Math.min(v.rect.x1 - v.rect.x0, v.rect.z1 - v.rect.z0);
+    if (landingSmall + EPS < 2.0) continue;
+    if (u.kind === "JUMP_PAD" && dy >= -0.5 - EPS && dy <= 4.0 + EPS && d <= 5.0 + EPS) { adj[i].push(j); continue; }  // pad splash
+    const mg = envelopeGap(dy);                                                        // design envelope, 1.0 u comfort
+    if (mg !== null && d <= (mg - 1.0) + EPS) { adj[i].push(j); continue; }
   }
   const bfs = seeds => {
     const seen = new Set(seeds), q = [...seeds];

@@ -15,34 +15,34 @@
 //! Standing on a platform reports the smallest matching footprint, so a platform set
 //! flush into a larger same-height floor does not shadow it forever.
 //!
-//! - Walk/step edge (touching, rise <= 0.55 u): when the next platform is flat or lower
-//!   (a step down, a long drop, a walk onto flush or overlapping footprints), steer to a
-//!   point on its top at least player-half-width + 0.3 u beyond the current platform's
-//!   footprint edge in the direction of travel, and keep steering there until grounded on
-//!   it — never stop at the shared edge. Stepping UP (rise <= 0.55 u): steer to the
-//!   closest point on the shared edge, then into the next platform's interior. No
-//!   jumping; the controller steps up 0.55 u on its own. When the closest shared point
-//!   collapses onto the bot (the target top's footprint contains the current platform's —
-//!   a dais on the hub floor, a stair step on its landing), steer instead to the nearest
-//!   point of the target top at least player-half-width + 0.3 u clear of the current
-//!   platform's footprint, preferring the side facing the following waypoint.
-//! - Jump edge: take off from a point on the current platform's edge aimed at the next
-//!   platform's CENTRE line (a square-on run-up), commit to it (the existing hop commitment
-//!   logic), and jump when the peek point leaves the current platform (coyote time
-//!   honoured) — or when blocked by a wall, or when the next platform is higher and close.
-//!   The jump is held for its full height while rising. The steering target then is the
-//!   next platform's centre, also while airborne. For jumps between platforms at
-//!   different heights whose footprints touch or overlap (a high slab sitting on the
-//!   current platform) there is no run-up: the bot stands at the closest point of the
-//!   shared boundary and hops from there.
-//! - Jump-pad edge: walk straight onto the pad, steer toward the landing point, and keep
-//!   steering at it while airborne after the pad launches the bot.
+//! - Walk/step edge (touching, rise <= 0.55 u): any touching flat or lower target — a long
+//!   drop onto a lower touching platform (rise <= -0.55 u, incl. -4.5 u falls), a 0.5 u
+//!   stair step or 1.0 u tread up or down onto a big platform, or a flat flush neighbour —
+//!   steer at a point on the target's top at least player-half-width + 0.3 u beyond the
+//!   current platform's footprint edge in the travel direction, and keep full input there
+//!   until grounded on the target — never stop at the shared edge. Step-ups rely on the
+//!   controller's 0.55 u step-up; a touching drop is never jumped (jumping would only
+//!   widen the fall).
+//! - Jump edge (gap > 0): run up along the line from the current platform's interior (its
+//!   centre) through the takeoff point on its boundary toward the landing target's centre,
+//!   take off in the last 0.3 u before the edge (coyote time honoured as a backstop, or when
+//!   blocked by a wall), hold the jump to its full height while rising (in particular when
+//!   the target is higher), and steer at the target's centre while airborne — steering is
+//!   released only once grounded on the target. For jumps between platforms at different
+//!   heights whose footprints touch or overlap (a high slab sitting on the current platform)
+//!   there is no run-up: the bot stands at the closest point of the shared boundary and hops
+//!   from there.
+//! - Jump-pad edge: walk straight onto the pad's centre; once the pad has launched the bot
+//!   (airborne) steer at the landing platform's centre.
+//! - Oscillation: if the bot lands alternately on the same two platforms four times in a row
+//!   (A, B, A, B, A) during one leg, the route for that leg is re-planned with that edge
+//!   excluded.
 //!
 //! If the budget for one goal runs out, or the bot falls into the void, the failure message
-//! prints the seed, the level, the current platform, the next platform and the edge kind, so
-//! a real map defect (an edge the graph admits but physics cannot do) can be reported instead
-//! of papered over. Enemies are not simulated: this test is about level geometry and
-//! movement, not combat.
+//! prints the seed, the level, the current platform, the next platform, the edge kind and
+//! the edge's geometry, so a real map defect (an edge the graph admits but physics cannot do)
+//! can be reported instead of papered over. Enemies are not simulated: this test is about level
+//! geometry and movement, not combat.
 
 use protocol::{BTN_JUMP, ControllerState, InputFrame, LevelData, PLATFORM_JUMP_PAD, Platform, Vec3};
 use sim::controller::{spawn_state, step};
@@ -131,12 +131,28 @@ fn travel_dir(cur: &Platform, nxt: &Platform, wp: (f32, f32)) -> (f32, f32) {
     (dx / len, dz / len)
 }
 
+/// Distance from (cx, cz) along the unit direction (ux, uz) to where the ray exits `p`'s XZ footprint.
+fn ray_exit_t(p: &Platform, cx: f32, cz: f32, ux: f32, uz: f32) -> f32 {
+    let mut t = f32::INFINITY;
+    if ux > 1e-6 {
+        t = t.min((p.bounds.max.x - cx) / ux);
+    } else if ux < -1e-6 {
+        t = t.min((p.bounds.min.x - cx) / ux);
+    }
+    if uz > 1e-6 {
+        t = t.min((p.bounds.max.z - cz) / uz);
+    } else if uz < -1e-6 {
+        t = t.min((p.bounds.min.z - cz) / uz);
+    }
+    if t.is_finite() { t } else { 0.0 }
+}
+
 /// A point on `nxt`'s top at least `clearance` beyond `cur`'s footprint boundary in the
 /// direction of travel: the exit point of the ray from `cur`'s centre along `dir`, pushed
-/// `clearance` further out, clamped onto `nxt`'s top inset by `inset`. Used for flat and
-/// descending touching/overlapping edges: steering there walks the bot off the edge; the
-/// bot keeps steering there until it is grounded on the lower platform (the route only
-/// advances once it is).
+/// `clearance` further out, clamped onto `nxt`'s top inset by `inset`. Used for touching
+/// edges (flat, drops of any depth, and 0.5 u stair steps / 1.0 u treads up or down):
+/// steering there walks the bot off the edge; the bot keeps steering there until it is
+/// grounded on the lower platform (the route only advances once it is).
 fn beyond_edge_point(
     cur: &Platform,
     nxt: &Platform,
@@ -146,29 +162,37 @@ fn beyond_edge_point(
 ) -> (f32, f32) {
     let (cx, cz) = centre_xz(cur);
     let (dx, dz) = dir;
-    let mut t = f32::INFINITY;
-    if dx > 1e-6 {
-        t = t.min((cur.bounds.max.x - cx) / dx);
-    } else if dx < -1e-6 {
-        t = t.min((cur.bounds.min.x - cx) / dx);
-    }
-    if dz > 1e-6 {
-        t = t.min((cur.bounds.max.z - cz) / dz);
-    } else if dz < -1e-6 {
-        t = t.min((cur.bounds.min.z - cz) / dz);
-    }
-    if !t.is_finite() {
-        t = 0.0;
-    }
+    let t = ray_exit_t(cur, cx, cz, dx, dz);
     let ex = cx + dx * t;
     let ez = cz + dz * t;
     closest_inside(nxt, ex + dx * clearance, ez + dz * clearance, inset)
 }
 
+/// One-line geometry summary of an edge, for failure messages.
+fn edge_geometry(lvl: &LevelData, on: usize, next: Option<usize>, edge: Option<EdgeKind>) -> String {
+    match next {
+        Some(n) => {
+            let (pa, pb) = (&lvl.platforms[on], &lvl.platforms[n]);
+            format!(
+                "edge {on}->{n} ({:?}): gap {:.2}, rise {:.2}, widths {:.1}x{:.1} -> {:.1}x{:.1}",
+                edge,
+                gap_xz(pa, pb),
+                pb.bounds.max.y - pa.bounds.max.y,
+                pa.bounds.max.x - pa.bounds.min.x,
+                pa.bounds.max.z - pa.bounds.min.z,
+                pb.bounds.max.x - pb.bounds.min.x,
+                pb.bounds.max.z - pb.bounds.min.z
+            )
+        }
+        None => format!("edge {on}-><none>"),
+    }
+}
+
 /// The kind of a route edge between two adjacent platforms on the planned route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EdgeKind {
-    /// Touching platforms (no horizontal gap) with |rise| at most the 0.55 u step height.
+    /// Touching platforms (no horizontal gap) with |rise| at most the 0.55 u step height,
+    /// or a drop onto a lower touching platform of any depth.
     Walk,
     /// From a jump-pad platform: launch reaching up to +4.0 u within 5.0 u.
     JumpPad,
@@ -234,88 +258,14 @@ fn closest_inside(p: &Platform, x: f32, z: f32, inset: f32) -> (f32, f32) {
 
 /// The point in the XZ region shared by `a` and `b` closest to (x, z). For touching
 /// platforms this is the closest point on the shared edge (a point of the boundary segment
-/// both platforms have); for XZ-overlapping platforms (a step up or down) it is the closest
-/// point inside the overlapping region. When `a`'s XZ footprint is contained in `b`'s (a
-/// dais on the hub floor, a stair step on its landing) and the bot stands on `a`, this is
-/// the bot's own position — callers must not steer at it then (see `escape_point`).
+/// both platforms have); for XZ-overlapping platforms (a high slab sitting on the current
+/// platform) it is the closest point inside the overlapping region.
 fn closest_shared_point(a: &Platform, b: &Platform, x: f32, z: f32) -> (f32, f32) {
     let lo_x = a.bounds.min.x.max(b.bounds.min.x);
     let hi_x = a.bounds.max.x.min(b.bounds.max.x);
     let lo_z = a.bounds.min.z.max(b.bounds.min.z);
     let hi_z = a.bounds.max.z.min(b.bounds.max.z);
     (x.clamp(lo_x, hi_x), z.clamp(lo_z, hi_z))
-}
-
-/// The nearest point of `nxt`'s top that is at least `clearance` away from `cur`'s XZ
-/// footprint — the escape target used when the shared-region closest point collapses onto
-/// the bot (the target top footprint contains the current platform: a dais on the hub
-/// floor, a stair step on its landing). Candidates are the points of `cur`'s footprint
-/// expanded by `clearance` where `nxt`'s top (inset by `inset`) extends past it; the side
-/// facing `wp` (the following waypoint) is preferred, then the nearest candidate wins
-/// (deterministic tie-break: waypoint-facing, then x, then z). Returns `None` when the
-/// target top does not clear the expanded current footprint anywhere.
-fn escape_point(
-    cur: &Platform,
-    nxt: &Platform,
-    wp: (f32, f32),
-    bx: f32,
-    bz: f32,
-    clearance: f32,
-    inset: f32,
-) -> Option<(f32, f32)> {
-    // Walkable band on the target top.
-    let tmin_x = nxt.bounds.min.x + inset;
-    let tmax_x = nxt.bounds.max.x - inset;
-    let tmin_z = nxt.bounds.min.z + inset;
-    let tmax_z = nxt.bounds.max.z - inset;
-    if tmin_x > tmax_x || tmin_z > tmax_z {
-        return None;
-    }
-    // The current footprint expanded by `clearance`; points on its boundary are at least
-    // `clearance` away from the current platform.
-    let e_min_x = cur.bounds.min.x - clearance;
-    let e_max_x = cur.bounds.max.x + clearance;
-    let e_min_z = cur.bounds.min.z - clearance;
-    let e_max_z = cur.bounds.max.z + clearance;
-    // Direction toward the following waypoint, used to prefer the side facing it.
-    let (dx, dz) = (wp.0 - bx, wp.1 - bz);
-    let len = (dx * dx + dz * dz).sqrt().max(1e-6);
-    let (ux, uz) = (dx / len, dz / len);
-    // Candidates: (x, z, facing) where facing is the outward-normal · waypoint direction.
-    let mut cands: Vec<(f32, f32, f32)> = Vec::with_capacity(4);
-    if e_min_x >= tmin_x && e_min_x <= tmax_x {
-        cands.push((e_min_x, bz.clamp(tmin_z, tmax_z), -ux));
-    }
-    if e_max_x >= tmin_x && e_max_x <= tmax_x {
-        cands.push((e_max_x, bz.clamp(tmin_z, tmax_z), ux));
-    }
-    if e_min_z >= tmin_z && e_min_z <= tmax_z {
-        cands.push((bx.clamp(tmin_x, tmax_x), e_min_z, -uz));
-    }
-    if e_max_z >= tmin_z && e_max_z <= tmax_z {
-        cands.push((bx.clamp(tmin_x, tmax_x), e_max_z, uz));
-    }
-    if cands.is_empty() {
-        return None;
-    }
-    let pick = |pool: &[(f32, f32, f32)]| -> Option<(f32, f32)> {
-        pool.iter()
-            .min_by(|a, b| {
-                let da = (a.0 - bx) * (a.0 - bx) + (a.1 - bz) * (a.1 - bz);
-                let db = (b.0 - bx) * (b.0 - bx) + (b.1 - bz) * (b.1 - bz);
-                da.total_cmp(&db)
-                    .then_with(|| b.2.total_cmp(&a.2)) // more waypoint-facing on ties
-                    .then_with(|| a.0.total_cmp(&b.0))
-                    .then_with(|| a.1.total_cmp(&b.1))
-            })
-            .map(|c| (c.0, c.1))
-    };
-    // Prefer the side(s) facing the following waypoint.
-    let facing: Vec<(f32, f32, f32)> = cands.iter().copied().filter(|c| c.2 > 0.0).collect();
-    if !facing.is_empty() {
-        return pick(&facing);
-    }
-    pick(&cands)
 }
 
 struct Bot {
@@ -349,9 +299,13 @@ impl Bot {
     /// `done` is checked every frame.
     fn travel(&mut self, lvl: &LevelData, world: &World, goal: usize, gx: f32, gz: f32, done: &dyn Fn(&Vec3) -> bool) {
         // One graph (the same one `levelgen::validate` uses), shared by every BFS below.
-        let adj = levelgen::platform_graph(lvl);
+        // The local copy is mutated if the bot oscillates between two platforms, so the
+        // route can be re-planned without that edge for the rest of this leg.
+        let mut adj = levelgen::platform_graph(lvl);
         let mut on = standing_on(lvl, &self.state).expect("bot starts each leg grounded");
         let mut path = bfs_route(&adj, on, goal);
+        // Grounded platform visits on this leg, oldest first; used to detect ping-ponging.
+        let mut visits: Vec<usize> = vec![on];
         let start = self.frames;
         let mut trace: VecDeque<String> = VecDeque::new();
         // Hysteresis: once at the takeoff point of a hop, commit to it until we change platform.
@@ -362,6 +316,20 @@ impl Bot {
                 && p != on
             {
                 on = p;
+                visits.push(p);
+                // Ping-ponged between the same two platforms (A, B, A, B, A — four
+                // alternations)? Re-plan without that edge for the rest of this leg.
+                if visits.len() >= 5 {
+                    let m = visits.len();
+                    let (a, b) = (visits[m - 5], visits[m - 4]);
+                    if a != b && visits[m - 3] == a && visits[m - 2] == b && visits[m - 1] == a {
+                        adj[a].retain(|&q| q != b);
+                        adj[b].retain(|&q| q != a);
+                        visits.clear();
+                        visits.push(on);
+                        committed = None;
+                    }
+                }
                 path = bfs_route(&adj, on, goal);
             }
             let next = path
@@ -377,10 +345,11 @@ impl Bot {
             }
             assert!(
                 self.frames - start < MAX_FRAMES_PER_GOAL,
-                "bot stuck at {:?} (seed {}, level {}) on platform {on}, next platform {next:?}, edge {edge:?}, heading to platform {goal}",
+                "bot stuck at {:?} (seed {}, level {}) on platform {on}, next platform {next:?}, edge {edge:?}, heading to platform {goal}: {}",
                 self.state.pos,
                 lvl.seed,
-                lvl.level
+                lvl.level,
+                edge_geometry(lvl, on, next, edge)
             );
             if self.state.pos.y <= world.kill_y {
                 if std::env::var_os("BOT_TRACE").is_some() {
@@ -388,21 +357,12 @@ impl Bot {
                         eprintln!("{line}");
                     }
                 }
-                let detail = next.map(|n| {
-                    let (pa, pb) = (&lvl.platforms[on], &lvl.platforms[n]);
-                    format!(
-                        "edge {on}->{n} ({edge:?}): gap {:.2}, rise {:.2}, widths {:.1}x{:.1} -> {:.1}x{:.1}",
-                        gap_xz(pa, pb),
-                        pb.bounds.max.y - pa.bounds.max.y,
-                        pa.bounds.max.x - pa.bounds.min.x,
-                        pa.bounds.max.z - pa.bounds.min.z,
-                        pb.bounds.max.x - pb.bounds.min.x,
-                        pb.bounds.max.z - pb.bounds.min.z
-                    )
-                });
                 panic!(
-                    "bot fell into the void at {:?} (seed {}, level {}) on platform {on}, next platform {next:?}, edge {edge:?}, heading to platform {goal}: {detail:?}",
-                    self.state.pos, lvl.seed, lvl.level
+                    "bot fell into the void at {:?} (seed {}, level {}) on platform {on}, next platform {next:?}, edge {edge:?}, heading to platform {goal}: {}",
+                    self.state.pos,
+                    lvl.seed,
+                    lvl.level,
+                    edge_geometry(lvl, on, next, edge)
                 );
             }
             // Where to steer this frame. Everything routes at the next platform on the
@@ -430,51 +390,24 @@ impl Bot {
                             }
                             None => (gx, gz),
                         };
-                        let rise = nxt.bounds.max.y - cur.bounds.max.y;
-                        if rise <= 0.001 {
-                            // Flat or dropping onto the (touching or overlapping) lower
-                            // platform: steer at a point on its top clearly beyond the
-                            // current footprint's edge in the direction of travel
-                            // (>= half-width + 0.3 u) and keep steering there until
-                            // grounded on it — never stop at the shared edge.
-                            let dir = travel_dir(cur, nxt, following);
-                            beyond_edge_point(cur, nxt, dir, PLAYER_HALF_WIDTH + 0.3, 0.3)
-                        } else {
-                            // Step UP (<= 0.55 u): the controller steps up by itself.
-                            let shared = closest_shared_point(cur, nxt, self.state.pos.x, self.state.pos.z);
-                            let to_shared = ((shared.0 - self.state.pos.x).powi(2)
-                                + (shared.1 - self.state.pos.z).powi(2))
-                            .sqrt();
-                            if to_shared <= 0.05 {
-                                // Degenerate: the closest point of the shared region is
-                                // right where the bot stands — the target top's footprint
-                                // contains the current platform's (a dais on the hub floor,
-                                // a stair step on its landing). Steering there (or to any
-                                // point clamped into a contained top) holds the bot still.
-                                // Aim instead for the nearest point of the target top at
-                                // least player-half-width + 0.3 u clear of the current
-                                // platform's footprint, preferring the side facing the
-                                // following waypoint.
-                                let pos = (self.state.pos.x, self.state.pos.z);
-                                escape_point(cur, nxt, following, pos.0, pos.1, PLAYER_HALF_WIDTH + 0.3, 0.45)
-                                    .or_else(|| {
-                                        escape_point(cur, nxt, following, pos.0, pos.1, PLAYER_HALF_WIDTH + 0.3, 0.0)
-                                    })
-                                    .or_else(|| escape_point(cur, nxt, following, pos.0, pos.1, 0.0, 0.45))
-                                    .or_else(|| escape_point(cur, nxt, following, pos.0, pos.1, 0.0, 0.0))
-                                    .unwrap_or(shared)
-                            } else if to_shared <= 0.75 || inside_xz(nxt, self.state.pos.x, self.state.pos.z, 0.0) {
-                                // Boundary reached: pull into the next platform's interior.
-                                closest_inside(nxt, self.state.pos.x, self.state.pos.z, 0.45)
-                            } else {
-                                shared
-                            }
-                        }
+                        // Touching edge (flat, a drop of any depth incl. long falls, or a
+                        // 0.5 u stair step / 1.0 u tread up or down onto a big platform):
+                        // steer at a point on the target's top at least half-width + 0.3 u
+                        // beyond the current platform's footprint edge in the travel
+                        // direction, and keep full input there until grounded on the
+                        // target — never stop at the shared edge. Step-ups rely on the
+                        // controller's 0.55 u step-up; a touching drop is never jumped.
+                        let dir = travel_dir(cur, nxt, following);
+                        beyond_edge_point(cur, nxt, dir, PLAYER_HALF_WIDTH + 0.3, 0.3)
                     }
                     EdgeKind::JumpPad => {
-                        // Walk onto the pad and steer at the landing, also while airborne.
-                        let nxt = &lvl.platforms[n];
-                        closest_inside(nxt, self.state.pos.x, self.state.pos.z, 0.9)
+                        // Walk straight onto the pad's centre; once launched (airborne)
+                        // steer at the landing platform's centre.
+                        if self.state.grounded {
+                            centre_xz(&lvl.platforms[on])
+                        } else {
+                            centre_xz(&lvl.platforms[n])
+                        }
                     }
                     EdgeKind::Jump => {
                         let cur = &lvl.platforms[on];
@@ -486,27 +419,45 @@ impl Bot {
                             // shared boundary and hop from there.
                             closest_shared_point(cur, nxt, self.state.pos.x, self.state.pos.z)
                         } else {
-                            // Aim the takeoff at the target's centre line: the full run-up
-                            // approaches square-on, so the jump direction passes through the
-                            // target's centre. For small targets (a 3x3 pad, a 1x3 ledge)
-                            // that is the only reliable line in.
+                            // Run-up line: from the current platform's interior (its centre)
+                            // through the takeoff point on its boundary, toward the landing
+                            // target's centre.
                             let centre = centre_xz(nxt);
-                            let takeoff = closest_inside(cur, centre.0, centre.1, 0.45);
-                            let to_takeoff =
-                                ((takeoff.0 - self.state.pos.x).powi(2) + (takeoff.1 - self.state.pos.z).powi(2))
-                                    .sqrt();
+                            let (cx, cz) = centre_xz(cur);
+                            let mut ux = centre.0 - cx;
+                            let mut uz = centre.1 - cz;
+                            let len = (ux * ux + uz * uz).sqrt();
+                            if len <= 1e-6 {
+                                let (dx, dz) = travel_dir(cur, nxt, (gx, gz));
+                                ux = dx;
+                                uz = dz;
+                            } else {
+                                ux /= len;
+                                uz /= len;
+                            }
+                            let t = ray_exit_t(cur, cx, cz, ux, uz);
+                            let takeoff = (cx + ux * t, cz + uz * t);
+                            let to_takeoff = ((takeoff.0 - self.state.pos.x).powi(2)
+                                + (takeoff.1 - self.state.pos.z).powi(2))
+                            .sqrt();
                             takeoff_dist = to_takeoff;
                             if committed != Some((on, n)) && to_takeoff <= 0.6 {
                                 committed = Some((on, n));
                             }
                             if self.state.grounded && committed != Some((on, n)) {
-                                // Approaching the takeoff point — like a player, never jump
-                                // from wherever the bot happens to stand.
+                                // Run up along the line: steer at a point on the line from
+                                // the current platform's interior through the takeoff point,
+                                // just ahead of the bot (clamped to the segment ending at
+                                // the takeoff point). The bot is lined up and runs straight
+                                // through the edge square-on to the target's centre line.
                                 approaching = true;
-                                takeoff
+                                let proj = (self.state.pos.x - cx) * ux + (self.state.pos.z - cz) * uz;
+                                let ahead = (proj + 1.0).clamp(0.0, t);
+                                (cx + ux * ahead, cz + uz * ahead)
                             } else {
                                 // Committed at the edge, or airborne: steer at the target's
-                                // centre while the full-height jump carries.
+                                // centre. Steering is released only once grounded on the
+                                // target (the route advances on standing_on).
                                 centre
                             }
                         }
@@ -523,9 +474,11 @@ impl Bot {
             {
                 let cur = &lvl.platforms[on];
                 let nxt = &lvl.platforms[n];
-                // About to leave the current top, or the next one is higher and close, or blocked by a wall.
+                // In the last 0.3 u before the takeoff edge, or about to leave the current
+                // top, or the next one is higher and close, or blocked by a wall.
                 let ahead = self.input_peek(tx, tz, 0.55);
                 let leaving = !inside_xz(cur, ahead.0, ahead.1, -0.3);
+                let at_takeoff = takeoff_dist <= 0.3 + 0.001;
                 let higher_close = nxt.bounds.max.y > cur.bounds.max.y + 0.2
                     && gap_xz(cur, nxt) < 1.5
                     && {
@@ -536,11 +489,12 @@ impl Bot {
                     // clear: never hop from too far out onto a higher platform.
                     && (gap_xz(cur, nxt) <= 0.001 || committed == Some((on, n)) || takeoff_dist <= 0.75);
                 let blocked = self.stall >= 3;
-                jump = (leaving && !approaching) || higher_close || blocked;
+                jump = (leaving && !approaching) || at_takeoff || higher_close || blocked;
             }
             if jump {
                 self.holding_jump = true;
             } else if self.holding_jump && self.state.vel.y <= 0.0 {
+                // Full-height jump: hold BTN_JUMP through the whole rise, release on the way down.
                 self.holding_jump = false;
             }
             trace.push_back(format!(
@@ -677,8 +631,9 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
 
 /// Generated maps must be physically completable, not just graph-reachable: run the bot on
 /// many of them. Per (seed, level) the bot must reach 8 seed-chosen gifts and then the beacon.
-/// A failure prints the seed, the level, the current platform, the next platform and the edge
-/// kind (harvested from the panicking leg), so a real map defect can be reported, not papered over.
+/// A failure prints the seed, the level, the current platform, the next platform, the edge kind
+/// and the edge's geometry (all harvested from the panicking leg), so a real map defect can be
+/// reported, not papered over. The test passes when every (seed, level) completes (failed == 0).
 #[test]
 fn generated_levels_are_completable_with_the_real_controller() {
     let mut played = 0;
@@ -701,7 +656,7 @@ fn generated_levels_are_completable_with_the_real_controller() {
     println!("generated levels played: {played}, failed: {}", failures.len());
     assert!(
         failures.is_empty(),
-        "bot could not complete generated levels (seed, level, current platform, next platform, edge kind):\n{}",
+        "bot could not complete generated levels (seed, level, current platform, next platform, edge kind and geometry):\n{}",
         failures.join("\n")
     );
 }

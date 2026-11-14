@@ -992,8 +992,10 @@ fn weighted_platform_index(rng: &mut Rng, normal: &[usize], cum: &[f32]) -> usiz
 fn spawn_point(main: &Aabb, beacon: &Vec3) -> Vec3 {
     let cx = (main.min.x + main.max.x) * 0.5;
     let cz = (main.min.z + main.max.z) * 0.5;
-    let ix = ((main.max.x - main.min.x) * 0.5 - 1.0).max(0.0);
-    let iz = ((main.max.z - main.min.z) * 0.5 - 1.0).max(0.0);
+    // Inset 3.5 u from the hub edges: the server spreads players up to 1.6 u (diagonal ~2.3 u) around
+    // the spawn point, plus half a player width - a 1 u inset put some players over the void.
+    let ix = ((main.max.x - main.min.x) * 0.5 - 3.5).max(0.0);
+    let iz = ((main.max.z - main.min.z) * 0.5 - 3.5).max(0.0);
     let candidates = [
         (cx, cz),
         (cx - ix, cz - iz),
@@ -1849,19 +1851,38 @@ fn design_max_gap(dy: f32) -> Option<f32> {
     }
 }
 
-/// Directed edge: can a player land on `to` from `from` (touching step-up <= 0.55 u, a
-/// design-envelope jump, or a jump pad reaching +4.0 u within 5.0 u)?
+/// Directed edge: can a player land on `to` from `from`?
+///
+/// Touching edges (gap <= EPS) are walk/step/drop edges and are always fair:
+///   * a touching step (|rise| <= 0.55 u) is walkable, and
+///   * a touching drop (rise < -0.55 u) is always fine (walk off the edge, no
+///     landing-width requirement).
+/// Every other edge is a JUMP edge (including a touching upward rise above the step
+/// limit) and must be fair for humans too:
+///   * the landing platform's smaller horizontal extent must be >= 2.0 u (this applies
+///     to jump pads used as landing targets as well, no exception), and
+///   * the edge-to-edge gap must be <= (design max gap for its rise) - 1.0 u comfort.
+/// Jump pads keep their pad-launch rule (rise <= +4.0 u within 5.0 u), but their
+/// targets still need the >= 2.0 u smaller extent.
 fn can_jump_or_step(from: &Platform, to: &Platform) -> bool {
     let dt = to.bounds.max.y - from.bounds.max.y;
     let gap = rect_gap(&from.bounds, &to.bounds);
-    if from.kind == PLATFORM_JUMP_PAD && dt <= 4.0 + EPS && gap <= 5.0 + EPS {
-        return true;
-    }
     if gap <= EPS && dt.abs() <= 0.55 + EPS {
-        return true;
+        return true; // touching walk/step
+    }
+    if gap <= EPS && dt < -0.55 {
+        return true; // touching drop (gap ~0, rise < -0.55): always fine
+    }
+    let small =
+        (to.bounds.max.x - to.bounds.min.x).min(to.bounds.max.z - to.bounds.min.z);
+    if small < 2.0 - EPS {
+        return false; // unfair landing: jumping onto a ledge thinner than 2.0 u
+    }
+    if from.kind == PLATFORM_JUMP_PAD && dt <= 4.0 + EPS && gap <= 5.0 + EPS {
+        return true; // pad launch; landing still needs the >= 2.0 u extent (checked above)
     }
     let Some(limit) = design_max_gap(dt) else { return false; };
-    gap <= limit + EPS
+    gap <= limit - 1.0 + EPS // comfort margin: 1.0 u inside the design envelope
 }
 
 /// Full structural check plus reachability. Checks ids, platform kinds, spawn on platform
@@ -2457,9 +2478,11 @@ pub fn generate_with_catalog(cat: &Catalog, seed: u32, level: u32, players: u32)
 /// The directed platform graph used for reachability checks, exposed so integration tests
 /// plan routes over exactly the same edges `validate` uses: an edge `i -> j` exists iff a
 /// player can get from platform `i`'s top to platform `j`'s top — touching with rise <=
-/// 0.55 u, a design-envelope jump edge-to-edge (`design_max_gap`), or a jump pad reaching
-/// +4.0 u within 5.0 u. All edges are admitted through the same [`can_jump_or_step`] test,
-/// so this is by construction the same graph `validate` checks.
+/// 0.55 u (or a touching drop, rise < -0.55 u at gap ~0), a fair design-envelope jump
+/// edge-to-edge (design max gap for the rise minus a 1.0 u comfort margin, landing's
+/// smaller horizontal extent >= 2.0 u), or a jump pad reaching +4.0 u within 5.0 u
+/// (landing still >= 2.0 u). All edges are admitted through the same [`can_jump_or_step`]
+/// test, so this is by construction the same graph `validate` checks.
 pub fn platform_graph(level: &LevelData) -> Vec<Vec<usize>> {
     let platforms = &level.platforms;
     let n = platforms.len();
