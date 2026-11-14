@@ -1,10 +1,14 @@
 'use client';
 
 // Shown from the title page. The player pastes the address the host saw in
-// their hosting panel; we navigate the window to <address>/play/.
+// their hosting panel; we navigate the window to <address>/play/. The lobby
+// browser (MatchList) above the form lists open lobbies from the matchmaker;
+// joinable entries navigate through the exact same path.
 import { useMemo, useState } from 'react';
 import type { FormEvent, JSX } from 'react';
 import { parseJoinAddress } from './join';
+import { MatchList } from './MatchList';
+import { resolveJoinUrl } from './matchmaker';
 
 const MAGENTA = '#ff3db8';
 const CYAN = '#38e8ff';
@@ -13,6 +17,16 @@ export function JoinPanel({ onClose }: { onClose: () => void }): JSX.Element {
   const [value, setValue] = useState('');
   const [error, setError] = useState<string | null>(null);
   const parsed = useMemo(() => parseJoinAddress(value), [value]);
+
+  // Join path for a lobby-browser entry: same parse + navigate as the form.
+  const onJoinAddress = (address: string): void => {
+    const target = resolveJoinUrl(address);
+    if (target === null) {
+      setError('That listing does not contain a usable address.');
+      return;
+    }
+    window.location.assign(target);
+  };
 
   const onSubmit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
@@ -51,6 +65,8 @@ export function JoinPanel({ onClose }: { onClose: () => void }): JSX.Element {
         <p className="text-sm leading-snug text-white/80">
           Ask the player hosting the game for their address, then paste it here.
         </p>
+
+        <MatchList onJoin={onJoinAddress} />
 
         <form onSubmit={onSubmit} className="flex flex-col gap-3">
           <label
