@@ -14,6 +14,7 @@ mod content;
 mod desktop;
 mod game;
 mod host;
+mod matchmaker_client;
 mod net;
 mod run;
 
@@ -159,7 +160,8 @@ async fn run_server(startup: Startup, window_closed: Option<tokio::sync::oneshot
         .map(|d| d.subsec_nanos() ^ (d.as_secs() as u32))
         .unwrap_or(0x5eed);
     let state = game::Game::starting_at(start_level, seed).map_err(|e| format!("cannot start: {e}"))?;
-    let game = tokio::spawn(game::run(game_rx, state));
+    let game_state = Arc::new(matchmaker_client::GameStateHandle::new());
+    let game = tokio::spawn(game::run(game_rx, state, Arc::clone(&game_state)));
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -181,7 +183,9 @@ async fn run_server(startup: Startup, window_closed: Option<tokio::sync::oneshot
         None => tracing::info!("no built web client found (dev mode): run the web dev server separately"),
     }
 
-    let host_manager = Arc::new(host::HostManager::new(addr.port(), host_port, forced_open));
+    let mut host_manager = host::HostManager::new(addr.port(), host_port, forced_open);
+    host_manager.set_game_state(Arc::clone(&game_state));
+    let host_manager = Arc::new(host_manager);
     {
         let status = host_manager.status().await;
         if let Ok(json) = serde_json::to_string(&status) {
@@ -196,6 +200,9 @@ async fn run_server(startup: Startup, window_closed: Option<tokio::sync::oneshot
             tracing::info!("hosting is off: only this computer can play. Turn it on in the game.");
         }
     }
+    // Forced-open hosts (the Render deployment) are listed on the matchmaker from the start;
+    // normal hosts register when the hosting toggle settles. Never fails the server.
+    host_manager.register_if_forced_open().await;
 
     let app = net::router(game_tx, web_dir, Arc::clone(&host_manager));
     let serve = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())

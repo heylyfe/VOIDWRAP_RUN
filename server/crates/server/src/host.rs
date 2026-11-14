@@ -1,7 +1,15 @@
 //! In-game hosting for friends: an extra listener on `0.0.0.0:<HOST_PORT>` serving the
 //! same router and the same game over the LAN, plus a best-effort UPnP port mapping
 //! ("VOIDWRAP RUN", TCP HOST_PORT, 2 hours) so friends on the internet can join too.
+//!
+//! Also lists the host on the matchmaker once hosting settles (after the UPnP
+//! attempt), heartbeats every 10 seconds, and delists on stop/shutdown. The
+//! matchmaker is optional infrastructure: being unable to reach it never affects the game.
 
+use crate::matchmaker_client::{
+    GameStateHandle, HeartbeatOutcome, HeartbeatRequest, MatchmakerClient, MatchmakerConfig, MatchmakerSession,
+    RegisterRequest,
+};
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -13,6 +21,10 @@ pub const DEFAULT_HOST_PORT: u16 = 7879;
 /// How long the router is asked to keep the UPnP port mapping.
 const UPNP_LEASE_SECS: u64 = 2 * 60 * 60;
 /// How often an open UPnP mapping is renewed (well inside the 2 hour lease).
+///
+/// Lease-expiry choice: the mapping is re-asserted every 90 minutes (it never
+/// silently lapses). If a re-assert fails, the UPnP state becomes `Failed` and the
+/// next heartbeat carries `joinable: false` until the router is asked again.
 const UPNP_RENEW_INTERVAL: Duration = Duration::from_secs(90 * 60);
 /// How long to wait for the UPnP gateway to answer the gateway search.
 const UPNP_SEARCH_TIMEOUT: Duration = Duration::from_secs(3);
@@ -24,6 +36,14 @@ const HOST_STOP_TIMEOUT: Duration = Duration::from_secs(2);
 const UPNP_DESCRIPTION: &str = "VOIDWRAP RUN";
 /// Message used when the server itself listens on all interfaces (`VOIDWRAP_HOST=0.0.0.0`).
 const FORCED_OPEN_MESSAGE: &str = "Hosting is on because VOIDWRAP_HOST=0.0.0.0 was set when the server started. Friends can join with the addresses below.";
+/// How often the matchmaker is heartbeated while hosting.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
+/// Display name reported to the matchmaker.
+const MATCHMAKER_NAME: &str = "VOIDWRAP RUN";
+/// Maximum players reported to the matchmaker (the game has no hard cap today).
+const MAX_PLAYERS: u32 = 8;
+/// Workspace game version reported to the matchmaker.
+const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// UPnP state shown to the player: "off" | "trying" | "open" | "failed".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -129,12 +149,49 @@ pub fn lan_ipv4_addresses() -> Vec<String> {
     private_ipv4_strings(&found)
 }
 
+/// Compute the `joinable` flag reported to the matchmaker.
+///
+/// A forced-open host (the Render deployment) is always joinable. A normal host is
+/// joinable only while its UPnP mapping is open; waiting on the router or a lapsed
+/// mapping reports `joinable: false`.
+fn matchmaker_joinable(forced_open: bool, upnp: UpnpStatus) -> bool {
+    forced_open || upnp == UpnpStatus::Open
+}
+
+/// Cross-check the address we send with the matchmaker's echo.
+///
+/// On a mismatch the matchmaker's address wins (it may know how the world reaches us,
+/// for example when the router reports no public address) and a warning is logged.
+/// The sent address is kept only when the matchmaker reports none.
+fn reconcile_echo(sent: Option<&str>, echo: Option<&str>) -> Option<String> {
+    match (sent, echo) {
+        (Some(sent), Some(echo)) => {
+            if sent != echo {
+                tracing::warn!("matchmaker reports address {echo}, we sent {sent}; trusting the matchmaker");
+            }
+            Some(echo.to_string())
+        }
+        (None, Some(echo)) => Some(echo.to_string()),
+        (Some(_), None) => {
+            tracing::debug!("matchmaker did not report the address it recorded; keeping {sent:?}");
+            sent.map(str::to_string)
+        }
+        (None, None) => None,
+    }
+}
+
 /// Shared hosting state for the HTTP routes and the server. Clone into `Arc`s.
 pub struct HostManager {
     main_port: u16,
     host_port: u16,
     forced_open: bool,
     inner: Mutex<HostInner>,
+    /// Matchmaker connection settings (`MATCHMAKER_URL`, `PUBLIC_ORIGIN`).
+    matchmaker: MatchmakerConfig,
+    /// Matchmaker HTTP client shared with the heartbeat task.
+    matchmaker_client: MatchmakerClient,
+    /// Live game state published by the game task (players/level/phase).
+    game_state: Arc<GameStateHandle>,
 }
 
 struct HostInner {
@@ -150,12 +207,25 @@ struct HostInner {
     upnp: UpnpStatus,
     /// Public IP as reported by the router, if any.
     public: Option<IpAddr>,
+    /// Matchmaker listing session, present while registered; taken on stop/delist.
+    matchmaker: Option<MatchmakerSession>,
+    /// Background registration/heartbeat task, spawned once hosting settles; aborted on stop.
+    matchmaker_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl HostManager {
     /// Create a manager. `forced_open` must be true when the server itself already
     /// listens on all interfaces (`VOIDWRAP_HOST=0.0.0.0` or `PORT` set).
+    ///
+    /// The matchmaker is configured from `MATCHMAKER_URL` (default
+    /// `http://localhost:8080`) and `PUBLIC_ORIGIN`.
     pub fn new(main_port: u16, host_port: u16, forced_open: bool) -> Self {
+        Self::with_matchmaker(main_port, host_port, forced_open, MatchmakerConfig::from_env())
+    }
+
+    /// Create a manager with explicit matchmaker settings (used by tests).
+    pub fn with_matchmaker(main_port: u16, host_port: u16, forced_open: bool, matchmaker: MatchmakerConfig) -> Self {
+        let matchmaker_client = MatchmakerClient::new(&matchmaker.url);
         Self {
             main_port,
             host_port,
@@ -167,8 +237,18 @@ impl HostManager {
                 renewal: None,
                 upnp: UpnpStatus::Off,
                 public: None,
+                matchmaker: None,
+                matchmaker_task: None,
             }),
+            matchmaker,
+            matchmaker_client,
+            game_state: Arc::new(GameStateHandle::new()),
         }
+    }
+
+    /// Share the game task's live state with the heartbeat (call once at startup).
+    pub fn set_game_state(&mut self, state: Arc<GameStateHandle>) {
+        self.game_state = state;
     }
 
     /// Port reported to friends.
@@ -178,6 +258,15 @@ impl HostManager {
         } else {
             self.host_port
         }
+    }
+
+    /// Address to register: forced-open hosts advertise `PUBLIC_ORIGIN`; everyone else
+    /// prefers the router-reported public address (`inner.public`).
+    fn registration_address(&self, inner: &HostInner) -> Option<String> {
+        if self.forced_open {
+            return self.matchmaker.public_origin.clone();
+        }
+        inner.public.map(|ip| ip.to_string())
     }
 
     /// Build the JSON status from a locked inner state (synchronous).
@@ -219,6 +308,16 @@ impl HostManager {
     pub async fn status(&self) -> HostStatus {
         let inner = self.inner.lock().await;
         self.snapshot(&inner)
+    }
+
+    /// Register with the matchmaker when hosting was forced open at startup (the Render
+    /// deployment): a forced-open server never calls [`HostManager::start_hosting`], so
+    /// this is the hook that lists it (`joinable: true`, address from `PUBLIC_ORIGIN`).
+    /// A no-op otherwise; never fails the server.
+    pub async fn register_if_forced_open(self: &Arc<Self>) {
+        if self.forced_open {
+            self.matchmaker_settle().await;
+        }
     }
 
     /// Start the hosting listener (no-op when already hosting or when forced open).
@@ -269,20 +368,30 @@ impl HostManager {
         self.status().await
     }
 
-    /// Stop hosting: close the listener and remove the UPnP mapping (best effort).
+    /// Stop hosting: close the listener, remove the UPnP mapping (best effort) and delist
+    /// from the matchmaker (best effort; the request is time-bounded and shutdown is never blocked).
     pub async fn stop_hosting(&self) -> HostStatus {
         if self.forced_open {
             // Keep today's behaviour: the main listener stays open; only the report changes.
             return self.status().await;
         }
-        let (shutdown, task, gateway) = {
+        let (shutdown, task, gateway, matchmaker_session) = {
             let mut inner = self.inner.lock().await;
             if let Some(renewal) = inner.renewal.take() {
                 renewal.abort();
             }
+            if let Some(matchmaker_task) = inner.matchmaker_task.take() {
+                matchmaker_task.abort();
+            }
             inner.upnp = UpnpStatus::Off;
             inner.public = None;
-            (inner.shutdown.take(), inner.listener.take(), inner.gateway.take())
+            let session = inner.matchmaker.take();
+            (
+                inner.shutdown.take(),
+                inner.listener.take(),
+                inner.gateway.take(),
+                session,
+            )
         };
         if let Some(tx) = shutdown {
             let _ = tx.send(());
@@ -296,6 +405,11 @@ impl HostManager {
         }
         if let Some(gateway) = gateway {
             let _ = tokio::time::timeout(UPNP_REMOVE_TIMEOUT, upnp_close(gateway, self.host_port)).await;
+        }
+        if let Some(session) = matchmaker_session
+            && !self.matchmaker_client.delist(&session.id, &session.secret).await
+        {
+            tracing::debug!("matchmaker: delist did not confirm; the entry expires on its own");
         }
         self.status().await
     }
@@ -333,11 +447,15 @@ impl HostManager {
                 inner.public = None;
             }
         }
+        // Hosting has settled (the router answered, or not): register with the matchmaker.
+        drop(inner);
+        self.matchmaker_settle().await;
     }
 
     /// The router only keeps the mapping for the lease (2 hours): re-open it every
     /// [`UPNP_RENEW_INTERVAL`] while it is open. A failed renewal marks UPnP as failed
-    /// (the status message then tells the player); LAN friends keep working.
+    /// (the status message then tells the player) and flips the next heartbeat's
+    /// `joinable` to false; LAN friends keep working.
     async fn upnp_renew_loop(self: Arc<Self>) {
         loop {
             tokio::time::sleep(UPNP_RENEW_INTERVAL).await;
@@ -362,6 +480,107 @@ impl HostManager {
                     inner.public = None;
                     inner.renewal = None;
                     return;
+                }
+            }
+        }
+    }
+
+    /// Spawn the registration/heartbeat task once, now that hosting is active (called when
+    /// hosting settles, i.e. after the UPnP attempt for normal hosts, and at startup for
+    /// forced-open hosts). A no-op when the task already runs or hosting is off.
+    async fn matchmaker_settle(self: &Arc<Self>) {
+        {
+            let inner = self.inner.lock().await;
+            if !self.matchmaker_active(&inner) || inner.matchmaker_task.is_some() {
+                return;
+            }
+        }
+        let mut inner = self.inner.lock().await;
+        if !self.matchmaker_active(&inner) || inner.matchmaker_task.is_some() {
+            return;
+        }
+        let manager = Arc::clone(self);
+        inner.matchmaker_task = Some(tokio::spawn(async move {
+            manager.matchmaker_loop().await;
+        }));
+    }
+
+    /// True while this host should be listed on the matchmaker.
+    fn matchmaker_active(&self, inner: &HostInner) -> bool {
+        self.forced_open || inner.listener.is_some()
+    }
+
+    /// Registration/heartbeat loop. Registers first when there is no session, then heartbeats
+    /// every [`HEARTBEAT_INTERVAL`]. An unreachable matchmaker is logged at debug and retried
+    /// on the next tick; a 404/403 response drops the session so the next tick re-registers.
+    /// Returns (and is never re-spawned by itself) once hosting is no longer active.
+    async fn matchmaker_loop(self: Arc<Self>) {
+        let mut interval = tokio::time::interval(HEARTBEAT_INTERVAL);
+        loop {
+            interval.tick().await;
+            let (players, level, phase, joinable, port, address) = {
+                let inner = self.inner.lock().await;
+                if !self.matchmaker_active(&inner) {
+                    return;
+                }
+                let game = self.game_state.snapshot();
+                (
+                    game.players,
+                    game.level,
+                    game.phase,
+                    matchmaker_joinable(self.forced_open, inner.upnp),
+                    self.reported_port(),
+                    self.registration_address(&inner),
+                )
+            };
+            let session = self.inner.lock().await.matchmaker.clone();
+            match session {
+                None => {
+                    let body = RegisterRequest {
+                        name: MATCHMAKER_NAME.to_string(),
+                        version: GAME_VERSION.to_string(),
+                        port,
+                        players,
+                        max_players: MAX_PLAYERS,
+                        level: level.to_string(),
+                        phase,
+                        joinable,
+                        address: address.clone(),
+                    };
+                    match self.matchmaker_client.register(&body).await {
+                        Some(response) => {
+                            let address = reconcile_echo(address.as_deref(), response.address.as_deref());
+                            let mut inner = self.inner.lock().await;
+                            inner.matchmaker = Some(MatchmakerSession {
+                                id: response.id,
+                                secret: response.secret,
+                                address,
+                            });
+                            tracing::info!("registered with the matchmaker (joinable: {joinable})");
+                        }
+                        None => {
+                            // Debug details were logged inside the client; the next beat registers again.
+                        }
+                    }
+                }
+                Some(session) => {
+                    let body = HeartbeatRequest {
+                        secret: session.secret.clone(),
+                        players,
+                        level: level.to_string(),
+                        phase,
+                        joinable,
+                    };
+                    match self.matchmaker_client.heartbeat(&session.id, &body).await {
+                        HeartbeatOutcome::Ok => {}
+                        HeartbeatOutcome::Expired => {
+                            tracing::debug!(
+                                "matchmaker: entry expired or rejected; registering again on the next beat"
+                            );
+                            self.inner.lock().await.matchmaker = None;
+                        }
+                        HeartbeatOutcome::Unreachable => {}
+                    }
                 }
             }
         }
@@ -555,6 +774,77 @@ mod tests {
         assert!(!off.enable);
     }
 
+    #[test]
+    fn joinable_reflects_forced_open_and_lease_lapse() {
+        // Lease-expiry choice: the mapping is re-asserted every UPNP_RENEW_INTERVAL; if a
+        // re-assert fails, UPnP becomes Failed and the next heartbeat reports joinable: false.
+        assert!(matchmaker_joinable(true, UpnpStatus::Open));
+        assert!(matchmaker_joinable(true, UpnpStatus::Failed));
+        assert!(matchmaker_joinable(true, UpnpStatus::Trying));
+        assert!(matchmaker_joinable(true, UpnpStatus::Off));
+        assert!(matchmaker_joinable(false, UpnpStatus::Open));
+        assert!(!matchmaker_joinable(false, UpnpStatus::Failed));
+        assert!(!matchmaker_joinable(false, UpnpStatus::Trying));
+        assert!(!matchmaker_joinable(false, UpnpStatus::Off));
+    }
+
+    #[test]
+    fn echo_mismatch_trusts_the_matchmaker() {
+        assert_eq!(
+            reconcile_echo(Some("1.2.3.4"), Some("5.6.7.8")).as_deref(),
+            Some("5.6.7.8")
+        );
+        assert_eq!(
+            reconcile_echo(Some("1.2.3.4"), Some("1.2.3.4")).as_deref(),
+            Some("1.2.3.4")
+        );
+        assert_eq!(reconcile_echo(None, Some("5.6.7.8")).as_deref(), Some("5.6.7.8"));
+        assert_eq!(reconcile_echo(Some("1.2.3.4"), None).as_deref(), Some("1.2.3.4"));
+        assert_eq!(reconcile_echo(None, None), None);
+    }
+
+    #[test]
+    fn stops_and_reports_matchmaker_config_defaults() {
+        let manager = HostManager::new(7878, 7879, false);
+        assert_eq!(manager.matchmaker.url, crate::matchmaker_client::DEFAULT_MATCHMAKER_URL);
+    }
+
+    #[tokio::test]
+    async fn stop_hosting_delists_best_effort_when_matchmaker_unreachable() {
+        let config = MatchmakerConfig {
+            url: "http://127.0.0.1:9".to_string(),
+            public_origin: None,
+        };
+        let manager = HostManager::with_matchmaker(7878, 0, false, config);
+        {
+            let mut inner = manager.inner.lock().await;
+            inner.matchmaker = Some(MatchmakerSession {
+                id: "id".to_string(),
+                secret: "secret".to_string(),
+                address: None,
+            });
+        }
+        // Must not panic, hang or become an error; the entry expires on its own at the matchmaker.
+        let status = manager.stop_hosting().await;
+        assert!(!status.hosting);
+        assert!(manager.inner.lock().await.matchmaker.is_none());
+    }
+
+    #[tokio::test]
+    async fn hosting_works_with_the_matchmaker_unreachable() {
+        let config = MatchmakerConfig {
+            url: "http://127.0.0.1:9".to_string(),
+            public_origin: None,
+        };
+        let manager = Arc::new(HostManager::with_matchmaker(7878, 0, false, config));
+        // Port 0 binds an ephemeral port; the UPnP attempt fails (invalid port) or
+        // times out harmlessly in the background; the matchmaker at 127.0.0.1:9 refuses.
+        let status = manager.start_hosting(axum::Router::new()).await;
+        assert!(status.hosting);
+        let status = manager.stop_hosting().await;
+        assert!(!status.hosting);
+    }
+
     #[tokio::test]
     async fn manager_starts_off_and_stop_is_noop_when_off() {
         let manager = HostManager::new(7878, 7879, false);
@@ -574,5 +864,18 @@ mod tests {
         assert_eq!(status.port, 7878);
         let status = manager.stop_hosting().await;
         assert!(status.hosting);
+    }
+
+    #[tokio::test]
+    async fn forced_open_host_registers_with_public_origin() {
+        let config = MatchmakerConfig {
+            url: "http://127.0.0.1:9".to_string(),
+            public_origin: Some("https://voidwrap.example.com".to_string()),
+        };
+        let manager = Arc::new(HostManager::with_matchmaker(7878, 7879, true, config));
+        // The matchmaker is unreachable, so this returns without surfacing an error,
+        // but it exercises the forced-open registration path.
+        manager.register_if_forced_open().await;
+        assert!(manager.inner.lock().await.matchmaker_task.is_some());
     }
 }

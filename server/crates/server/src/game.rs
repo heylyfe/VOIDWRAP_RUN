@@ -15,6 +15,7 @@
 //! otherwise the run is over. Solo is the same rule with one player.
 
 use crate::content::Content;
+use crate::matchmaker_client::GameStateHandle;
 use crate::run::{Run, ShopError, ShopPurchase};
 use protocol::{
     BTN_ABILITY, BTN_INTERACT, BTN_JUMP, CARD_ENEMY, CLASS_GLIDER, CLASS_STRIKER, ClientMsg, ControllerState,
@@ -24,6 +25,7 @@ use protocol::{
 };
 use sim::controller;
 use std::collections::{BTreeMap, VecDeque};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
@@ -832,7 +834,7 @@ fn sanitize_name(raw: &str) -> String {
 }
 
 /// Runs the game until every sender is gone.
-pub async fn run(mut rx: mpsc::Receiver<GameEvent>, mut game: Game) {
+pub async fn run(mut rx: mpsc::Receiver<GameEvent>, mut game: Game, game_state: Arc<GameStateHandle>) {
     let period = Duration::from_millis(1000 / u64::from(TICK_HZ));
     let mut interval = tokio::time::interval(period);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
@@ -843,6 +845,11 @@ pub async fn run(mut rx: mpsc::Receiver<GameEvent>, mut game: Game) {
             biased;
             _ = interval.tick() => {
                 game.tick();
+                game_state.publish(
+                    game.player_count() as u32,
+                    game.run.level_num,
+                    game.run.phase,
+                );
                 window_ticks += 1;
                 tracing::trace!(tick = game.tick_count(), "tick");
                 let elapsed = window_start.elapsed();
