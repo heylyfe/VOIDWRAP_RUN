@@ -17,6 +17,11 @@ use protocol::{
     TILE_WARN, TileState, Vec3,
 };
 
+use crate::rules::enemies::kite::{KITE_LOCK_TICKS, KITE_RECOVER_TICKS, KitePhase};
+use crate::rules::enemies::peal::{PEAL_CHIME_TICKS, PEAL_REST_TICKS, PealPhase};
+use crate::rules::enemies::rewind::{REWIND_FADE_TICKS, REWIND_TREMBLE_TICKS, RewindPhase};
+use crate::rules::enemies::r#static::{STATIC_VANISH_TICKS, StaticPhase};
+use crate::rules::enemies::warden::{WARDEN_FRENZY_WIND_TICKS, WARDEN_RECOVER_TICKS, WARDEN_WIND_TICKS, WardenPhase};
 use crate::rules::{
     Brain, CorrupterBrain, CorrupterPhase, ENEMY_HIT_FORGIVENESS, Enemy, GalePhase, GaleWightBrain, LanternLeechBrain,
     LeechPhase, MimicBrain, MimicPhase, MotelingBrain, MotelingPhase, PallbearerBrain, PallbearerPhase, RiftPhase,
@@ -712,6 +717,9 @@ fn step_one(h: &mut Hazards, index: usize, e: &mut Enemy, ctx: &Ctx, fx: &mut Ve
         Brain::Turret(b) => turret_step(h, &mut e.pos, b, speed_mul, ctx),
         Brain::Mimic(b) => mimic_step(&mut e.pos, b, speed_mul, ctx, fx),
         Brain::Corrupter(b) => corrupter_step(h, &mut e.pos, b, speed_mul, &home, ctx),
+        // The five registry brains are stepped by the server through `Brain::step`
+        // (see `rules::Brain::step`); the sim's hazard pass leaves them where they are.
+        Brain::Rewind(_) | Brain::Warden(_) | Brain::Peal(_) | Brain::Kite(_) | Brain::Static(_) => {}
     }
     // The pallbearer never descends below y = 0.
     if e.pos.y < 0.0 {
@@ -1567,6 +1575,26 @@ fn corrupter_step(h: &mut Hazards, pos: &mut Vec3, b: &mut CorrupterBrain, speed
 /// Interrupt an enemy into its post-attack cooldown state (Bulwark pulse).
 fn cooldown_state(enemy: &mut Enemy) {
     match &mut enemy.brain {
+        Brain::Rewind(b) => {
+            b.phase = RewindPhase::Fade;
+            b.timer = REWIND_FADE_TICKS;
+        }
+        Brain::Warden(b) => {
+            b.phase = WardenPhase::Recover;
+            b.timer = WARDEN_RECOVER_TICKS;
+        }
+        Brain::Peal(b) => {
+            b.phase = PealPhase::Rest;
+            b.timer = PEAL_REST_TICKS;
+        }
+        Brain::Kite(b) => {
+            b.phase = KitePhase::Recover;
+            b.timer = KITE_RECOVER_TICKS;
+        }
+        Brain::Static(b) => {
+            b.phase = StaticPhase::Vanish;
+            b.timer = STATIC_VANISH_TICKS;
+        }
         Brain::Pallbearer(b) => {
             b.phase = PallbearerPhase::Recover;
             b.timer = PALLBEARER_RECOVER_TICKS;
@@ -1781,6 +1809,59 @@ fn view_of(enemy: &Enemy) -> protocol::EnemyView {
         Brain::Corrupter(b) => match b.phase {
             CorrupterPhase::Drift => (ENEMY_HUNTING, ZERO(), 0, 0),
             CorrupterPhase::ReForm => (ENEMY_RECOVER, ZERO(), 0, 0),
+        },
+        Brain::Rewind(b) => match b.phase {
+            RewindPhase::Tremble => {
+                let elapsed = REWIND_TREMBLE_TICKS - b.timer;
+                (
+                    ENEMY_TELEGRAPH,
+                    b.mark,
+                    telegraph_prog(elapsed, REWIND_TREMBLE_TICKS),
+                    0,
+                )
+            }
+            RewindPhase::Replay => (ENEMY_ATTACK, b.mark, 255, 0),
+            RewindPhase::Fade => (ENEMY_RECOVER, ZERO(), 0, 0),
+        },
+        Brain::Warden(b) => match b.phase {
+            WardenPhase::Patrol => (ENEMY_HUNTING, ZERO(), 0, 0),
+            WardenPhase::Wind => {
+                // The frenzy wind is the shorter of the two; pick whichever the timer
+                // was set from so the decal fills at the right rate.
+                let wind = if b.timer <= WARDEN_FRENZY_WIND_TICKS {
+                    WARDEN_FRENZY_WIND_TICKS
+                } else {
+                    WARDEN_WIND_TICKS
+                };
+                let elapsed = wind.saturating_sub(b.timer);
+                (ENEMY_TELEGRAPH, b.ring_centre, telegraph_prog(elapsed, wind), 0)
+            }
+            WardenPhase::Lunge => (ENEMY_ATTACK, b.locked, 255, 0),
+            WardenPhase::Recover => (ENEMY_RECOVER, ZERO(), 0, 0),
+        },
+        Brain::Peal(b) => match b.phase {
+            PealPhase::Idle => (ENEMY_HUNTING, ZERO(), 0, 0),
+            PealPhase::Chime => {
+                let elapsed = PEAL_CHIME_TICKS - b.timer;
+                (ENEMY_TELEGRAPH, b.centre, telegraph_prog(elapsed, PEAL_CHIME_TICKS), 0)
+            }
+            PealPhase::Ring => (ENEMY_ATTACK, b.centre, 255, 0),
+            PealPhase::Rest => (ENEMY_RECOVER, ZERO(), 0, 0),
+        },
+        Brain::Kite(b) => match b.phase {
+            KitePhase::Hunt => (ENEMY_HUNTING, ZERO(), 0, 0),
+            KitePhase::Lock => {
+                let elapsed = KITE_LOCK_TICKS - b.timer;
+                (ENEMY_TELEGRAPH, b.marker, telegraph_prog(elapsed, KITE_LOCK_TICKS), 0)
+            }
+            KitePhase::Strike => (ENEMY_ATTACK, b.marker, 255, 0),
+            KitePhase::Recover => (ENEMY_RECOVER, ZERO(), 0, 0),
+        },
+        Brain::Static(b) => match b.phase {
+            StaticPhase::Track => (ENEMY_HUNTING, b.fog_centre, 0, 0),
+            StaticPhase::Dash => (ENEMY_TELEGRAPH, b.locked, 255, 0),
+            StaticPhase::Strike => (ENEMY_ATTACK, b.locked, 255, 0),
+            StaticPhase::Vanish => (ENEMY_RECOVER, ZERO(), 0, 0),
         },
     };
     protocol::EnemyView {

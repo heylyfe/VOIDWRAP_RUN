@@ -10,6 +10,15 @@ use protocol::{Aabb, Gift, Vec3};
 
 use crate::controller::player_box;
 
+/// Brains for the registry enemies implemented in T-074.
+///
+/// The `#[path]` attribute keeps the module declaration here so `lib.rs` does not
+/// have to change; move it to `lib.rs` and drop the attribute if you prefer.
+#[path = "enemies/mod.rs"]
+pub mod enemies;
+
+use self::enemies::{EnemyAction, KiteBrain, PealBrain, RewindBrain, StaticBrain, StepContext, WardenBrain};
+
 /// A gift is collected when the player centre is within this distance of it.
 pub const GIFT_RADIUS: f32 = 1.1;
 /// Horizontal radius in which the beacon counts as reached.
@@ -17,7 +26,7 @@ pub const BEACON_RADIUS: f32 = 1.5;
 /// Vertical tolerance for standing on the beacon's platform.
 pub const BEACON_HEIGHT: f32 = 1.0;
 
-/// Behaviour tag: pallbearer (behaviour order 0..=8, one per enemy id).
+/// Behaviour tag: pallbearer (behaviour order 0..=13, one per enemy id).
 /// Legacy kind tag used by the hand-made test levels (kind is a content index now).
 pub const ENEMY_KIND_CHASER: u8 = 0;
 
@@ -38,6 +47,16 @@ pub const BEHAVIOR_TURRET: u8 = 6;
 pub const BEHAVIOR_MIMIC: u8 = 7;
 /// Behaviour tag: corrupter (crumble wisp).
 pub const BEHAVIOR_CORRUPTER: u8 = 8;
+/// Behaviour tag: rewind (path replayer).
+pub const BEHAVIOR_REWIND: u8 = 9;
+/// Behaviour tag: warden (gift guard).
+pub const BEHAVIOR_WARDEN: u8 = 10;
+/// Behaviour tag: peal (bell ringer).
+pub const BEHAVIOR_PEAL: u8 = 11;
+/// Behaviour tag: kite (tether marker).
+pub const BEHAVIOR_KITE: u8 = 12;
+/// Behaviour tag: static (fog dasher).
+pub const BEHAVIOR_STATIC: u8 = 13;
 
 /// Ticks a freshly spawned enemy stays dormant when spawned without explicit params (4 s at 20 Hz).
 pub const DEFAULT_GRACE_TICKS: u32 = 80;
@@ -46,6 +65,35 @@ pub const PALLBEARER_WAKE_TICKS: u32 = 90;
 
 /// Fraction of the drawn body radius that actually shoves (and that `enemy_touches` uses).
 pub const ENEMY_HIT_FORGIVENESS: f32 = 0.85;
+
+/// Persistent per-player debuff state that enemy brains read.
+///
+/// The server owns one of these per player and ticks it once per enemy tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PlayerStatus {
+    /// Ticks left of OVERTUNED; 0 means the player is not overtuned.
+    pub overtuned_ticks: u32,
+}
+
+impl PlayerStatus {
+    /// Ticks of OVERTUNED one Peal ring applies (6.0 s at 20 Hz).
+    pub const OVERTUNED_TICKS: u32 = 120;
+
+    /// Apply OVERTUNED for `ticks`, keeping the longer of the two timers.
+    pub fn apply_overtuned(&mut self, ticks: u32) {
+        self.overtuned_ticks = self.overtuned_ticks.max(ticks);
+    }
+
+    /// Advance the timers by one enemy tick.
+    pub fn tick(&mut self) {
+        self.overtuned_ticks = self.overtuned_ticks.saturating_sub(1);
+    }
+
+    /// True while the player carries OVERTUNED.
+    pub fn is_overtuned(&self) -> bool {
+        self.overtuned_ticks > 0
+    }
+}
 
 /// Per-enemy tuning supplied at spawn (content + curses). Per-enemy design numbers live
 /// in `crate::hazards` as named constants.
@@ -448,6 +496,16 @@ pub enum Brain {
     Turret(TurretBrain),
     Mimic(MimicBrain),
     Corrupter(CorrupterBrain),
+    /// Rewind: replays a player's path from 1.5 s ago.
+    Rewind(RewindBrain),
+    /// Warden: guards the densest gift cluster.
+    Warden(WardenBrain),
+    /// Peal: teleports and rings; lethal only to OVERTUNED players.
+    Peal(PealBrain),
+    /// Kite: locks the most isolated player and detonates a marker.
+    Kite(KiteBrain),
+    /// Static: fog-bound dasher that vanishes after each strike.
+    Static(StaticBrain),
 }
 
 impl Brain {
@@ -462,7 +520,30 @@ impl Brain {
             BEHAVIOR_TURRET => Brain::Turret(TurretBrain::default()),
             BEHAVIOR_MIMIC => Brain::Mimic(MimicBrain::default()),
             BEHAVIOR_CORRUPTER => Brain::Corrupter(CorrupterBrain::default()),
+            BEHAVIOR_REWIND => Brain::Rewind(RewindBrain::default()),
+            BEHAVIOR_WARDEN => Brain::Warden(WardenBrain::default()),
+            BEHAVIOR_PEAL => Brain::Peal(PealBrain::default()),
+            BEHAVIOR_KITE => Brain::Kite(KiteBrain::default()),
+            BEHAVIOR_STATIC => Brain::Static(StaticBrain::default()),
             _ => Brain::Pallbearer(PallbearerBrain::default()),
+        }
+    }
+
+    /// Advance this brain by one 20 Hz tick and report what the server should apply.
+    ///
+    /// Only the brains implemented in [`crate::rules::enemies`] are stepped here;
+    /// the nine M3 brains keep their server-side step and return
+    /// [`EnemyAction::idle`]. The caller applies [`EnemyAction::motion`] or
+    /// [`EnemyAction::teleport`] to the enemy position and resolves
+    /// [`EnemyAction::hits`] against the players.
+    pub fn step(&mut self, pos: &Vec3, params: &EnemyParams, ctx: &StepContext<'_>) -> EnemyAction {
+        match self {
+            Brain::Rewind(b) => enemies::rewind::step(b, pos, params, ctx),
+            Brain::Warden(b) => enemies::warden::step(b, pos, params, ctx),
+            Brain::Peal(b) => enemies::peal::step(b, pos, params, ctx),
+            Brain::Kite(b) => enemies::kite::step(b, pos, params, ctx),
+            Brain::Static(b) => enemies::r#static::step(b, pos, params, ctx),
+            _ => EnemyAction::idle(),
         }
     }
 }
@@ -773,6 +854,37 @@ mod tests {
     fn for_behavior_unknown_falls_back_to_pallbearer() {
         assert!(matches!(Brain::for_behavior(99), Brain::Pallbearer(_)));
         assert!(matches!(Brain::for_behavior(BEHAVIOR_CORRUPTER), Brain::Corrupter(_)));
+    }
+
+    #[test]
+    fn for_behavior_maps_the_t074_enemies() {
+        assert!(matches!(Brain::for_behavior(BEHAVIOR_REWIND), Brain::Rewind(_)));
+        assert!(matches!(Brain::for_behavior(BEHAVIOR_WARDEN), Brain::Warden(_)));
+        assert!(matches!(Brain::for_behavior(BEHAVIOR_PEAL), Brain::Peal(_)));
+        assert!(matches!(Brain::for_behavior(BEHAVIOR_KITE), Brain::Kite(_)));
+        assert!(matches!(Brain::for_behavior(BEHAVIOR_STATIC), Brain::Static(_)));
+    }
+
+    #[test]
+    fn player_status_overtuned_timer_expires() {
+        let mut status = PlayerStatus::default();
+        assert!(!status.is_overtuned());
+        status.apply_overtuned(3);
+        assert!(status.is_overtuned());
+        status.apply_overtuned(1);
+        assert_eq!(status.overtuned_ticks, 3, "the longer timer wins");
+        for _ in 0..3 {
+            status.tick();
+        }
+        assert!(!status.is_overtuned());
+    }
+
+    #[test]
+    fn brain_step_is_idle_for_the_m3_brains() {
+        let mut brain = Brain::for_behavior(BEHAVIOR_TURRET);
+        let pos = Vec3::new(0.0, 0.0, 0.0);
+        let action = brain.step(&pos, &EnemyParams::default(), &StepContext::default());
+        assert_eq!(action, EnemyAction::idle());
     }
 
     #[test]
