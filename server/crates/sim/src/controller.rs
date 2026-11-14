@@ -134,7 +134,9 @@ fn effective_class(class: u8) -> u8 {
 ///   still applies, approaching zero); the counter decrements each frame.
 /// - PLATFORM_JUMP_PAD platforms stay solid; landing on (or resting on) one
 ///   sets `vel.y = PAD_LAUNCH_VEL` and scales horizontal velocity by
-///   [`PAD_HORIZONTAL_VEL_MUL`], once per contact.
+///   [`PAD_HORIZONTAL_VEL_MUL`], once per contact. The pad's ascent is not
+///   clipped by the variable-jump rule (that rule only caps the release of an
+///   actual jump press).
 /// - Step-up (amendment A2): a horizontal move blocked by a solid platform
 ///   whose top is at most [`STEP_HEIGHT`] above the feet is turned into a step
 ///   up onto it (horizontal motion is kept), only when grounded or within
@@ -295,7 +297,17 @@ pub fn step_with(state: &mut ControllerState, input: &InputFrame, world: &World,
         {
             state.vel.y = -GLIDE_FALL_SPEED;
         }
-        if !jump_locked && input.buttons & BTN_JUMP == 0 && state.vel.y > 0.0 {
+        // Variable jump height: cap the rise only on the release edge of an
+        // actual BTN_JUMP press (the frame the button went from held to not
+        // held). An ascent that never involved a jump press — a jump-pad
+        // launch — is not a jump to \"cut\" and keeps PAD_LAUNCH_VEL; a tapped
+        // jump is cut on its release frame, exactly as under the pre-M3 rule
+        // (the min() below is a no-op once vel.y <= JUMP_CUT_VELOCITY).
+        if !jump_locked
+            && input.buttons & BTN_JUMP == 0
+            && state.prev_buttons & BTN_JUMP != 0
+            && state.vel.y > 0.0
+        {
             state.vel.y = state.vel.y.min(JUMP_CUT_VELOCITY);
         }
     }
@@ -2490,5 +2502,133 @@ mod m3_tests {
             });
             assert_eq!(fast, brute, "grid and brute force disagree when resting at {st:?}");
         }
+    }
+}
+
+
+// T-052 r3: the pad must launch with buttons unheld, so the variable-jump rule
+// (which now only caps an actual jump release edge) must not clip the pad arc.
+#[cfg(test)]
+mod jump_pad_launch_tests {
+    use super::*;
+    use crate::tuning::PAD_LAUNCH_VEL;
+    use protocol::{EVENT_NONE, LevelData, PLATFORM_JUMP_PAD, PLATFORM_NORMAL, Platform};
+
+    fn platform(id: u16, kind: u8, min: [f32; 3], max: [f32; 3]) -> Platform {
+        Platform {
+            id,
+            kind,
+            bounds: Aabb {
+                min: Vec3::new(min[0], min[1], min[2]),
+                max: Vec3::new(max[0], max[1], max[2]),
+            },
+        }
+    }
+
+    /// The probe's world: a normal slab, then an adjacent 3x3 jump pad at the
+    /// same top height (y = 0).
+    fn probe_world() -> World {
+        World::from_level(&LevelData {
+            level: 1,
+            seed: 1,
+            spawn: Vec3::ZERO,
+            beacon: Vec3::new(0.0, -50.0, 0.0),
+            kill_y: -30.0,
+            platforms: vec![
+                platform(0, PLATFORM_NORMAL, [-10.0, -1.0, -2.0], [0.0, 0.0, 2.0]),
+                platform(1, PLATFORM_JUMP_PAD, [0.0, -1.0, -1.5], [3.0, 0.0, 1.5]),
+            ],
+            gifts: vec![],
+            event: EVENT_NONE,
+            altars: vec![],
+        })
+    }
+
+    fn idle(seq: u32) -> InputFrame {
+        InputFrame {
+            seq,
+            move_x: 0,
+            move_z: 0,
+            buttons: 0,
+        }
+    }
+
+    fn run_x(seq: u32) -> InputFrame {
+        InputFrame {
+            seq,
+            move_x: 127,
+            move_z: 0,
+            buttons: 0,
+        }
+    }
+
+    #[test]
+    fn jump_pad_launches_apex_when_walked_onto() {
+        let w = probe_world();
+        let mut s = spawn_state(Vec3::new(-6.0, 0.0, 0.0));
+        let mut max_y = 0.0f32;
+        for i in 0..120 {
+            step(&mut s, &run_x(i), &w);
+            max_y = max_y.max(s.pos.y);
+        }
+        assert!(
+            max_y >= 3.5,
+            "walking onto the pad must launch the player at least 3.5 u above it, apex {max_y}"
+        );
+    }
+
+    #[test]
+    fn jump_pad_launches_apex_when_dropped_on() {
+        let w = probe_world();
+        let mut s = spawn_state(Vec3::new(1.5, 3.0, 0.0));
+        let mut max_y = 0.0f32;
+        let mut landed = false;
+        for i in 0..120 {
+            step(&mut s, &idle(i), &w);
+            if s.grounded {
+                landed = true;
+            }
+            if landed {
+                max_y = max_y.max(s.pos.y);
+            }
+        }
+        assert!(landed, "the player must land on the pad");
+        assert!(
+            max_y >= 3.5,
+            "dropping onto the pad must launch the player at least 3.5 u above it, apex {max_y}"
+        );
+    }
+
+    #[test]
+    fn jump_pad_standing_still_does_not_relaunch_until_player_has_left() {
+        // Drop onto the pad centre with buttons unheld (vel.x stays 0, so the
+        // player falls back onto the same pad after each arc).
+        let w = probe_world();
+        let mut s = spawn_state(Vec3::new(1.5, 3.0, 0.0));
+        let mut seq = 0u32;
+        // First contact: the pad launches the player.
+        while s.vel.y != PAD_LAUNCH_VEL {
+            step(&mut s, &idle(seq), &w);
+            seq += 1;
+            assert!(seq < 300, "the pad never launched");
+        }
+        assert!(!s.grounded, "the launch leaves the pad");
+        // The pad must not fire again while the player is in this same
+        // contact. It may only fire on a later landing, i.e. after the player
+        // has left (the full arc is ~60 frames).
+        let mut relaunch_after = None;
+        for i in 0..600u32 {
+            step(&mut s, &idle(seq), &w);
+            seq += 1;
+            if s.vel.y == PAD_LAUNCH_VEL {
+                relaunch_after = Some(i);
+                break;
+            }
+        }
+        let relaunch_after = relaunch_after.expect("the pad must re-arm on the next landing");
+        assert!(
+            relaunch_after >= 30,
+            "the pad re-fired after {relaunch_after} frames; the player never left the pad"
+        );
     }
 }

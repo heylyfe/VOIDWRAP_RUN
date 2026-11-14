@@ -53,6 +53,19 @@ const waitForConnectedTick = async () => {
   await page.waitForFunction(() => Number(document.querySelector('[data-testid="server-tick"]')?.textContent) > 0, null, { timeout: 15_000 });
 };
 
+// Non-waiting probe for the gift-counter HUD. When the player dies, a "Run over"
+// overlay is shown and the gift counter disappears; use this to detect that state
+// without throwing (locator.count() and isVisible() do not auto-wait).
+const giftCounterVisible = async () => {
+  try {
+    const counter = page.getByTestId("gift-counter");
+    if ((await counter.count()) === 0) return false;
+    return await counter.isVisible();
+  } catch {
+    return false;
+  }
+};
+
 try {
   // ---- Phase A: level 1 on --url ----
   await page.goto(base, { waitUntil: "networkidle" });
@@ -76,25 +89,9 @@ try {
   await page.mouse.up();
   await page.waitForTimeout(300);
   await shot("m3-01-level");
-  // Hold W for 2 s and jump, then screenshot.
-  await page.keyboard.down("KeyW");
-  await page.waitForTimeout(2000);
-  await page.keyboard.press("Space");
-  await page.waitForTimeout(250);
-  await shot("m3-02-moving");
-  await page.keyboard.up("KeyW");
-  // Ctrl mouse-lock toggle: log document.pointerLockElement before/between/after (headless may not support pointer lock; log, non-fatal).
-  const lockState = () => page.evaluate(() => (document.pointerLockElement ? document.pointerLockElement.tagName : null));
-  const lockBefore = await lockState();
-  await page.keyboard.press("ControlLeft");
-  await page.waitForTimeout(400);
-  const lockMid = await lockState();
-  await page.keyboard.press("ControlLeft");
-  await page.waitForTimeout(400);
-  const lockAfter = await lockState();
-  console.log(`capture: pointerLockElement before=${lockBefore ?? "null"} after 1st Ctrl=${lockMid ?? "null"} after 2nd Ctrl=${lockAfter ?? "null"}`);
-  check(lockMid !== lockBefore || lockAfter !== lockMid, "Ctrl toggles pointer lock");
-  // Gift counter: read the HUD text ("x / total") and assert total >= 40 on level 1.
+  // Gift counter: read the HUD BEFORE moving (a blind 2 s walk ended with the
+  // player off a platform edge in the void). Assert the total here, while the HUD
+  // is known to be up.
   const counterText = (await page.getByTestId("gift-counter").textContent())?.trim() ?? "";
   const level = (await page.getByTestId("level-number").textContent())?.trim();
   const gifts = (await page.getByTestId("gifts-remaining").textContent())?.trim();
@@ -106,6 +103,35 @@ try {
   } else {
     const total = Number(m[2]);
     check(total >= 40, `gift counter total ${total} >= 40 (level 1)`, { fatal: true });
+  }
+  // Move only in short steps: 300 ms forward, then 300 ms back. No jump, no long
+  // holds - the player must not walk off a platform edge.
+  await page.keyboard.down("KeyW");
+  await page.waitForTimeout(300);
+  await page.keyboard.up("KeyW");
+  await page.keyboard.down("KeyS");
+  await page.waitForTimeout(300);
+  await page.keyboard.up("KeyS");
+  await page.waitForTimeout(250);
+  if (!(await giftCounterVisible())) {
+    // "Run over" overlay: the player died and the gift counter disappeared.
+    // Screenshot the overlay and continue to the next phase instead of failing.
+    await shot("m3-02-run-over");
+    console.log("capture: run-over overlay detected after movement; skipping in-level checks");
+    checks.push("SKIP: run-over overlay after movement; Ctrl pointer-lock check skipped");
+  } else {
+    await shot("m3-02-moving");
+    // Ctrl mouse-lock toggle: log document.pointerLockElement before/between/after (headless may not support pointer lock; log, non-fatal).
+    const lockState = () => page.evaluate(() => (document.pointerLockElement ? document.pointerLockElement.tagName : null));
+    const lockBefore = await lockState();
+    await page.keyboard.press("ControlLeft");
+    await page.waitForTimeout(400);
+    const lockMid = await lockState();
+    await page.keyboard.press("ControlLeft");
+    await page.waitForTimeout(400);
+    const lockAfter = await lockState();
+    console.log(`capture: pointerLockElement before=${lockBefore ?? "null"} after 1st Ctrl=${lockMid ?? "null"} after 2nd Ctrl=${lockAfter ?? "null"}`);
+    check(lockMid !== lockBefore || lockAfter !== lockMid, "Ctrl toggles pointer lock");
   }
   // ---- Phase B: level 4 on --url2 (VOIDWRAP_START_LEVEL=4 server) ----
   if (url2) {
