@@ -472,15 +472,33 @@ fn aim_dir(wx: f32, wz: f32, vel: &Vec3) -> Option<Vec3> {
     None
 }
 
-/// True when `bounds` overlap any currently solid platform. Only the platforms
-/// in the grid cells overlapped by `bounds` are tested.
+/// True when `bounds` overlap the solid volume of any currently solid
+/// platform. Only the platforms in the grid cells overlapped by `bounds` are
+/// tested.
+///
+/// A ramp's solid volume is everything below its sloped surface, so a box whose
+/// bottom sits on or above the surface at the box centre does not overlap it
+/// even when the box overlaps the ramp's bounding box.
 fn overlaps_any_solid(world: &World, bounds: &Aabb) -> bool {
+    let cx = (bounds.min.x + bounds.max.x) * 0.5;
+    let cz = (bounds.min.z + bounds.max.z) * 0.5;
     world
         .solid_candidates(bounds.min.x, bounds.min.z, bounds.max.x, bounds.max.z)
         .into_iter()
-        .any(|index| match world.solid_bounds(index) {
-            Some(solid) => overlaps(bounds, solid),
-            None => false,
+        .any(|index| {
+            let Some(solid) = world.solid_bounds(index) else {
+                return false;
+            };
+            if !overlaps(bounds, solid) {
+                return false;
+            }
+            if !world.is_ramp_at(index) {
+                return true;
+            }
+            match world.surface_top_clamped(index, cx, cz) {
+                Some(surface) => bounds.min.y < surface - GROUND_EPSILON,
+                None => false,
+            }
         })
 }
 
@@ -564,6 +582,9 @@ fn try_grapple(state: &mut ControllerState, input: &InputFrame, world: &World, c
 /// True when the feet rest on a solid top (within [`GROUND_EPSILON`]) while
 /// overlapping it in x/z and not moving upwards. Needed because a dash zeroes
 /// `vel.y`, which makes the downward Y move (and therefore `landed`) zero.
+///
+/// The top of a ramp is its sloped surface at the player's centre x/z, not
+/// `bounds.max.y`.
 fn resting_on_solid(state: &ControllerState, world: &World) -> bool {
     if state.vel.y > 0.0 {
         return false;
@@ -575,7 +596,13 @@ fn resting_on_solid(state: &ControllerState, world: &World) -> bool {
         };
         let overlaps_xz =
             b.min.x < solid.max.x && b.max.x > solid.min.x && b.min.z < solid.max.z && b.max.z > solid.min.z;
-        if overlaps_xz && (state.pos.y - solid.max.y).abs() <= GROUND_EPSILON {
+        if !overlaps_xz {
+            continue;
+        }
+        let Some(top) = world.surface_top_clamped(index, state.pos.x, state.pos.z) else {
+            continue;
+        };
+        if (state.pos.y - top).abs() <= GROUND_EPSILON {
             return true;
         }
     }
@@ -614,6 +641,16 @@ fn set(v: &mut Vec3, a: Axis, value: f32) {
 /// horizontal motion. This happens only when the player is grounded or within
 /// coyote frames and only when the player box fits at the new height.
 ///
+/// Ramps (see `world::is_ramp`) are solid only below their sloped surface, so
+/// every height test here uses the surface height at the player's centre x/z
+/// instead of `bounds.max.y`. A horizontal move therefore never blocks a player
+/// standing on or above the ramp, and a downward move lands on the surface.
+/// While the player is grounded (or within coyote frames) a downward move also
+/// snaps the feet back down onto the surface when the slope drops away, so
+/// walking down a ramp keeps ground contact instead of stepping off into the
+/// air. Flat platforms are unaffected: their surface is `bounds.max.y`
+/// everywhere, so every branch below reduces to the previous behaviour.
+///
 /// Only platforms in the grid cells overlapped by the swept player box are
 /// tested; the iteration order matches platform order, so the result is
 /// identical to brute force.
@@ -640,23 +677,41 @@ fn move_axis(state: &mut ControllerState, world: &World, axis: Axis, delta: f32)
         if !overlaps(&b, solid) {
             continue;
         }
+        let Some(surface) = world.surface_top_clamped(index, pos.x, pos.z) else {
+            continue;
+        };
+        let feet = pos.y;
+        // A ramp is solid only below its surface, so a player whose feet are on
+        // or above the surface never collides with it. The one exception is a
+        // downward move, which may snap the feet back onto the surface.
+        if world.is_ramp_at(index) && feet >= surface - GROUND_EPSILON {
+            if matches!(axis, Axis::Y)
+                && delta < 0.0
+                && (state.grounded || state.coyote_frames > 0)
+                && feet - surface <= STEP_HEIGHT
+            {
+                set(&mut pos, Axis::Y, surface);
+                hit = true;
+            }
+            continue;
+        }
         // Step-up attempt for horizontal moves only.
-        if matches!(axis, Axis::X | Axis::Z) && (state.grounded || state.coyote_frames > 0) {
-            let feet = pos.y;
-            let top = solid.max.y;
-            if top > feet && top - feet <= STEP_HEIGHT {
-                let stepped = Vec3::new(pos.x, top, pos.z);
-                if !overlaps_any_solid(world, &player_box(&stepped)) {
-                    pos = stepped; // step up; horizontal motion is kept
-                    continue;
-                }
+        if matches!(axis, Axis::X | Axis::Z)
+            && (state.grounded || state.coyote_frames > 0)
+            && surface > feet
+            && surface - feet <= STEP_HEIGHT
+        {
+            let stepped = Vec3::new(pos.x, surface, pos.z);
+            if !overlaps_any_solid(world, &player_box(&stepped)) {
+                pos = stepped; // step up; horizontal motion is kept
+                continue;
             }
         }
         hit = true;
         // Push back flush against the face we entered through.
         let p = get(&pos, axis);
         let resolved = match axis {
-            Axis::Y if delta < 0.0 => solid.max.y,
+            Axis::Y if delta < 0.0 => surface,
             Axis::Y => solid.min.y - PLAYER_HEIGHT,
             _ if delta < 0.0 => get(&solid.max, axis) + PLAYER_HALF_WIDTH,
             _ => get(&solid.min, axis) - PLAYER_HALF_WIDTH,
@@ -1858,7 +1913,7 @@ mod m3_tests {
         input(seq, 127, 0, BTN_JUMP)
     }
 
-    fn staircase_world() -> World {
+    fn riser_world() -> World {
         let mut platforms = vec![Platform {
             id: 1,
             kind: PLATFORM_NORMAL,
@@ -2241,8 +2296,8 @@ mod m3_tests {
     // ---------- Step-up ----------
 
     #[test]
-    fn staircase_of_half_unit_risers_is_climbable_at_full_speed() {
-        let w = staircase_world();
+    fn half_unit_risers_are_climbable_at_full_speed() {
+        let w = riser_world();
         let mut s = spawn_state(Vec3::new(-3.0, 0.0, 0.0));
         let mut seq = 0u32;
         for _ in 0..300 {
@@ -2253,7 +2308,7 @@ mod m3_tests {
                 break;
             }
         }
-        assert_eq!(s.pos.y, 2.5, "the staircase must be climbed without jumping");
+        assert_eq!(s.pos.y, 2.5, "half-unit risers must be climbed without jumping");
         assert!(s.pos.x > 5.0, "must be on the top plateau, got x = {}", s.pos.x);
         assert!(s.grounded);
     }
@@ -2511,6 +2566,164 @@ mod m3_tests {
             });
             assert_eq!(fast, brute, "grid and brute force disagree when resting at {st:?}");
         }
+    }
+
+    /// Flat run-up at y = 0 followed by a `RAMP_PZ` that rises from y = 0 at z = 0
+    /// to y = 6 at z = 15.
+    fn ramp_level() -> LevelData {
+        LevelData {
+            level: 4,
+            seed: 4,
+            spawn: Vec3::new(0.0, 0.0, -1.0),
+            beacon: Vec3::new(0.0, 6.0, 15.0),
+            kill_y: -50.0,
+            platforms: vec![
+                Platform {
+                    id: 1,
+                    kind: PLATFORM_NORMAL,
+                    bounds: Aabb {
+                        min: Vec3::new(-2.0, -1.0, -6.0),
+                        max: Vec3::new(2.0, 0.0, 0.0),
+                    },
+                },
+                Platform {
+                    id: 2,
+                    kind: protocol::PLATFORM_RAMP_PZ,
+                    bounds: Aabb {
+                        min: Vec3::new(-2.0, 0.0, 0.0),
+                        max: Vec3::new(2.0, 6.0, 15.0),
+                    },
+                },
+            ],
+            gifts: vec![],
+            event: EVENT_NONE,
+            altars: vec![],
+        }
+    }
+
+    /// [`ramp_level`] plus a flat platform at y = 0 whose edge touches the ramp's
+    /// high face at z = 15, so a player can walk straight into the tall end.
+    fn ramp_high_face_level() -> LevelData {
+        let mut level = ramp_level();
+        level.platforms.push(Platform {
+            id: 3,
+            kind: PLATFORM_NORMAL,
+            bounds: Aabb {
+                min: Vec3::new(-2.0, -1.0, 15.0),
+                max: Vec3::new(2.0, 0.0, 22.0),
+            },
+        });
+        level
+    }
+
+    /// [`ramp_level`] plus a flat platform whose top sits 0.4 below the ramp's high
+    /// end (y = 5.6) and touches the high face at z = 15.
+    fn ramp_high_step_level() -> LevelData {
+        let mut level = ramp_level();
+        level.platforms.push(Platform {
+            id: 3,
+            kind: PLATFORM_NORMAL,
+            bounds: Aabb {
+                min: Vec3::new(-2.0, 4.6, 15.0),
+                max: Vec3::new(2.0, 5.6, 22.0),
+            },
+        });
+        level
+    }
+
+    fn run_z(seq: u32, move_z: i8) -> InputFrame {
+        input(seq, 0, move_z, 0)
+    }
+
+    /// Ramp equivalent of the deleted staircase test: a `RAMP_PZ` rising 6 units
+    /// over 15 is climbed at full run speed without jumping and without ever
+    /// losing ground contact.
+    #[test]
+    fn player_walks_up_a_ramp_without_jumping() {
+        let w = World::from_level(&ramp_level());
+        let mut s = spawn_state(Vec3::new(0.0, 0.0, -1.0));
+        for frame in 0..107u32 {
+            step(&mut s, &run_z(frame, 127), &w);
+            assert!(s.grounded, "lost ground contact on frame {frame} at y = {}", s.pos.y);
+        }
+        assert!(
+            (s.pos.y - 6.0).abs() <= 0.05,
+            "expected to reach the top of the ramp (y = 6), got y = {}",
+            s.pos.y
+        );
+    }
+
+    /// Walking down the same ramp keeps ground contact on every frame: the feet
+    /// follow the surface instead of stepping off into the air and bouncing.
+    #[test]
+    fn player_walks_down_a_ramp_and_stays_grounded() {
+        let w = World::from_level(&ramp_level());
+        let mut s = spawn_state(Vec3::new(0.0, 6.0, 15.0));
+        for frame in 0..105u32 {
+            step(&mut s, &run_z(frame, -127), &w);
+            assert!(s.grounded, "lost ground contact on frame {frame} at y = {}", s.pos.y);
+        }
+        assert!(
+            s.pos.y.abs() <= 0.05,
+            "expected to reach the bottom of the ramp (y = 0), got y = {}",
+            s.pos.y
+        );
+    }
+
+    /// The tall end of a ramp is a wall: walking into it from the side neither
+    /// passes through nor lifts the player onto the ramp.
+    #[test]
+    fn walking_into_the_high_face_of_a_ramp_is_blocked() {
+        let w = World::from_level(&ramp_high_face_level());
+        let mut s = spawn_state(Vec3::new(0.0, 0.0, 18.0));
+        for frame in 0..60u32 {
+            step(&mut s, &run_z(frame, -127), &w);
+        }
+        assert!(
+            s.pos.z >= 15.4 - 0.01,
+            "walked into the tall end of the ramp, z = {}",
+            s.pos.z
+        );
+        assert!(
+            s.pos.y.abs() <= 0.05,
+            "was lifted onto the ramp instead of being blocked, y = {}",
+            s.pos.y
+        );
+    }
+
+    /// A flat platform 0.4 below the ramp's high end still needs the existing
+    /// step-up, and the step-up must measure against the ramp's surface height.
+    #[test]
+    fn flat_platform_beside_a_ramp_high_end_steps_up() {
+        let w = World::from_level(&ramp_high_step_level());
+        let mut s = spawn_state(Vec3::new(0.0, 5.6, 18.0));
+        for frame in 0..20u32 {
+            step(&mut s, &run_z(frame, -127), &w);
+        }
+        assert!(s.pos.z < 15.4, "never reached the ramp's high end, z = {}", s.pos.z);
+        assert!(
+            (s.pos.y - 6.0).abs() <= 0.05,
+            "expected the step-up onto the ramp's high end (y = 6), got y = {}",
+            s.pos.y
+        );
+    }
+
+    /// The ramp's low edge sits at the flat platform's height, so crossing the
+    /// join costs no step at all: the feet simply follow the slope.
+    #[test]
+    fn ramp_low_end_joins_a_flat_platform_without_a_step() {
+        let w = World::from_level(&ramp_level());
+        let mut s = spawn_state(Vec3::new(0.0, 0.0, -1.0));
+        for frame in 0..10u32 {
+            step(&mut s, &run_z(frame, 127), &w);
+        }
+        // z = 0.5, where the ramp surface is 0.2.
+        assert!(
+            (s.pos.y - 0.2).abs() <= 0.05,
+            "expected to follow the ramp surface (y = 0.2) with no step, got y = {}",
+            s.pos.y
+        );
+        assert!(s.grounded, "lost ground contact at the ramp's low end");
     }
 }
 

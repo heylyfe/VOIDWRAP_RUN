@@ -58,6 +58,10 @@ pub const ENEMY_TELEGRAPH: u8 = 3;
 pub const ENEMY_ATTACK: u8 = 4;
 pub const ENEMY_RECOVER: u8 = 5;
 pub const ENEMY_FLAG_HEAVY: u8 = 1;
+pub const PLATFORM_RAMP_PX: u8 = 3;
+pub const PLATFORM_RAMP_NX: u8 = 4;
+pub const PLATFORM_RAMP_PZ: u8 = 5;
+pub const PLATFORM_RAMP_NZ: u8 = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Vec3 {

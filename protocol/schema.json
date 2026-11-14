@@ -220,6 +220,22 @@
     "ENEMY_FLAG_HEAVY": [
       "u8",
       1
+    ],
+    "PLATFORM_RAMP_PX": [
+      "u8",
+      3
+    ],
+    "PLATFORM_RAMP_NX": [
+      "u8",
+      4
+    ],
+    "PLATFORM_RAMP_PZ": [
+      "u8",
+      5
+    ],
+    "PLATFORM_RAMP_NZ": [
+      "u8",
+      6
     ]
   },
   "types": [

@@ -57,6 +57,10 @@ export const ENEMY_TELEGRAPH = 3;
 export const ENEMY_ATTACK = 4;
 export const ENEMY_RECOVER = 5;
 export const ENEMY_FLAG_HEAVY = 1;
+export const PLATFORM_RAMP_PX = 3;
+export const PLATFORM_RAMP_NX = 4;
+export const PLATFORM_RAMP_PZ = 5;
+export const PLATFORM_RAMP_NZ = 6;
 
 export interface Vec3 {
   x: number;

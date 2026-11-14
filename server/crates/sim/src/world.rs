@@ -1,8 +1,49 @@
 //! Static collision world built from a [`LevelData`].
 
 use crate::tuning::GRID_CELL;
-use protocol::{Aabb, LevelData, Platform, TILE_GONE, TileState};
+use protocol::{
+    Aabb, LevelData, PLATFORM_RAMP_NX, PLATFORM_RAMP_NZ, PLATFORM_RAMP_PX, PLATFORM_RAMP_PZ, Platform, TILE_GONE,
+    TileState,
+};
 use std::collections::BTreeMap;
+
+/// True when `kind` is one of the four ramp platform kinds
+/// (`PLATFORM_RAMP_PX`, `PLATFORM_RAMP_NX`, `PLATFORM_RAMP_PZ`,
+/// `PLATFORM_RAMP_NZ`).
+///
+/// A ramp's `bounds.min.y` is the surface height at its low edge and
+/// `bounds.max.y` the surface height at its high edge; the kind encodes which
+/// horizontal axis the slope runs along and in which direction it rises. Every
+/// other kind is flat and reports `bounds.max.y` as its surface everywhere.
+pub fn is_ramp(kind: u8) -> bool {
+    matches!(
+        kind,
+        PLATFORM_RAMP_PX | PLATFORM_RAMP_NX | PLATFORM_RAMP_PZ | PLATFORM_RAMP_NZ
+    )
+}
+
+/// Surface height of `platform` at `(x, z)`, ignoring its x/z bounds.
+fn surface_height(platform: &Platform, x: f32, z: f32) -> f32 {
+    let b = &platform.bounds;
+    let fraction = match platform.kind {
+        PLATFORM_RAMP_PX => ramp_fraction(x, b.min.x, b.max.x),
+        PLATFORM_RAMP_NX => ramp_fraction(x, b.max.x, b.min.x),
+        PLATFORM_RAMP_PZ => ramp_fraction(z, b.min.z, b.max.z),
+        PLATFORM_RAMP_NZ => ramp_fraction(z, b.max.z, b.min.z),
+        _ => return b.max.y,
+    };
+    b.min.y + (b.max.y - b.min.y) * fraction
+}
+
+/// How far `v` sits from `low_edge` towards `high_edge`, clamped to
+/// `0.0..=1.0`. A degenerate (zero-width) span reports `0.0`.
+fn ramp_fraction(v: f32, low_edge: f32, high_edge: f32) -> f32 {
+    let span = high_edge - low_edge;
+    if span == 0.0 {
+        return 0.0;
+    }
+    ((v - low_edge) / span).clamp(0.0, 1.0)
+}
 
 /// Collision geometry the controller moves through.
 ///
@@ -15,6 +56,10 @@ use std::collections::BTreeMap;
 /// Cells store indices in ascending platform order; candidate queries return
 /// them sorted and deduplicated, so results match brute-force iteration over
 /// platforms in platform order.
+///
+/// Ramp platforms (see [`is_ramp`]) are solid only below their sloped surface;
+/// [`World::surface_top`] reports that surface. The grid and [`World::solids`]
+/// still index the full AABB of every platform.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct World {
     pub solids: Vec<Aabb>,
@@ -113,6 +158,47 @@ impl World {
             None
         }
     }
+
+    /// Surface height of the platform at `index` at world point `(x, z)`, or
+    /// `None` when the point lies outside the platform's x/z bounds (or the
+    /// index is out of range).
+    ///
+    /// Flat platforms (every kind that is not a ramp, see [`is_ramp`]) report
+    /// `bounds.max.y` everywhere. Ramps interpolate linearly between
+    /// `bounds.min.y` at the low edge and `bounds.max.y` at the high edge along
+    /// the axis and direction encoded in the platform kind.
+    ///
+    /// Solidity is not considered here; combine with [`World::solid_bounds`]
+    /// when the answer must respect tile states.
+    pub fn surface_top(&self, index: usize, x: f32, z: f32) -> Option<f32> {
+        let platform = self.platforms.get(index)?;
+        let b = &platform.bounds;
+        if x < b.min.x || x > b.max.x || z < b.min.z || z > b.max.z {
+            return None;
+        }
+        Some(surface_height(platform, x, z))
+    }
+
+    /// [`World::surface_top`] with `x`/`z` clamped into the platform's x/z
+    /// bounds, so a point just outside the footprint still reports the height
+    /// of the nearest edge. `None` only when `index` is out of range.
+    ///
+    /// The controller uses this because a player box can overlap a platform
+    /// while the player's centre sits just outside it.
+    pub(crate) fn surface_top_clamped(&self, index: usize, x: f32, z: f32) -> Option<f32> {
+        let platform = self.platforms.get(index)?;
+        let b = &platform.bounds;
+        Some(surface_height(
+            platform,
+            x.clamp(b.min.x, b.max.x),
+            z.clamp(b.min.z, b.max.z),
+        ))
+    }
+
+    /// True when the platform at `index` is a ramp (see [`is_ramp`]).
+    pub(crate) fn is_ramp_at(&self, index: usize) -> bool {
+        self.platforms.get(index).is_some_and(|p| is_ramp(p.kind))
+    }
 }
 
 /// Uniform XZ grid over platform indices. Platforms are inserted in ascending
@@ -175,7 +261,9 @@ pub fn overlaps(a: &Aabb, b: &Aabb) -> bool {
 mod tests {
     use super::*;
     use crate::controller::{spawn_state, step};
-    use protocol::{EVENT_NONE, InputFrame, PLATFORM_NORMAL, TILE_FRETTED, TILE_WARN, Vec3};
+    use protocol::{
+        EVENT_NONE, InputFrame, PLATFORM_CRUMBLE, PLATFORM_JUMP_PAD, PLATFORM_NORMAL, TILE_FRETTED, TILE_WARN, Vec3,
+    };
 
     fn idle(seq: u32) -> InputFrame {
         InputFrame {
@@ -214,6 +302,69 @@ mod tests {
             gifts: vec![],
             event: EVENT_NONE,
             altars: vec![],
+        }
+    }
+
+    /// Flat slab at y = 0 followed by a `RAMP_PZ` rising from y = 0 at z = 0 to
+    /// y = 6 at z = 15.
+    fn ramp_level() -> LevelData {
+        LevelData {
+            level: 2,
+            seed: 2,
+            spawn: Vec3::ZERO,
+            beacon: Vec3::new(0.0, 6.0, 15.0),
+            kill_y: -50.0,
+            platforms: vec![
+                Platform {
+                    id: 1,
+                    kind: PLATFORM_NORMAL,
+                    bounds: Aabb {
+                        min: Vec3::new(-2.0, -1.0, -6.0),
+                        max: Vec3::new(2.0, 0.0, 0.0),
+                    },
+                },
+                Platform {
+                    id: 2,
+                    kind: PLATFORM_RAMP_PZ,
+                    bounds: Aabb {
+                        min: Vec3::new(-2.0, 0.0, 0.0),
+                        max: Vec3::new(2.0, 6.0, 15.0),
+                    },
+                },
+            ],
+            gifts: vec![],
+            event: EVENT_NONE,
+            altars: vec![],
+        }
+    }
+
+    /// A level holding exactly one ramp platform with bounds
+    /// `(0, 1, 0)..(10, 5, 10)`.
+    fn ramp_only_level(kind: u8) -> LevelData {
+        LevelData {
+            level: 1,
+            seed: 1,
+            spawn: Vec3::ZERO,
+            beacon: Vec3::ZERO,
+            kill_y: -50.0,
+            platforms: vec![Platform {
+                id: 1,
+                kind,
+                bounds: Aabb {
+                    min: Vec3::new(0.0, 1.0, 0.0),
+                    max: Vec3::new(10.0, 5.0, 10.0),
+                },
+            }],
+            gifts: vec![],
+            event: EVENT_NONE,
+            altars: vec![],
+        }
+    }
+
+    fn assert_close(actual: Option<f32>, expected: f32) {
+        match actual {
+            Some(value) => assert!((value - expected).abs() <= 1e-5, "expected {expected}, got {value}"),
+            None => panic!("expected {expected}, got None"),
         }
     }
 
@@ -410,5 +561,60 @@ mod tests {
 
         w.set_tiles(&[]);
         assert_eq!(w.tile_state(0), 0, "empty tile list restores normal");
+    }
+
+    #[test]
+    fn is_ramp_covers_exactly_the_four_ramp_kinds() {
+        assert!(is_ramp(PLATFORM_RAMP_PX));
+        assert!(is_ramp(PLATFORM_RAMP_NX));
+        assert!(is_ramp(PLATFORM_RAMP_PZ));
+        assert!(is_ramp(PLATFORM_RAMP_NZ));
+        assert!(!is_ramp(PLATFORM_NORMAL));
+        assert!(!is_ramp(PLATFORM_CRUMBLE));
+        assert!(!is_ramp(PLATFORM_JUMP_PAD));
+        assert!(!is_ramp(7), "unknown kinds are not ramps");
+    }
+
+    #[test]
+    fn surface_top_reports_edges_and_rejects_outside_points() {
+        let w = World::from_level(&ramp_level());
+        // Flat platform: `max.y` everywhere inside the footprint.
+        assert_close(w.surface_top(0, 0.0, -3.0), 0.0);
+        assert_close(w.surface_top(0, -2.0, -6.0), 0.0);
+        assert_close(w.surface_top(0, 2.0, 0.0), 0.0);
+        // RAMP_PZ: low at min.z, high at max.z.
+        assert_close(w.surface_top(1, 0.0, 0.0), 0.0);
+        assert_close(w.surface_top(1, 0.0, 15.0), 6.0);
+        assert_close(w.surface_top(1, 0.0, 7.5), 3.0);
+        assert_close(w.surface_top(1, 0.0, 3.0), 1.2);
+        // Outside the x/z bounds.
+        assert_eq!(w.surface_top(1, 0.0, -0.001), None);
+        assert_eq!(w.surface_top(1, 0.0, 15.001), None);
+        assert_eq!(w.surface_top(1, -2.001, 7.5), None);
+        assert_eq!(w.surface_top(1, 2.001, 7.5), None);
+        assert_eq!(w.surface_top(99, 0.0, 0.0), None, "out-of-range index");
+    }
+
+    #[test]
+    fn surface_top_follows_each_ramp_direction() {
+        let px = World::from_level(&ramp_only_level(PLATFORM_RAMP_PX));
+        assert_close(px.surface_top(0, 0.0, 5.0), 1.0);
+        assert_close(px.surface_top(0, 10.0, 5.0), 5.0);
+        assert_close(px.surface_top(0, 5.0, 5.0), 3.0);
+
+        let nx = World::from_level(&ramp_only_level(PLATFORM_RAMP_NX));
+        assert_close(nx.surface_top(0, 0.0, 5.0), 5.0);
+        assert_close(nx.surface_top(0, 10.0, 5.0), 1.0);
+        assert_close(nx.surface_top(0, 5.0, 5.0), 3.0);
+
+        let pz = World::from_level(&ramp_only_level(PLATFORM_RAMP_PZ));
+        assert_close(pz.surface_top(0, 5.0, 0.0), 1.0);
+        assert_close(pz.surface_top(0, 5.0, 10.0), 5.0);
+        assert_close(pz.surface_top(0, 5.0, 5.0), 3.0);
+
+        let nz = World::from_level(&ramp_only_level(PLATFORM_RAMP_NZ));
+        assert_close(nz.surface_top(0, 5.0, 0.0), 5.0);
+        assert_close(nz.surface_top(0, 5.0, 10.0), 1.0);
+        assert_close(nz.surface_top(0, 5.0, 5.0), 3.0);
     }
 }

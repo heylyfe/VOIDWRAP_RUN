@@ -318,11 +318,19 @@ fn vec3(v: [f32; 3]) -> Vec3 {
     Vec3::new(v[0], v[1], v[2])
 }
 
-fn platform_kind_from_str(s: &str) -> Option<u8> {
-    match s {
-        "NORMAL" => Some(PLATFORM_NORMAL),
-        "CRUMBLE" => Some(PLATFORM_CRUMBLE),
-        "JUMP_PAD" => Some(PLATFORM_JUMP_PAD),
+/// Map a level-file platform kind name to its `PLATFORM_*` constant.
+///
+/// Recognised names are `NORMAL`, `CRUMBLE`, `JUMP_PAD`, `RAMP_PX`, `RAMP_NX`,
+/// `RAMP_PZ` and `RAMP_NZ`. Anything else falls back to `PLATFORM_NORMAL`.
+fn platform_kind_from_str(name: &str) -> Option<u8> {
+    match name {
+        "CRUMBLE" => Some(protocol::PLATFORM_CRUMBLE),
+        "JUMP_PAD" => Some(protocol::PLATFORM_JUMP_PAD),
+        "RAMP_PX" => Some(protocol::PLATFORM_RAMP_PX),
+        "RAMP_NX" => Some(protocol::PLATFORM_RAMP_NX),
+        "RAMP_PZ" => Some(protocol::PLATFORM_RAMP_PZ),
+        "RAMP_NZ" => Some(protocol::PLATFORM_RAMP_NZ),
+        "NORMAL" => Some(protocol::PLATFORM_NORMAL),
         _ => None,
     }
 }
