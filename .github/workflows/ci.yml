@@ -48,3 +48,20 @@ jobs:
           curl -fs http://localhost:7878/ | grep -q "VOIDWRAP RUN"
           curl -fsI http://localhost:7878/sim.wasm | grep -qi "application/wasm"
 
+
+  desktop:
+    name: desktop app builds (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+      - run: cargo clippy -p server --features desktop --all-targets -- -D warnings
+        working-directory: server
+      - run: cargo test -p server --features desktop
+        working-directory: server
