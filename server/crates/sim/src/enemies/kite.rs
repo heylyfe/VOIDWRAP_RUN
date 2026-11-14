@@ -8,6 +8,8 @@ use protocol::Vec3;
 
 use crate::rules::{EnemyParams, distance};
 
+use super::blight::infection_pauses_timer;
+
 use super::{
     ClassRelation, ENEMY_DT, EnemyAction, EnemyClass, Hit, HitKind, Ring, StepContext, most_isolated_player,
     step_toward,
@@ -91,13 +93,21 @@ pub fn relation(class: EnemyClass) -> ClassRelation {
 /// Advance Kite by one 20 Hz tick.
 pub fn step(brain: &mut KiteBrain, pos: &Vec3, params: &EnemyParams, ctx: &StepContext<'_>) -> EnemyAction {
     let mut action = EnemyAction::idle();
+    // Blight synergy: while the marked player is infected, Kite's phase timer is paused.
+    let paused = ctx
+        .players
+        .iter()
+        .find(|p| Some(p.id) == brain.target_id)
+        .is_some_and(|p| infection_pauses_timer(p.status.infected_ticks));
 
     match brain.phase {
         KitePhase::Hunt => {
             if let Some(p) = most_isolated_player(ctx.players) {
                 action.motion = step_toward(pos, &p.feet, KITE_HUNT_SPEED * params.speed_mul * ENEMY_DT);
             }
-            brain.timer = brain.timer.saturating_sub(1);
+            if !paused {
+                brain.timer = brain.timer.saturating_sub(1);
+            }
             if brain.timer == 0 {
                 match most_isolated_player(ctx.players) {
                     Some(p) => {
@@ -128,14 +138,18 @@ pub fn step(brain: &mut KiteBrain, pos: &Vec3, params: &EnemyParams, ctx: &StepC
                 brain.timer = KITE_RECOVER_TICKS;
                 return action;
             }
-            brain.timer = brain.timer.saturating_sub(1);
+            if !paused {
+                brain.timer = brain.timer.saturating_sub(1);
+            }
             if brain.timer == 0 {
                 brain.phase = KitePhase::Strike;
                 brain.timer = KITE_STRIKE_TICKS;
             }
         }
         KitePhase::Strike => {
-            brain.timer = brain.timer.saturating_sub(1);
+            if !paused {
+                brain.timer = brain.timer.saturating_sub(1);
+            }
             if brain.timer == 0 {
                 for p in ctx.players {
                     if distance(&p.feet, &brain.marker) <= KITE_BLAST_RADIUS {
@@ -150,7 +164,9 @@ pub fn step(brain: &mut KiteBrain, pos: &Vec3, params: &EnemyParams, ctx: &StepC
             }
         }
         KitePhase::Recover => {
-            brain.timer = brain.timer.saturating_sub(1);
+            if !paused {
+                brain.timer = brain.timer.saturating_sub(1);
+            }
             if brain.timer == 0 {
                 brain.phase = KitePhase::Hunt;
                 brain.timer = KITE_HUNT_TICKS;
@@ -267,5 +283,34 @@ mod tests {
             assert_eq!(brain.phase, KitePhase::Recover, "the class cuts the line");
             assert!(action.hits.is_empty());
         }
+    }
+
+    #[test]
+    fn blight_infection_pauses_the_phase_timer() {
+        let mut brain = KiteBrain::default();
+        brain.phase = KitePhase::Hunt;
+        brain.timer = 10;
+        brain.target_id = Some(1);
+        let pos = Vec3::new(0.0, 0.0, 0.0);
+        let mut infected = player(1, 2.0, 0.0, EnemyClass::Striker);
+        infected.status.infected_ticks = 40;
+        let ctx = StepContext {
+            players: std::slice::from_ref(&infected),
+            ..StepContext::default()
+        };
+        for _ in 0..5 {
+            step(&mut brain, &pos, &params(), &ctx);
+        }
+        assert_eq!(brain.timer, 10, "the infection holds the timer still");
+
+        let clean = player(1, 2.0, 0.0, EnemyClass::Striker);
+        let ctx = StepContext {
+            players: std::slice::from_ref(&clean),
+            ..StepContext::default()
+        };
+        for _ in 0..5 {
+            step(&mut brain, &pos, &params(), &ctx);
+        }
+        assert_eq!(brain.timer, 5, "a clean player lets the timer run");
     }
 }

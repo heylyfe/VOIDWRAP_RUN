@@ -8,6 +8,8 @@ use protocol::Vec3;
 
 use crate::rules::{EnemyParams, distance, player_centre};
 
+use super::blight::infection_pauses_timer;
+
 use super::{
     ClassRelation, ENEMY_DT, EnemyAction, EnemyClass, Hit, HitKind, Ring, StepContext, nearest_player, step_toward,
 };
@@ -100,6 +102,8 @@ pub fn step(brain: &mut RewindBrain, pos: &Vec3, params: &EnemyParams, ctx: &Ste
 
     let target = nearest_player(ctx.players, pos);
     brain.target_id = target.map(|p| p.id);
+    // Blight synergy: while the tracked player is infected, Rewind's phase timer is paused.
+    let paused = target.is_some_and(|p| infection_pauses_timer(p.status.infected_ticks));
     if let Some(p) = target {
         brain.trail.push(p.feet);
         if brain.trail.len() > REWIND_TRAIL_TICKS {
@@ -116,7 +120,9 @@ pub fn step(brain: &mut RewindBrain, pos: &Vec3, params: &EnemyParams, ctx: &Ste
             };
             action.motion = Vec3::new(sign * REWIND_TREMBLE_AMPLITUDE, 0.0, sign * REWIND_TREMBLE_AMPLITUDE);
             brain.mark = *pos;
-            brain.timer = brain.timer.saturating_sub(1);
+            if !paused {
+                brain.timer = brain.timer.saturating_sub(1);
+            }
             if brain.timer == 0 {
                 brain.phase = RewindPhase::Replay;
                 brain.timer = REWIND_REPLAY_TICKS;
@@ -141,7 +147,9 @@ pub fn step(brain: &mut RewindBrain, pos: &Vec3, params: &EnemyParams, ctx: &Ste
                     });
                 }
             }
-            brain.timer = brain.timer.saturating_sub(1);
+            if !paused {
+                brain.timer = brain.timer.saturating_sub(1);
+            }
             if brain.timer == 0 {
                 brain.phase = RewindPhase::Fade;
                 brain.timer = REWIND_FADE_TICKS;
@@ -149,7 +157,9 @@ pub fn step(brain: &mut RewindBrain, pos: &Vec3, params: &EnemyParams, ctx: &Ste
         }
         RewindPhase::Fade => {
             action.motion = step_toward(pos, &brain.mark, REWIND_FADE_SPEED * ENEMY_DT);
-            brain.timer = brain.timer.saturating_sub(1);
+            if !paused {
+                brain.timer = brain.timer.saturating_sub(1);
+            }
             if brain.timer == 0 {
                 brain.phase = RewindPhase::Tremble;
                 brain.timer = REWIND_TREMBLE_TICKS;
@@ -292,5 +302,33 @@ mod tests {
         };
         let action = step(&mut brain, &pos, &params(), &ctx);
         assert!(action.hits.is_empty(), "a striker dash breaks the drag");
+    }
+
+    #[test]
+    fn blight_infection_pauses_the_phase_timer() {
+        let mut brain = RewindBrain::default();
+        brain.phase = RewindPhase::Tremble;
+        brain.timer = 10;
+        let pos = Vec3::new(0.0, 0.0, 0.0);
+        let mut infected = player(1, 2.0, 0.0, EnemyClass::Striker);
+        infected.status.infected_ticks = 40;
+        let ctx = StepContext {
+            players: std::slice::from_ref(&infected),
+            ..StepContext::default()
+        };
+        for _ in 0..5 {
+            step(&mut brain, &pos, &params(), &ctx);
+        }
+        assert_eq!(brain.timer, 10, "the infection holds the timer still");
+
+        let clean = player(1, 2.0, 0.0, EnemyClass::Striker);
+        let ctx = StepContext {
+            players: std::slice::from_ref(&clean),
+            ..StepContext::default()
+        };
+        for _ in 0..5 {
+            step(&mut brain, &pos, &params(), &ctx);
+        }
+        assert_eq!(brain.timer, 5, "a clean player lets the timer run");
     }
 }

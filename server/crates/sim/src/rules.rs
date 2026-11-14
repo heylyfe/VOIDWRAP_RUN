@@ -85,6 +85,8 @@ pub const ENEMY_HIT_FORGIVENESS: f32 = 0.85;
 pub struct PlayerStatus {
     /// Ticks left of OVERTUNED; 0 means the player is not overtuned.
     pub overtuned_ticks: u32,
+    /// Ticks left of Blight's infection; 0 means the player is clean.
+    pub infected_ticks: u32,
 }
 
 impl PlayerStatus {
@@ -99,11 +101,17 @@ impl PlayerStatus {
     /// Advance the timers by one enemy tick.
     pub fn tick(&mut self) {
         self.overtuned_ticks = self.overtuned_ticks.saturating_sub(1);
+        self.infected_ticks = self.infected_ticks.saturating_sub(1);
     }
 
     /// True while the player carries OVERTUNED.
     pub fn is_overtuned(&self) -> bool {
         self.overtuned_ticks > 0
+    }
+
+    /// True while the player carries Blight's infection.
+    pub fn is_infected(&self) -> bool {
+        self.infected_ticks > 0
     }
 }
 

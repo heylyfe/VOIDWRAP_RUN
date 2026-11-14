@@ -18,6 +18,7 @@ use protocol::{
 };
 use sim::hazards::Hazards;
 use sim::levelgen;
+use sim::rules::enemies::chorus_candidate_allowed;
 use sim::rules::{self, BEACON_RADIUS, BEHAVIOR_MIMIC, Enemy, GIFT_RADIUS};
 use sim::world::World;
 use std::collections::BTreeMap;
@@ -263,9 +264,11 @@ fn class_excluded(entry: &PoolEntry, classes: &[&str]) -> bool {
 /// ties broken by content order. No RNG.
 pub fn vote_pool(entries: &[PoolEntry], level: u32, classes: &[&str], permanents: &[String]) -> Vec<PoolEntry> {
     let tag_counts = permanent_tag_counts(entries, permanents);
+    let small = tag_counts.get("small").copied().unwrap_or(0);
     let mut pool: Vec<PoolEntry> = entries
         .iter()
         .filter(|e| e.min_level <= level)
+        .filter(|e| e.id != "chorus" || chorus_candidate_allowed(small, level))
         .filter(|e| {
             let held = permanents.iter().filter(|id| id.as_str() == e.id).count();
             held < e.selection_cap as usize
@@ -287,9 +290,11 @@ pub fn vote_pool(entries: &[PoolEntry], level: u32, classes: &[&str], permanents
 /// `requires` hooks and class composition; ordered by `min_level` descending, ties broken by content order.
 pub fn overflow_pool(entries: &[PoolEntry], level: u32, classes: &[&str], permanents: &[String]) -> Vec<PoolEntry> {
     let tag_counts = permanent_tag_counts(entries, permanents);
+    let small = tag_counts.get("small").copied().unwrap_or(0);
     let mut pool: Vec<PoolEntry> = entries
         .iter()
         .filter(|e| e.min_level <= level)
+        .filter(|e| e.id != "chorus" || chorus_candidate_allowed(small, level))
         .filter(|e| requires_satisfied(e, &tag_counts))
         .filter(|e| !class_excluded(e, classes))
         .cloned()
@@ -1838,6 +1843,28 @@ mod vote_tests {
             &["unique".to_string(), "pair".to_string(), "pair".to_string()],
         );
         assert!(pool.is_empty(), "both entries are at their cap");
+    }
+
+    #[test]
+    fn chorus_needs_two_small_permanents_and_level_ten() {
+        let entries = vec![
+            entry("chorus", 10, 1, &["ambient"], 0),
+            entry("small_a", 1, 2, &["small"], 1),
+            entry("small_b", 1, 2, &["small"], 2),
+        ];
+        let ids = |level: u32, permanents: &[String]| {
+            vote_pool(&entries, level, &[], permanents)
+                .into_iter()
+                .map(|e| e.id)
+                .collect::<Vec<_>>()
+        };
+        let pair = vec!["small_a".to_string(), "small_b".to_string()];
+        assert!(!ids(10, &[]).contains(&"chorus".to_string()), "no small permanents");
+        assert!(
+            !ids(9, &pair).contains(&"chorus".to_string()),
+            "level is below the gate"
+        );
+        assert!(ids(10, &pair).contains(&"chorus".to_string()), "both gates met");
     }
 
     #[test]

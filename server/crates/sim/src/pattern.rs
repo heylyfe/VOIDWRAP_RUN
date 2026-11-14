@@ -106,6 +106,18 @@ impl ThemeTag {
     }
 }
 
+/// Parses a lobby poll choice into the theme it asks for.
+///
+/// The poll (T-079) emits `theme:<name>`; a bare `<name>` is accepted too so a
+/// hand-written test or a debug console can skip the prefix. Anything outside
+/// the closed vocabulary — including the `difficulty:` choices, which the bag
+/// already models through its `tier` — returns `None`.
+pub fn parse_theme_choice(choice: &str) -> Option<ThemeTag> {
+    let name = choice.trim();
+    let name = name.strip_prefix("theme:").unwrap_or(name);
+    ThemeTag::parse(name)
+}
+
 /// What the player does in a pattern. Closed vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MechanicTag {
@@ -386,6 +398,15 @@ pub struct TagBagConfig {
     pub theme_target: u32,
     /// Weight removed per difficulty step above the level tier. Default 24.
     pub difficulty_penalty: u32,
+    /// Theme the lobby poll asked for, if any. Default `None`.
+    ///
+    /// The choice is per level: the caller builds one bag per level, so the
+    /// bonus never leaks into the next one. Consuming the poll choice out of the
+    /// run state is the caller's job.
+    pub theme_focus: Option<ThemeTag>,
+    /// Weight added to every pattern carrying [`TagBagConfig::theme_focus`].
+    /// Default 1024 — large enough to dominate the under-representation bonus.
+    pub theme_focus_bonus: u32,
 }
 
 impl Default for TagBagConfig {
@@ -396,6 +417,8 @@ impl Default for TagBagConfig {
             theme_bonus: 96,
             theme_target: 2,
             difficulty_penalty: 24,
+            theme_focus: None,
+            theme_focus_bonus: 1024,
         }
     }
 }
@@ -511,6 +534,11 @@ impl TagBag {
             let missing = self.cfg.theme_target.saturating_sub(used);
             weight = weight.saturating_add(self.cfg.theme_bonus.saturating_mul(missing));
         }
+        if let Some(focus) = self.cfg.theme_focus
+            && self.themes[index].contains(&focus)
+        {
+            weight = weight.saturating_add(self.cfg.theme_focus_bonus);
+        }
         let over = u32::from(self.difficulty[index]).saturating_sub(self.tier);
         weight = weight.saturating_sub(self.cfg.difficulty_penalty.saturating_mul(over));
         if self.history.contains(&index) {
@@ -584,11 +612,48 @@ impl CompositionPlan {
         len: usize,
         tier: u32,
     ) -> CompositionPlan {
+        CompositionPlan::build_with_len_and_theme(metas, seed, level, players, len, tier, None)
+    }
+
+    /// Builds a plan with a lobby-poll theme bias for this level only.
+    ///
+    /// `theme_focus` is the theme the poll asked for ([`parse_theme_choice`] turns
+    /// a `theme:frost` choice into one). Patterns carrying it get
+    /// [`TagBagConfig::theme_focus_bonus`] extra weight, which dominates the
+    /// under-representation bonus without overriding the no-repeat and
+    /// `MAX_THEME_RUN` guards. `None` reproduces [`CompositionPlan::build_with_len`]
+    /// exactly, so a level with no poll is unchanged.
+    pub fn build_with_len_and_theme(
+        metas: &[PatternMeta],
+        seed: u32,
+        level: u32,
+        players: u32,
+        len: usize,
+        tier: u32,
+        theme_focus: Option<ThemeTag>,
+    ) -> CompositionPlan {
+        let cfg = TagBagConfig {
+            theme_focus,
+            ..TagBagConfig::default()
+        };
+        CompositionPlan::build_with_config(metas, seed, level, players, len, tier, cfg)
+    }
+
+    /// The shared body of the two builders above.
+    fn build_with_config(
+        metas: &[PatternMeta],
+        seed: u32,
+        level: u32,
+        players: u32,
+        len: usize,
+        tier: u32,
+        cfg: TagBagConfig,
+    ) -> CompositionPlan {
         let mut plan = CompositionPlan::empty(seed, level, players);
         if metas.is_empty() || len == 0 {
             return plan;
         }
-        let mut bag = TagBag::new(mix_seed(seed, level, players), tier, metas, TagBagConfig::default());
+        let mut bag = TagBag::new(mix_seed(seed, level, players), tier, metas, cfg);
         let hubs: Vec<usize> = (0..metas.len())
             .filter(|&i| metas[i].role == ChunkRole::Hub && metas[i].min_level <= level)
             .collect();
@@ -772,4 +837,99 @@ pub fn plan_len(level: u32) -> usize {
 /// real plan; this helper only serves callers that have nothing but a level.
 pub fn tier_for(level: u32) -> u32 {
     (1 + level.saturating_sub(1) / 4).min(3)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A two-theme catalog: one hub per theme and eight paths per theme, so the
+    /// bag has enough distinct indices to work around its no-repeat history.
+    fn catalog() -> Vec<PatternMeta> {
+        let mut metas = vec![
+            meta("hub_frost", ChunkRole::Hub, "frost"),
+            meta("hub_ember", ChunkRole::Hub, "ember"),
+        ];
+        for index in 0..8 {
+            metas.push(meta(&format!("frost_path_{index}"), ChunkRole::Path, "frost"));
+        }
+        for index in 0..8 {
+            metas.push(meta(&format!("ember_path_{index}"), ChunkRole::Path, "ember"));
+        }
+        metas
+    }
+
+    fn meta(id: &str, role: ChunkRole, theme: &str) -> PatternMeta {
+        PatternMeta::from_tags(id, role, 1, 1, &[format!("theme:{theme}")])
+    }
+
+    fn frost_count(plan: &CompositionPlan, metas: &[PatternMeta]) -> usize {
+        plan.indices()
+            .iter()
+            .filter(|&&index| metas[index].has_theme(ThemeTag::Frost))
+            .count()
+    }
+
+    #[test]
+    fn a_frost_poll_makes_the_next_plan_frost_heavy() {
+        let metas = catalog();
+        let seed = 0x5EED_1234;
+        let plain = CompositionPlan::build_with_len(&metas, seed, 7, 2, 40, 1);
+        let polled = CompositionPlan::build_with_len_and_theme(&metas, seed, 7, 2, 40, 1, Some(ThemeTag::Frost));
+        assert_eq!(plain.len(), 40);
+        assert_eq!(polled.len(), 40);
+        let plain_frost = frost_count(&plain, &metas);
+        let polled_frost = frost_count(&polled, &metas);
+        assert!(
+            polled_frost > plain_frost,
+            "frost poll should shift the mix: {polled_frost} vs {plain_frost}"
+        );
+    }
+
+    #[test]
+    fn the_frost_poll_shifts_the_mix_across_seeds() {
+        let metas = catalog();
+        let mut plain_total = 0usize;
+        let mut polled_total = 0usize;
+        for seed in 0..8u32 {
+            let plain = CompositionPlan::build_with_len(&metas, seed, 7, 2, 40, 1);
+            let polled = CompositionPlan::build_with_len_and_theme(&metas, seed, 7, 2, 40, 1, Some(ThemeTag::Frost));
+            plain_total += frost_count(&plain, &metas);
+            polled_total += frost_count(&polled, &metas);
+        }
+        assert!(
+            polled_total > plain_total + 8,
+            "frost poll should dominate: {polled_total} vs {plain_total}"
+        );
+    }
+
+    #[test]
+    fn no_poll_reproduces_the_previous_plan() {
+        let metas = catalog();
+        let plain = CompositionPlan::build_with_len(&metas, 99, 3, 1, 20, 1);
+        let unfocused = CompositionPlan::build_with_len_and_theme(&metas, 99, 3, 1, 20, 1, None);
+        assert_eq!(plain, unfocused);
+    }
+
+    #[test]
+    fn the_focus_bonus_is_per_bag() {
+        // The choice is consumed by building one bag: a fresh config carries no focus.
+        assert_eq!(TagBagConfig::default().theme_focus, None);
+        let focused = TagBagConfig {
+            theme_focus: Some(ThemeTag::Frost),
+            ..TagBagConfig::default()
+        };
+        assert_eq!(focused.theme_focus, Some(ThemeTag::Frost));
+        assert!(focused.theme_focus_bonus > focused.theme_bonus);
+    }
+
+    #[test]
+    fn poll_choices_parse_to_themes() {
+        assert_eq!(parse_theme_choice("theme:frost"), Some(ThemeTag::Frost));
+        assert_eq!(parse_theme_choice("frost"), Some(ThemeTag::Frost));
+        assert_eq!(parse_theme_choice(" theme:void "), Some(ThemeTag::Void));
+        assert_eq!(parse_theme_choice("theme:lava"), None);
+        assert_eq!(parse_theme_choice("difficulty:hard"), None);
+        assert_eq!(parse_theme_choice(""), None);
+    }
 }

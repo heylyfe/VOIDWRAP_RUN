@@ -384,7 +384,10 @@ impl Hazards {
                 id: p.id,
                 feet: p.feet,
                 class: enemy_class(p.class),
-                status: PlayerStatus::default(),
+                status: PlayerStatus {
+                    overtuned_ticks: u32::from(p.overtuned_ticks),
+                    infected_ticks: u32::from(p.infected_ticks),
+                },
                 dashing: false,
             })
             .collect();

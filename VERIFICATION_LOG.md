@@ -401,3 +401,39 @@ T-053 got a third round instead of an OVERSEER takeover, to save Opus credits (u
   patterns 1-3 u over the ceiling.
 - `just verify` green after each merge (T-072 → T-074 → T-075 → T-076 → T-077) and on the release
   commit.
+
+## v0.9.0-alpha.1 — Wave 4: pedestal voting and lobby polls
+
+Merge order T-078 → T-079 → T-081 → T-080, `just verify` green after each merge and on the release
+commit.
+
+- T-078 ACCEPTED: server-authoritative voting. A session opens on the collapse-pending transition of
+  every level from level 1 on; three options come from the registry pool scaled by level, permanent
+  count, selection caps and class interactions; one option may be a curse on a seeded coin; all
+  joined players ballot; 20 s countdown; majority wins; a tie goes to the host's ballot and
+  otherwise to a seeded coin; the winner becomes permanent for the rest of the run; an exhausted
+  pool offers one-level temporary summons instead. Protocol: `VoteOption` plus
+  `ClientMsg::Vote` and `ServerMsg::{VoteOpen, VoteState, VoteResult}`, `PROTOCOL_VERSION` 7 → 8,
+  regenerated through `just gen` + `just fixtures`.
+- Lead reconciliation on T-078 (the answer could not emit `protocol/schema.json` and wrote a
+  placeholder over it, which was restored from git): the schema delta was written from the ticket's
+  own NOTES contract and regenerated; `EnemyDef` gained the `name` field the pedestals display;
+  `escalation_speed_mul` was restored after the answer dropped it by accident; two borrow errors and
+  one ambiguous `u32::from` were fixed; two test expectations were corrected (the run starts on the
+  level passed to `Run::new`, and the overflow path can still offer a curse alongside its
+  temporaries).
+- T-079 ACCEPTED: new-file-only vote UI — pure reducer, wire adapter, one controlled `VoteWidget`
+  shared by the in-run pedestals and the lobby poll, countdown ring, `RunVoteOverlay` and
+  `LobbyPoll`. The lobby poll is optional and never gates the run start. Lead fixes: five
+  `possibly undefined` errors in `VoteWidget`; the answer's test imported `@testing-library/react`,
+  which is not a dependency, so it was rewritten against `renderToStaticMarkup` (the repo
+  convention) and renamed to `.test.ts` because vitest only collects `src/**/*.test.ts`; two eslint
+  unused-symbol errors removed. 21 vitest cases.
+- T-081 ACCEPTED WITH A RECORDED GAP: `tools/voting-conformance/` — ten PASS/FAIL checks plus a
+  faithful stub and six single-behaviour violations for `--selftest`. Lead fixes: the hand-rolled
+  WebSocket client never wrote the HTTP upgrade request, and the handshake check compared a
+  lowercased header against a case-sensitive `Sec-WebSocket-Accept`. After both fixes `--selftest`
+  passes 10/10 and every violation trips exactly its own check. Wired into `just verify` after the
+  matchmaker kit; self-skips without `VOTING_URL`. GAP: the kit speaks its own JSON contract, so it
+  gates the design against a reference stub, not the shipped bincode server — the shipped voting
+  core is gated by the 94 `cargo test -p server` tests instead.
