@@ -158,3 +158,10 @@ Paid route usage: 0 tickets (0%).
 ## T-048 - alpha 2 guide, README, release notes (GLM) - ACCEPTED r0
 - README protected sections byte-identical (checked by script); check-names ok; facts match the ticket. OVERSEER
   addition: how to find the public address when UPnP is off and the port is forwarded by hand.
+
+## Release v0.2.0-alpha.1 (M2) - published, smoke-tested from the GitHub download
+- CI green (verify, docker, Windows desktop). Release: windows zip 3.2 MB (`VOIDWRAP RUN.exe`, PLAY-IN-BROWSER.cmd,
+  web/, HOW-TO-PLAY.md), linux tarball 3.2 MB, prerelease=true.
+- Downloaded zip: headless capture ok, no console errors (a first attempt under machine load saw 6 ticks/s at the
+  headless client and failed the capture's rate check; rerun alone passed); desktop launch shows the "VOIDWRAP RUN"
+  window, /health ok, graceful close.
