@@ -154,3 +154,7 @@ Paid route usage: 0 tickets (0%).
   the plain first lobby, card draft with new enemies, lobby shop with disabled Buy + reason, hosting panel (LAN and,
   on this router, UPnP public address; hosting switched off again after the test), level 4 gameplay. Capture ok,
   no console errors.
+
+## T-048 - alpha 2 guide, README, release notes (GLM) - ACCEPTED r0
+- README protected sections byte-identical (checked by script); check-names ok; facts match the ticket. OVERSEER
+  addition: how to find the public address when UPnP is off and the port is forwarded by hand.

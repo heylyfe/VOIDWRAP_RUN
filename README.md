@@ -10,24 +10,28 @@ Every run drops you into a freshly generated sprawl of floating platforms hangin
 
 ## Status
 
-The project is a pre-release alpha. Working:
+The project is a pre-release alpha (alpha 2). Working:
 
-- A lobby with enemy, upgrade, and curse voting
-- Randomly generated levels
+- Desktop game window (no browser needed; `PLAY-IN-BROWSER` falls back to the web browser)
+- A lobby with class choice, enemy, upgrade, and curse voting
+- Classes: Striker, Grappler, Blinker, Glider, each with an ability
+- A lobby shop for golden-gift money: extra lives, rerolls, small permanent boosts
+- Altars: one random upgrade and one random curse each
+- Randomly generated levels with level events (High Rise, Slick Ice, Crumbling)
 - Gifts, golden gifts, and an exit beacon
-- Lives
-- Spectator mode in multiplayer on the same network
+- Lives, and three new hunters: Bolt Sentry, False Gift, Crumble Wisp
+- Play with friends over your network or the internet from your own computer (up to 8), with spectator mode
 - Animations
 - Per-level visual themes
 
-Still planned: a shop for golden-gift money, classes, altars, more enemy types, level events, online multiplayer, accounts, cosmetics.
+Still planned: accounts, cosmetics, sound, more classes and events, installer.
 
 ## Play
 
 1. Open https://github.com/heylyfe/VOIDWRAP_RUN/releases, click the newest version's file ending in `-windows.zip`.
-2. In Downloads, right-click it -> "Extract All..." -> "Extract", open the `VOIDWRAP_RUN` folder inside.
-3. Double-click PLAY (if "Windows protected your PC" appears: "More info" -> "Run anyway").
-4. The browser opens the game; keep the black window open while you play.
+2. In Downloads, right-click it -> "Extract All..." -> "Extract", open the extracted folder.
+3. Double-click `VOIDWRAP RUN`. The game opens in its own window. If it stays empty or white, double-click `PLAY-IN-BROWSER` instead — the game then opens in your web browser (keep the black window open while you play).
+4. If "Windows protected your PC" appears: "More info" -> "Run anyway".
 
 For detailed help, see [HOW-TO-PLAY.md](HOW-TO-PLAY.md).
 
@@ -50,10 +54,13 @@ Then:
 
 ## Controls
 
-- WASD — move
+- WASD (or arrow keys) — move
 - Mouse — look (click the game to capture the mouse)
 - Space — jump (hold for higher)
-- Shift or right-click — dash
+- Shift or right-click — class ability
+- E — use an altar
+- 1–4 — choose a class in the first lobby
+- Esc — release the mouse pointer
 
 For the full control list, see [HOW-TO-PLAY.md](HOW-TO-PLAY.md).
 
