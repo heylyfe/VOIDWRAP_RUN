@@ -1,0 +1,58 @@
+
+thread 'controller::tests::blink_clamps_negative_fall_speed_to_zero' (10880) panicked at crates\sim\src\controller.rs:1312:9:
+assertion `left == right` failed: a blink must not leave the player falling
+  left: -0.53333336
+ right: 0.0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+--
+
+thread 'controller::tests::blink_uses_horizontal_velocity_when_no_input' (9680) panicked at crates\sim\src\controller.rs:1298:9:
+assertion `left == right` failed
+  left: 5
+ right: 6
+
+--
+
+thread 'controller::tests::blinker_teleports_up_to_blink_distance' (21420) panicked at crates\sim\src\controller.rs:1233:9:
+blink must teleport BLINK_DISTANCE, got 6.15
+
+---- controller::tests::blink_stops_at_last_free_position stdout ----
+
+thread 'controller::tests::blink_stops_at_last_free_position' (11372) panicked at crates\sim\src\controller.rs:1265:9:
+blink must stop before the wall, got 2.6
+
+---- controller::tests::grapple_aims_along_horizontal_velocity_when_no_input stdout ----
+
+thread 'controller::tests::grapple_aims_along_horizontal_velocity_when_no_input' (5096) panicked at crates\sim\src\controller.rs:1452:9:
+assertion `left == right` failed
+  left: 44
+ right: 45
+
+--
+
+thread 'controller::tests::grapple_ignores_gone_platforms' (20400) panicked at crates\sim\src\controller.rs:1364:9:
+assertion `left == right` failed
+  left: 0
+ right: 45
+
+--
+
+thread 'controller::tests::grapple_picks_nearest_valid_platform_and_lands_on_it' (21424) panicked at crates\sim\src\controller.rs:1322:9:
+assertion `left == right` failed
+  left: 44
+ right: 45
+
+--
+
+thread 'controller::tests::grapple_treats_warn_tiles_as_solid' (21388) panicked at crates\sim\src\controller.rs:1399:9:
+assertion `left == right` failed
+  left: 44
+ right: 45
+
+--
+
+thread 'controller::tests::striker_dash_unchanged_by_class_system' (20792) panicked at crates\sim\src\controller.rs:1206:9:
+assertion `left == right` failed
+  left: 8
+ right: 9
+

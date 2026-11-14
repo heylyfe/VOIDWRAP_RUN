@@ -1,8 +1,29 @@
-// Typed access to design/content.json: draft cards (enemies, upgrades, curses) and per-theme screen grades.
+// Typed access to design/content.json: draft cards (enemies, upgrades, curses), run classes, lobby shop stock,
+// level events and altars, plus per-theme screen grades.
 // The Rust server reads the same file, so card ids, numbers and text can never drift between client and server.
 import content from "../../design/content.json";
 
 export type Mods = Partial<Record<string, number>>;
+
+/** How an enemy moves once it is awake. Absent on a card means "chaser". */
+export type EnemyBehavior = "chaser" | "turret" | "mimic" | "corrupter";
+
+export interface EnemyParams {
+  speed: number;
+  aggro: number;
+  grace_s: number;
+  size: number;
+  /** Movement archetype; "chaser" when omitted. */
+  behavior?: EnemyBehavior;
+  /** turret: seconds between bolts. */
+  fire_interval_s?: number;
+  /** turret: bolt travel speed in units per second. */
+  projectile_speed?: number;
+  /** mimic: distance at which the gift disguise drops. */
+  reveal_radius?: number;
+  /** corrupter: seconds between platform corruptions. */
+  corrupt_interval_s?: number;
+}
 
 export interface EnemyCard {
   id: string;
@@ -10,7 +31,7 @@ export interface EnemyCard {
   flavor: string;
   behavior: string;
   threat: number;
-  params: { speed: number; aggro: number; grace_s: number; size: number };
+  params: EnemyParams;
 }
 
 export interface ModCard {
@@ -22,6 +43,47 @@ export interface ModCard {
   mods: Mods;
   threat?: number;
   greater?: boolean;
+}
+
+/** A playable class: one ability, one control line. */
+export interface ClassCard {
+  id: string;
+  name: string;
+  flavor: string;
+  ability: string;
+  controls: string;
+}
+
+export type ShopKind = "life" | "reroll" | "mods";
+
+/** A lobby purchase paid for with golden gifts. */
+export interface ShopItem {
+  id: string;
+  name: string;
+  flavor: string;
+  effect: string;
+  cost: number;
+  stock: number;
+  kind: ShopKind;
+  /** Only on kind "mods": permanent for the run. */
+  mods?: Mods;
+}
+
+/** A level-wide twist, keyed by the wire event number. */
+export interface LevelEvent {
+  id: string;
+  event: number;
+  name: string;
+  banner: string;
+  /** slick_ice only: ground friction multiplier. */
+  friction_mul?: number;
+}
+
+export interface Altar {
+  id: string;
+  name: string;
+  flavor: string;
+  effect: string;
 }
 
 export interface ScreenGrade {
@@ -37,9 +99,13 @@ export interface ScreenGrade {
   scanlines: number;
 }
 
-export const ENEMIES: readonly EnemyCard[] = content.enemies;
+export const ENEMIES: readonly EnemyCard[] = content.enemies as EnemyCard[];
 export const UPGRADES: readonly ModCard[] = content.upgrades as ModCard[];
 export const CURSES: readonly ModCard[] = content.curses as ModCard[];
+export const CLASSES: readonly ClassCard[] = content.classes as ClassCard[];
+export const SHOP: readonly ShopItem[] = content.shop as ShopItem[];
+export const EVENTS: readonly LevelEvent[] = content.events as LevelEvent[];
+export const ALTARS: readonly Altar[] = content.altars as Altar[];
 const GRADES: Record<string, ScreenGrade> = content.grades;
 
 /** Card kinds as used on the wire (protocol DraftCard.kind). */
@@ -67,6 +133,11 @@ export function lookupCard(kind: number, id: string): AnyCard | null {
     return card ? { kind: CARD_CURSE, card } : null;
   }
   return null;
+}
+
+/** Level event by its wire number; null when the level carries no event. */
+export function eventInfo(event: number): LevelEvent | null {
+  return EVENTS.find((e) => e.event === event) ?? null;
 }
 
 const NEUTRAL_GRADE: ScreenGrade = {

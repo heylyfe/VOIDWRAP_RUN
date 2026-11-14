@@ -108,3 +108,16 @@ Paid route usage: 0 tickets (0%).
 - Verified: clippy clean with and without `--features desktop`; 42 server tests; launched the desktop build: native
   window shows the title screen; `/api/host` GET/POST toggles hosting, LAN address listed, UPnP on this router
   reports "No response within timeout" -> plain-language fallback message; graceful close logs shutdown and exits.
+
+## T-042 - Level events, crumble platforms, altars in levelgen (INKLING, max) - ACCEPTED r0
+- Compiled first time; 33 levelgen tests (event distribution, high-rise median >= 6, crumble exclusions, altar
+  spacing, determinism, 200 seeds x 12 levels validate, fallback <= 2%); playthrough bot completes all levels.
+  OVERSEER fix: one clippy `div_ceil`.
+
+## T-043 - M2 content (DEEPSEEK) - ACCEPTED r0
+- validate-content ok (9 enemies, 4 classes, 7 shop items, 3 events, 1 altar), check-names ok, tsc/eslint/vitest
+  green. Existing entries only gained `"behavior": "chaser"` (allowed by the ticket).
+
+## T-040 / T-041 - returned for r1 (INKLING)
+- T-040: 9 new class tests fail (frame-counter convention, blink distance/gravity, grapple with gone platform).
+- T-041: 5 new hazards tests fail. Both held out of main until green.

@@ -6,7 +6,7 @@
       "flavor": "It has walked this void since the first beacon died.",
       "behavior": "Drifts at a third of your speed, wakes at 4.5s from huge range; bait wide arcs, never retreat straight.",
       "threat": 2,
-      "params": { "speed": 3.0, "aggro": 34.0, "grace_s": 4.5, "size": 1.3 }
+      "params": { "speed": 3.0, "aggro": 34.0, "grace_s": 4.5, "size": 1.3, "behavior": "chaser" }
     },
     {
       "id": "snapshrike",
@@ -14,7 +14,7 @@
       "flavor": "It does not hunt so much as it waits.",
       "behavior": "Lunges at near player speed, wakes at 2s, short reach; break line of sight over edges.",
       "threat": 4,
-      "params": { "speed": 8.4, "aggro": 6.5, "grace_s": 2.0, "size": 0.6 }
+      "params": { "speed": 8.4, "aggro": 6.5, "grace_s": 2.0, "size": 0.6, "behavior": "chaser" }
     },
     {
       "id": "moteling",
@@ -22,7 +22,7 @@
       "flavor": "A fistful of static that learned to hunger.",
       "behavior": "Tiny and quick but slower than you, wakes at 3s from mid range; outlast it in the open.",
       "threat": 1,
-      "params": { "speed": 7.2, "aggro": 11.0, "grace_s": 3.0, "size": 0.3 }
+      "params": { "speed": 7.2, "aggro": 11.0, "grace_s": 3.0, "size": 0.3, "behavior": "chaser" }
     },
     {
       "id": "rift_warden",
@@ -30,7 +30,7 @@
       "flavor": "A wall of the old world, still on watch.",
       "behavior": "Huge and ponderous, far slower than you, wakes last at 5s; weave around its bulk or slip over ledges.",
       "threat": 4,
-      "params": { "speed": 2.5, "aggro": 13.0, "grace_s": 5.0, "size": 1.5 }
+      "params": { "speed": 2.5, "aggro": 13.0, "grace_s": 5.0, "size": 1.5, "behavior": "chaser" }
     },
     {
       "id": "gale_wight",
@@ -38,7 +38,7 @@
       "flavor": "It rides the sideways wind between platforms.",
       "behavior": "Steady cruise well under your speed, wakes at 3.5s from mid range; outrun diagonally, never down corridors.",
       "threat": 3,
-      "params": { "speed": 5.6, "aggro": 17.0, "grace_s": 3.5, "size": 0.8 }
+      "params": { "speed": 5.6, "aggro": 17.0, "grace_s": 3.5, "size": 0.8, "behavior": "chaser" }
     },
     {
       "id": "lantern_leech",
@@ -46,7 +46,31 @@
       "flavor": "Its light is a promise it never intends to keep.",
       "behavior": "Slow glider, far-reaching aggro, wakes early at 2.5s; dash the gap when its glow slides off you.",
       "threat": 3,
-      "params": { "speed": 4.4, "aggro": 27.0, "grace_s": 2.5, "size": 0.5 }
+      "params": { "speed": 4.4, "aggro": 27.0, "grace_s": 2.5, "size": 0.5, "behavior": "chaser" }
+    },
+    {
+      "id": "turret",
+      "name": "Bolt Sentry",
+      "flavor": "It has been aiming at this spot since before you arrived.",
+      "behavior": "Never moves; fires slow glowing bolts on a timer. Break line of sight or strafe between shots.",
+      "threat": 2,
+      "params": { "speed": 0.0, "aggro": 20.0, "grace_s": 3.0, "size": 0.7, "behavior": "turret", "fire_interval_s": 1.8, "projectile_speed": 9.0 }
+    },
+    {
+      "id": "mimic",
+      "name": "False Gift",
+      "flavor": "It has been a gift for a long time, and it is patient.",
+      "behavior": "Sits as a gift until you come within 4 units, then chases. Do not stop to check; keep moving.",
+      "threat": 3,
+      "params": { "speed": 7.0, "aggro": 12.0, "grace_s": 2.0, "size": 0.5, "behavior": "mimic", "reveal_radius": 4.0 }
+    },
+    {
+      "id": "corrupter",
+      "name": "Crumble Wisp",
+      "flavor": "Where it drifts, the floor forgets how to be a floor.",
+      "behavior": "Slow flier that rots the platforms near it. Cross fast and keep off the cracked tiles.",
+      "threat": 3,
+      "params": { "speed": 3.0, "aggro": 16.0, "grace_s": 3.5, "size": 0.9, "behavior": "corrupter", "corrupt_interval_s": 3.0 }
     }
   ],
   "upgrades": [
@@ -261,6 +285,135 @@
       "threat": 5,
       "greater": true,
       "mods": { "enemy_speed_mul": 1.35, "enemy_size_mul": 1.3, "enemy_aggro_mul": 1.4 }
+    }
+  ],
+  "classes": [
+    {
+      "id": "striker",
+      "name": "Striker",
+      "flavor": "You were made to close the gap, not to hold it.",
+      "ability": "Dash a short burst forward, then wait out the cooldown.",
+      "controls": "Shift / right mouse: dash forward"
+    },
+    {
+      "id": "grappler",
+      "name": "Grappler",
+      "flavor": "The void is a wall you have learned to pull against.",
+      "ability": "Fire an auto-aimed grapple that pulls you to the platform ahead.",
+      "controls": "Shift / right mouse: grapple the platform ahead"
+    },
+    {
+      "id": "blinker",
+      "name": "Blinker",
+      "flavor": "You are never quite where the mist last saw you.",
+      "ability": "Blink instantly up to 6 units toward where you move; walls stop you.",
+      "controls": "Shift / right mouse: blink toward where you move"
+    },
+    {
+      "id": "glider",
+      "name": "Glider",
+      "flavor": "Falling is only a slower kind of flight.",
+      "ability": "Jump once more in mid-air, and hold the ability key while falling to glide.",
+      "controls": "Space in mid-air: extra jump; hold Shift / right mouse: glide"
+    }
+  ],
+  "shop": [
+    {
+      "id": "kept_flame",
+      "name": "Kept Flame",
+      "flavor": "A light left burning for a fall that has not happened yet.",
+      "effect": "+1 life; you respawn at the level start",
+      "cost": 30,
+      "stock": 1,
+      "kind": "life"
+    },
+    {
+      "id": "new_hand",
+      "name": "New Hand",
+      "flavor": "The cards were never yours. Ask again.",
+      "effect": "Reroll the reward cards offered this lobby",
+      "cost": 15,
+      "stock": 2,
+      "kind": "reroll"
+    },
+    {
+      "id": "worn_treads",
+      "name": "Worn Treads",
+      "flavor": "Old soles, already broken in by someone faster.",
+      "effect": "+8% run speed for the rest of the run",
+      "cost": 12,
+      "stock": 2,
+      "kind": "mods",
+      "mods": { "run_speed_mul": 1.08 }
+    },
+    {
+      "id": "spring_heel",
+      "name": "Spring Heel",
+      "flavor": "A small coil of tension under each step.",
+      "effect": "+6% jump velocity for the rest of the run",
+      "cost": 10,
+      "stock": 2,
+      "kind": "mods",
+      "mods": { "jump_mul": 1.06 }
+    },
+    {
+      "id": "short_fuse",
+      "name": "Short Fuse",
+      "flavor": "The dash comes back before you miss it.",
+      "effect": "-10% dash cooldown for the rest of the run",
+      "cost": 14,
+      "stock": 1,
+      "kind": "mods",
+      "mods": { "dash_cooldown_mul": 0.9 }
+    },
+    {
+      "id": "wide_palm",
+      "name": "Wide Palm",
+      "flavor": "Your reach grows a finger's width at a time.",
+      "effect": "+15% gift pickup reach for the rest of the run",
+      "cost": 8,
+      "stock": 3,
+      "kind": "mods",
+      "mods": { "gift_radius_mul": 1.15 }
+    },
+    {
+      "id": "thin_veil",
+      "name": "Thin Veil",
+      "flavor": "The mist thins where you look hardest.",
+      "effect": "-12% fog density for the rest of the run",
+      "cost": 9,
+      "stock": 2,
+      "kind": "mods",
+      "mods": { "fog_density_mul": 0.88 }
+    }
+  ],
+  "events": [
+    {
+      "id": "high_rise",
+      "event": 1,
+      "name": "High Rise",
+      "banner": "The platforms climb higher and the gaps run wider."
+    },
+    {
+      "id": "slick_ice",
+      "event": 2,
+      "name": "Slick Ice",
+      "banner": "Every floor is ice: you slide and stop slowly.",
+      "friction_mul": 0.25
+    },
+    {
+      "id": "crumbling",
+      "event": 3,
+      "name": "Crumbling",
+      "banner": "Platforms crumble underfoot; keep moving forward."
+    }
+  ],
+  "altars": [
+    {
+      "id": "bargain_altar",
+      "name": "Bargain Altar",
+      "flavor": "It asks for nothing you will miss until later.",
+      "effect": "Press E: gain a random upgrade and a random curse. One use per altar."
     }
   ],
   "grades": {

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Validates design content (enemies, upgrades, curses, screen grades) against the effect vocabulary and the
-// playability limits. Used by `just verify` on design/content.json and by OVERSEER on subordinate drafts.
+// Validates design content (enemies, upgrades, curses, classes, shop, events, altars, screen grades) against the
+// effect vocabulary and the playability limits. Used by `just verify` on design/content.json and by OVERSEER on
+// subordinate drafts.
 //   node tools/validate-content.mjs [path=design/content.json]
 import { readFileSync } from "node:fs";
 
@@ -42,6 +43,11 @@ function checkMods(where, mods, greater) {
   }
 }
 
+// --- enemies ---------------------------------------------------------------------------------------------------
+// "chaser" is the default when params.behavior is absent; the other three are the M2 archetypes.
+const ENEMY_BEHAVIORS = ["chaser", "turret", "mimic", "corrupter"];
+const REQUIRED_ENEMIES = ["turret", "mimic", "corrupter"];
+
 if (!Array.isArray(c.enemies) || c.enemies.length < 4) err("need >= 4 enemies");
 for (const [i, e] of (c.enemies ?? []).entries()) {
   const w = `enemies[${i}]`;
@@ -51,11 +57,38 @@ for (const [i, e] of (c.enemies ?? []).entries()) {
   checkText(w, "behavior", e.behavior, 110);
   if (!Number.isInteger(e.threat) || e.threat < 1 || e.threat > 5) err(`${w}.threat`);
   const p = e.params ?? {};
-  if (!(p.speed > 0 && p.speed <= 8.5)) err(`${w}.params.speed=${p.speed} must be in (0, 8.5]`);
+  const kind = p.behavior ?? "chaser";
+  if (!ENEMY_BEHAVIORS.includes(kind)) {
+    err(`${w}.params.behavior=${JSON.stringify(p.behavior)} not one of ${ENEMY_BEHAVIORS.join(", ")}`);
+  }
+  if (!(typeof p.speed === "number" && p.speed >= 0 && p.speed <= 8.5)) err(`${w}.params.speed=${p.speed} must be in [0, 8.5]`);
+  if (kind !== "turret" && !(p.speed > 0)) err(`${w}.params.speed=${p.speed} must be > 0 for behavior ${kind}`);
   if (!(p.aggro >= 4 && p.aggro <= 40)) err(`${w}.params.aggro=${p.aggro}`);
   if (!(p.grace_s >= 1.5 && p.grace_s <= 5)) err(`${w}.params.grace_s=${p.grace_s}`);
   if (!(p.size >= 0.2 && p.size <= 1.5)) err(`${w}.params.size=${p.size}`);
+  if (kind === "turret") {
+    if (p.speed !== 0) err(`${w}.params.speed=${p.speed} must be 0 for a turret`);
+    if (!(p.fire_interval_s >= 1.2 && p.fire_interval_s <= 2.5)) err(`${w}.params.fire_interval_s=${p.fire_interval_s} outside [1.2, 2.5]`);
+    if (!(p.projectile_speed >= 7 && p.projectile_speed <= 11)) err(`${w}.params.projectile_speed=${p.projectile_speed} outside [7, 11]`);
+  }
+  if (kind === "mimic") {
+    if (!(p.speed >= 6 && p.speed <= 8)) err(`${w}.params.speed=${p.speed} outside [6, 8] for a mimic`);
+    if (!(p.reveal_radius >= 3 && p.reveal_radius <= 4.5)) err(`${w}.params.reveal_radius=${p.reveal_radius} outside [3, 4.5]`);
+  }
+  if (kind === "corrupter") {
+    if (!(p.speed >= 2 && p.speed <= 4)) err(`${w}.params.speed=${p.speed} outside [2, 4] for a corrupter`);
+    if (!(p.corrupt_interval_s >= 2 && p.corrupt_interval_s <= 4)) err(`${w}.params.corrupt_interval_s=${p.corrupt_interval_s} outside [2, 4]`);
+  }
 }
+for (const id of REQUIRED_ENEMIES) {
+  const e = (c.enemies ?? []).find((x) => x?.id === id);
+  if (!e) err(`enemies: missing required enemy ${id}`);
+  else if (e.params?.behavior !== id) err(`enemies[${id}].params.behavior=${JSON.stringify(e.params?.behavior)} must be ${id}`);
+}
+
+// --- upgrades and curses ---------------------------------------------------------------------------------------
+// Every mod key a shop item may use has to already exist on an upgrade or a curse.
+const usedModKeys = new Set();
 for (const [kind, list, min] of [["upgrades", c.upgrades, 8], ["curses", c.curses, 8]]) {
   if (!Array.isArray(list) || list.length < min) err(`need >= ${min} ${kind}`);
   for (const [i, k] of (list ?? []).entries()) {
@@ -67,6 +100,7 @@ for (const [kind, list, min] of [["upgrades", c.upgrades, 8], ["curses", c.curse
     if (!["common", "rare"].includes(k.rarity)) err(`${w}.rarity`);
     if (kind === "curses" && (!Number.isInteger(k.threat) || k.threat < 1 || k.threat > 5)) err(`${w}.threat`);
     checkMods(w, k.mods, kind === "curses" && k.greater === true);
+    for (const key of Object.keys(k.mods ?? {})) usedModKeys.add(key);
   }
 }
 const greaterCount = (c.curses ?? []).filter((k) => k.greater === true).length;
@@ -75,6 +109,90 @@ if (greaterCount < 3) err(`need >= 3 greater curses (have ${greaterCount})`);
 const fastest = Math.max(...(c.enemies ?? []).map((e) => e.params?.speed ?? 0));
 const worstMul = Math.max(1, ...(c.curses ?? []).map((k) => k.mods?.enemy_speed_mul ?? 1));
 if (fastest * worstMul > 14) err(`fastest enemy x worst curse = ${(fastest * worstMul).toFixed(1)} u/s > 14 (cap)`);
+
+// --- classes ---------------------------------------------------------------------------------------------------
+// Order is fixed: the client indexes classes by position on the select screen.
+const CLASS_IDS = ["striker", "grappler", "blinker", "glider"];
+if (!Array.isArray(c.classes)) err("classes: missing");
+else {
+  if (c.classes.length !== CLASS_IDS.length) err(`classes: need exactly ${CLASS_IDS.length} (have ${c.classes.length})`);
+  for (const [i, k] of c.classes.entries()) {
+    const w = `classes[${i}]`;
+    checkId(w, k.id);
+    if (k.id !== CLASS_IDS[i]) err(`${w}.id=${JSON.stringify(k.id)} must be ${CLASS_IDS[i]} (class order is fixed)`);
+    checkText(w, "name", k.name, 24);
+    checkText(w, "flavor", k.flavor, 70);
+    checkText(w, "ability", k.ability, 90);
+    checkText(w, "controls", k.controls, 80);
+  }
+}
+
+// --- shop ------------------------------------------------------------------------------------------------------
+const SHOP_KINDS = ["life", "reroll", "mods"];
+if (!Array.isArray(c.shop)) err("shop: missing");
+else {
+  if (c.shop.length !== 7) err(`shop: need exactly 7 items (have ${c.shop.length})`);
+  const counts = { life: 0, reroll: 0, mods: 0 };
+  for (const [i, s] of c.shop.entries()) {
+    const w = `shop[${i}]`;
+    checkId(w, s.id);
+    checkText(w, "name", s.name, 28);
+    checkText(w, "flavor", s.flavor, 70);
+    checkText(w, "effect", s.effect, 60);
+    if (!SHOP_KINDS.includes(s.kind)) err(`${w}.kind=${JSON.stringify(s.kind)} not one of ${SHOP_KINDS.join(", ")}`);
+    else counts[s.kind] += 1;
+    if (!Number.isInteger(s.cost) || s.cost < 5 || s.cost > 40) err(`${w}.cost=${s.cost} must be an integer 5..40`);
+    if (!Number.isInteger(s.stock) || s.stock < 1 || s.stock > 3) err(`${w}.stock=${s.stock} must be an integer 1..3`);
+    if (s.kind === "life" && !(s.cost >= 25 && s.cost <= 35)) err(`${w}.cost=${s.cost} must be 25..35 for a life`);
+    if (s.kind === "mods") {
+      checkMods(w, s.mods, false);
+      for (const key of Object.keys(s.mods ?? {})) {
+        if (!usedModKeys.has(key)) err(`${w}.mods.${key}: not a key used by any upgrade or curse`);
+      }
+    } else if (s.mods !== undefined) err(`${w}.mods: only "mods" shop items carry mods`);
+  }
+  if (counts.life !== 1) err(`shop: need exactly 1 life item (have ${counts.life})`);
+  if (counts.reroll !== 1) err(`shop: need exactly 1 reroll item (have ${counts.reroll})`);
+  if (counts.mods !== 5) err(`shop: need exactly 5 mods items (have ${counts.mods})`);
+}
+
+// --- level events ----------------------------------------------------------------------------------------------
+const EVENT_ORDER = [
+  { id: "high_rise", event: 1 },
+  { id: "slick_ice", event: 2 },
+  { id: "crumbling", event: 3 },
+];
+if (!Array.isArray(c.events)) err("events: missing");
+else {
+  if (c.events.length !== EVENT_ORDER.length) err(`events: need exactly ${EVENT_ORDER.length} (have ${c.events.length})`);
+  for (const [i, want] of EVENT_ORDER.entries()) {
+    const e = c.events[i];
+    const w = `events[${i}]`;
+    if (!e) { err(`${w}: missing`); continue; }
+    checkId(w, e.id);
+    if (e.id !== want.id) err(`${w}.id=${JSON.stringify(e.id)} must be ${want.id}`);
+    if (e.event !== want.event) err(`${w}.event=${e.event} must be ${want.event}`);
+    checkText(w, "name", e.name, 24);
+    checkText(w, "banner", e.banner, 70);
+  }
+  const ice = c.events.find((e) => e?.id === "slick_ice");
+  if (ice && ice.friction_mul !== 0.25) err(`events[slick_ice].friction_mul=${ice.friction_mul} must be 0.25`);
+}
+
+// --- altars ----------------------------------------------------------------------------------------------------
+if (!Array.isArray(c.altars) || c.altars.length !== 1) {
+  err(`altars: need exactly 1 (have ${Array.isArray(c.altars) ? c.altars.length : 0})`);
+}
+for (const [i, a] of (c.altars ?? []).entries()) {
+  const w = `altars[${i}]`;
+  checkId(w, a.id);
+  if (a.id !== "bargain_altar") err(`${w}.id=${JSON.stringify(a.id)} must be bargain_altar`);
+  checkText(w, "name", a.name, 28);
+  checkText(w, "flavor", a.flavor, 70);
+  checkText(w, "effect", a.effect, 90);
+}
+
+// --- screen grades ---------------------------------------------------------------------------------------------
 for (const t of THEMES) {
   const g = c.grades?.[t];
   if (!g) { err(`grades.${t}: missing`); continue; }
@@ -84,8 +202,9 @@ for (const t of THEMES) {
   range("brightness", -0.15, 0.1); range("vignette_darkness", 0.2, 0.8); range("aberration", 0.0004, 0.003);
   range("grain", 0, 0.08); range("scanlines", 0, 0.15);
 }
+
 if (errors.length) {
   console.error(`validate-content: ${path}: ${errors.length} problem(s)\n  ${errors.join("\n  ")}`);
   process.exit(1);
 }
-console.log(`validate-content: ${path} ok (${c.enemies.length} enemies, ${c.upgrades.length} upgrades, ${c.curses.length} curses; fastest enemy worst case ${(fastest * worstMul).toFixed(1)} u/s vs player ${PLAYER_SPEED})`);
+console.log(`validate-content: ${path} ok (${c.enemies.length} enemies, ${c.upgrades.length} upgrades, ${c.curses.length} curses, ${c.classes.length} classes, ${c.shop.length} shop items, ${c.events.length} events, ${c.altars.length} altars; fastest enemy worst case ${(fastest * worstMul).toFixed(1)} u/s vs player ${PLAYER_SPEED})`);

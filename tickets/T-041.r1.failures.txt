@@ -1,0 +1,30 @@
+
+thread 'hazards::tests::corrupter_waits_out_grace_before_corrupting' (1940) panicked at crates\sim\src\hazards.rs:652:9:
+grace: no corruption yet
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- hazards::tests::projectile_count_is_capped stdout ----
+
+thread 'hazards::tests::projectile_count_is_capped' (6696) panicked at crates\sim\src\hazards.rs:559:9:
+assertion `left == right` failed
+  left: 0
+ right: 64
+
+---- hazards::tests::projectile_is_removed_after_lifetime stdout ----
+
+thread 'hazards::tests::projectile_is_removed_after_lifetime' (20796) panicked at crates\sim\src\hazards.rs:490:17:
+projectile must live 80 ticks
+
+---- hazards::tests::standing_does_not_reset_gone_back_to_warn stdout ----
+
+thread 'hazards::tests::standing_does_not_reset_gone_back_to_warn' (19804) panicked at crates\sim\src\hazards.rs:809:9:
+GONE must run its full course, not reset
+
+---- hazards::tests::turret_respects_grace_period stdout ----
+
+thread 'hazards::tests::turret_respects_grace_period' (19608) panicked at crates\sim\src\hazards.rs:445:9:
+grace: no firing yet
+
+
+failures:
+    hazards::tests::corrupter_waits_out_grace_before_corrupting
