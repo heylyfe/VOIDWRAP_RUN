@@ -71,7 +71,6 @@ VIAddVersionKey "OriginalFilename" "${APP_EXE}"
 !insertmacro MUI_UNPAGE_INSTFILES
 
 !insertmacro MUI_LANGUAGE "English"
-!insertmacro MUI_UNLANGUAGE "English"
 
 ; If the game is open, ask the user to close it. _id keeps labels unique between the
 ; install and uninstall sections.
