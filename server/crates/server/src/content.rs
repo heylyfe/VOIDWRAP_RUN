@@ -1,10 +1,13 @@
 //! Draft content (enemies, upgrades, curses, classes, shop, events, altars) loaded from design/content.json —
 //! the same file the client reads, so card ids, numbers and text cannot drift. Compiled into the binary;
-//! validated at startup and in tests. The M2 sections are optional in the file so older content still loads.
+//! validated at startup and in tests. The M2/M3 sections are optional in the file so older content still loads.
 
 use protocol::Tuning;
 use serde::Deserialize;
-use sim::rules::{BEHAVIOR_CHASER, BEHAVIOR_CORRUPTER, BEHAVIOR_MIMIC, BEHAVIOR_TURRET, EnemyParams};
+use sim::rules::{
+    BEHAVIOR_CORRUPTER, BEHAVIOR_GALE_WIGHT, BEHAVIOR_LANTERN_LEECH, BEHAVIOR_MIMIC, BEHAVIOR_MOTELING,
+    BEHAVIOR_PALLBEARER, BEHAVIOR_RIFT_WARDEN, BEHAVIOR_SNAPSHRIKE, BEHAVIOR_TURRET, EnemyParams,
+};
 use std::collections::BTreeMap;
 
 const CONTENT_JSON: &str = include_str!("../../../../design/content.json");
@@ -28,8 +31,8 @@ const KNOWN_MODS: [&str; 15] = [
     "extra_enemies_add",
 ];
 
-fn chaser() -> String {
-    "chaser".to_string()
+fn pallbearer() -> String {
+    "pallbearer".to_string()
 }
 
 fn one() -> f32 {
@@ -38,25 +41,16 @@ fn one() -> f32 {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct EnemyStats {
+    /// Design main speed; kept in the file for reference. The per-enemy speeds live in the sim (`sim::hazards`),
+    /// so this field is not wired into `EnemyParams` (speed comes from the sim plus the `enemy_speed_mul` curse).
     pub speed: f32,
+    /// Design aggro radius; kept in the file for reference. The sim owns targeting ranges, so this is not wired in either.
     pub aggro: f32,
     pub grace_s: f32,
     pub size: f32,
-    /// "chaser" | "turret" | "mimic" | "corrupter"; unknown values degrade to chaser.
-    #[serde(default = "chaser")]
+    /// "pallbearer" | "snapshrike" | ... | "corrupter"; unknown values degrade to pallbearer.
+    #[serde(default = "pallbearer")]
     pub behavior: String,
-    /// Seconds between turret shots (turrets only).
-    #[serde(default)]
-    pub fire_interval_s: Option<f32>,
-    /// Projectile speed in units/s (turrets only).
-    #[serde(default)]
-    pub projectile_speed: Option<f32>,
-    /// Distance at which a disguised mimic reveals itself.
-    #[serde(default)]
-    pub reveal_radius: Option<f32>,
-    /// Seconds between a corrupter's platform rots.
-    #[serde(default)]
-    pub corrupt_interval_s: Option<f32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -171,11 +165,11 @@ impl Content {
         }
         // Classes: the first four, in order, are the CLASS_* protocol constants.
         if !c.classes.is_empty() {
-            let expected = ["striker", "grappler", "blinker", "glider"];
+            let expected = ["striker", "grappler", "bulwark", "glider"];
             let valid = c.classes.len() >= expected.len()
                 && c.classes.iter().zip(expected).all(|(class, want)| class.id == want);
             if !valid {
-                return Err("design/content.json: classes must start with striker, grappler, blinker, glider".into());
+                return Err("design/content.json: classes must start with striker, grappler, bulwark, glider".into());
             }
         }
         // Altars: unique ids.
@@ -323,39 +317,32 @@ impl RunMods {
         }
     }
 
-    /// Enemy parameters after curses. Seconds become whole ticks at TICK_HZ (rounded, at least 1).
+    /// Enemy parameters after curses: size scaled, grace converted to ticks, speed multiplier from the speed curse.
+    /// Per-enemy design numbers live in the sim; `speed_mul` starts at the curse multiplier (1.0 by default).
     pub fn enemy_params(&self, stats: &EnemyStats) -> EnemyParams {
-        let mut params = EnemyParams {
-            speed: stats.speed * self.enemy_speed_mul,
-            aggro: stats.aggro * self.enemy_aggro_mul,
+        EnemyParams {
+            behavior: behavior_from_str(&stats.behavior),
+            speed_mul: self.enemy_speed_mul,
             size: stats.size * self.enemy_size_mul,
             grace_ticks: secs_to_ticks(stats.grace_s * self.enemy_grace_mul),
-            behavior: behavior_from_str(&stats.behavior),
-            ..EnemyParams::default()
-        };
-        if let Some(s) = stats.fire_interval_s.filter(|s| s.is_finite()) {
-            params.fire_interval_ticks = secs_to_ticks(s);
         }
-        if let Some(v) = stats.projectile_speed.filter(|v| v.is_finite()) {
-            params.projectile_speed = v;
-        }
-        if let Some(v) = stats.reveal_radius.filter(|v| v.is_finite()) {
-            params.reveal_radius = v;
-        }
-        if let Some(s) = stats.corrupt_interval_s.filter(|s| s.is_finite()) {
-            params.corrupt_interval_ticks = secs_to_ticks(s);
-        }
-        params
     }
 }
 
-/// Map a behavior string to a BEHAVIOR_* constant; unknown strings degrade to chaser.
+/// Map a behavior string to a BEHAVIOR_* constant; content order is the protocol's behaviour order.
+/// Unknown strings degrade to pallbearer.
 fn behavior_from_str(s: &str) -> u8 {
     match s {
+        "pallbearer" => BEHAVIOR_PALLBEARER,
+        "snapshrike" => BEHAVIOR_SNAPSHRIKE,
+        "moteling" => BEHAVIOR_MOTELING,
+        "rift_warden" => BEHAVIOR_RIFT_WARDEN,
+        "gale_wight" => BEHAVIOR_GALE_WIGHT,
+        "lantern_leech" => BEHAVIOR_LANTERN_LEECH,
         "turret" => BEHAVIOR_TURRET,
         "mimic" => BEHAVIOR_MIMIC,
         "corrupter" => BEHAVIOR_CORRUPTER,
-        _ => BEHAVIOR_CHASER,
+        _ => BEHAVIOR_PALLBEARER,
     }
 }
 
@@ -428,113 +415,69 @@ mod tests {
             aggro: 10.0,
             grace_s: 4.0,
             size: 0.5,
-            behavior: "chaser".to_string(),
-            fire_interval_s: None,
-            projectile_speed: None,
-            reveal_radius: None,
-            corrupt_interval_s: None,
+            behavior: "snapshrike".to_string(),
         });
-        assert_eq!(p.speed, 6.0);
+        assert_eq!(p.speed_mul, 1.5);
+        assert_eq!(p.size, 0.5);
         assert_eq!(p.grace_ticks, 40);
     }
 
     #[test]
-    fn enemy_params_map_behavior_strings_and_second_params() {
+    fn enemy_params_map_behavior_strings() {
         let m = RunMods::default();
-        let turret = EnemyStats {
+        let stats = |behavior: &str| EnemyStats {
             speed: 0.0,
-            aggro: 20.0,
-            grace_s: 3.0,
-            size: 0.7,
-            behavior: "turret".to_string(),
-            fire_interval_s: Some(1.8),
-            projectile_speed: Some(9.0),
-            reveal_radius: None,
-            corrupt_interval_s: None,
-        };
-        let p = m.enemy_params(&turret);
-        assert_eq!(p.behavior, BEHAVIOR_TURRET);
-        assert_eq!(p.grace_ticks, 60);
-        assert_eq!(p.fire_interval_ticks, 36);
-        assert_eq!(p.projectile_speed, 9.0);
-        // Unset second-based params keep the sim defaults.
-        let default = EnemyParams::default();
-        assert_eq!(p.reveal_radius, default.reveal_radius);
-        assert_eq!(p.corrupt_interval_ticks, default.corrupt_interval_ticks);
-
-        let mimic = EnemyStats {
-            speed: 7.0,
-            aggro: 12.0,
+            aggro: 0.0,
             grace_s: 2.0,
-            size: 0.5,
-            behavior: "mimic".to_string(),
-            fire_interval_s: None,
-            projectile_speed: None,
-            reveal_radius: Some(4.0),
-            corrupt_interval_s: None,
+            size: 0.7,
+            behavior: behavior.to_string(),
         };
-        let p = m.enemy_params(&mimic);
-        assert_eq!(p.behavior, BEHAVIOR_MIMIC);
-        assert_eq!(p.reveal_radius, 4.0);
-
-        let corrupter = EnemyStats {
-            speed: 3.0,
-            aggro: 16.0,
-            grace_s: 3.5,
-            size: 0.9,
-            behavior: "corrupter".to_string(),
-            fire_interval_s: None,
-            projectile_speed: None,
-            reveal_radius: None,
-            corrupt_interval_s: Some(3.0),
-        };
-        let p = m.enemy_params(&corrupter);
-        assert_eq!(p.behavior, BEHAVIOR_CORRUPTER);
-        assert_eq!(p.grace_ticks, 70);
-        assert_eq!(p.corrupt_interval_ticks, 60);
-
-        // Unknown behavior degrades to chaser.
-        let mystery = EnemyStats {
-            speed: 1.0,
-            aggro: 1.0,
-            grace_s: 1.0,
-            size: 1.0,
-            behavior: "wraith".to_string(),
-            fire_interval_s: None,
-            projectile_speed: None,
-            reveal_radius: None,
-            corrupt_interval_s: None,
-        };
-        assert_eq!(m.enemy_params(&mystery).behavior, BEHAVIOR_CHASER);
-
+        let cases = [
+            ("pallbearer", BEHAVIOR_PALLBEARER),
+            ("snapshrike", BEHAVIOR_SNAPSHRIKE),
+            ("moteling", BEHAVIOR_MOTELING),
+            ("rift_warden", BEHAVIOR_RIFT_WARDEN),
+            ("gale_wight", BEHAVIOR_GALE_WIGHT),
+            ("lantern_leech", BEHAVIOR_LANTERN_LEECH),
+            ("turret", BEHAVIOR_TURRET),
+            ("mimic", BEHAVIOR_MIMIC),
+            ("corrupter", BEHAVIOR_CORRUPTER),
+        ];
+        for (name, want) in cases {
+            assert_eq!(m.enemy_params(&stats(name)).behavior, want, "{name}");
+        }
+        // Unknown behavior degrades to pallbearer.
+        assert_eq!(m.enemy_params(&stats("wraith")).behavior, BEHAVIOR_PALLBEARER);
         // Ticks are rounded and at least 1 (even for zero/negative seconds).
         let tiny = EnemyStats {
             speed: 1.0,
             aggro: 1.0,
             grace_s: 0.01,
             size: 1.0,
-            behavior: "chaser".to_string(),
-            fire_interval_s: Some(0.01),
-            projectile_speed: None,
-            reveal_radius: None,
-            corrupt_interval_s: Some(-5.0),
+            behavior: "pallbearer".to_string(),
         };
         let p = m.enemy_params(&tiny);
         assert_eq!(p.grace_ticks, 1);
-        assert_eq!(p.fire_interval_ticks, 1);
-        assert_eq!(p.corrupt_interval_ticks, 1);
+        let negative = EnemyStats {
+            speed: 1.0,
+            aggro: 1.0,
+            grace_s: -5.0,
+            size: 1.0,
+            behavior: "pallbearer".to_string(),
+        };
+        assert_eq!(m.enemy_params(&negative).grace_ticks, 1);
     }
 
     #[test]
     fn new_sections_parse_and_validate() {
         let c = Content::load().unwrap();
         let class_ids: Vec<&str> = c.classes.iter().map(|k| k.id.as_str()).collect();
-        assert_eq!(class_ids, ["striker", "grappler", "blinker", "glider"]);
+        assert_eq!(class_ids, ["striker", "grappler", "bulwark", "glider"]);
         assert!(c.shop.len() >= 4, "shop needs at least 4 items for an offer");
         let kept_flame = c.shop_item("kept_flame").unwrap();
         assert_eq!(
             (kept_flame.cost, kept_flame.stock, kept_flame.kind.as_str()),
-            (30, 1, "life")
+            (60, 1, "life")
         );
         let ice = c.event(2).unwrap();
         assert_eq!(ice.id, "slick_ice");
@@ -550,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn older_content_without_m2_sections_still_loads() {
+    fn older_content_without_m2_or_m3_sections_still_loads() {
         // Simulates an older content.json: no classes/shop/events/altars, no behavior.
         let older = r#"{
             "enemies": [
@@ -575,7 +518,7 @@ mod tests {
         }"#;
         let c: Content = serde_json::from_str(older).unwrap();
         assert!(c.shop.is_empty() && c.events.is_empty() && c.classes.is_empty() && c.altars.is_empty());
-        assert_eq!(c.enemies[0].params.behavior, "chaser");
+        assert_eq!(c.enemies[0].params.behavior, "pallbearer");
         assert_eq!(c.event(2).map(|e| e.id.as_str()), None);
     }
 }

@@ -248,6 +248,13 @@ impl Game {
                 ids: vec![def.id.clone()],
             });
         }
+        // Escalation milestone banner (design §5, from level 4 on): only on actual level starts, not in the lobby.
+        if self.run.phase == PHASE_PLAYING && crate::run::escalation_milestone_level(self.run.level_num) {
+            self.broadcast(&ServerMsg::Notice {
+                kind: NOTICE_EVENT,
+                ids: vec![format!("milestone_{}", self.run.level_num)],
+            });
+        }
         let info = ServerMsg::RunState { info: self.run.info() };
         self.broadcast(&info);
         if let Some(draft) = self.draft_msg() {
@@ -566,7 +573,7 @@ impl Game {
             .collect();
         let enemies = self.run.enemy_views();
         let projectiles = self.run.hazards.projectiles();
-        let tiles = self.run.hazards.tiles();
+        let tiles = self.run.world_tiles();
         let altars_used = self.run.altars_used.clone();
         for id in self.joined_ids() {
             let Some(p) = self.conns.get(&id).and_then(|c| c.player.as_ref()) else {
@@ -584,40 +591,131 @@ impl Game {
                 tiles: tiles.clone(),
                 altars_used: altars_used.clone(),
                 // M3 (T-056): two-phase levels.
-                level_phase: protocol::LEVEL_COLLECT,
-                golden_taken: Vec::new(),
-                collapse_ms: 0,
+                level_phase: self.run.level_phase,
+                golden_taken: self.run.golden_taken.clone(),
+                collapse_ms: self.run.collapse_ms(),
             };
             self.send(id, &msg);
         }
     }
 
     fn tick_playing(&mut self) {
-        // Gifts (shared by the team; golden ones unlock after the normal ones).
+        // Phase timers advance with the tick (PENDING -> COLLAPSING after 3.0 s; batch warnings and drops).
+        self.run.tick_collapse();
+
+        // Gifts (shared by the team). In phase 2 these are the golden gifts at the collected positions.
         let currency_before = self.run.currency;
+        let mut pickups: Vec<Vec3> = Vec::new();
+        let phase_before = self.run.level_phase;
         for conn in self.conns.values() {
             if let Some(p) = conn.player.as_ref().filter(|p| p.active()) {
-                self.run.collect_gifts(&p.state.pos);
+                pickups.extend(self.run.collect_gifts(&p.state.pos));
             }
         }
         let mut info_changed = self.run.currency != currency_before;
+        if phase_before != self.run.level_phase && self.run.level_phase == protocol::LEVEL_COLLAPSE_PENDING {
+            self.broadcast(&ServerMsg::Notice {
+                kind: NOTICE_EVENT,
+                ids: vec!["collapse".to_string()],
+            });
+        }
 
-        // Hazards: enemy behaviour (chaser/turret/mimic/corrupter), projectiles, crumbling tiles.
-        // `players` are the feet positions of the living; Hazards derives centres from them.
-        let feet: Vec<Vec3> = self
+        // Hazards: the senses of the ACTIVE players. `warded` = Bulwark Aegis Bloom is up (knockback-immune).
+        // `speed_mul` = the phase-2 pressure multiplier (1.1 in LEVEL_COLLAPSING, design §1.4).
+        let speed_mul = if self.run.level_phase == protocol::LEVEL_COLLAPSING {
+            1.10
+        } else {
+            1.0
+        };
+        let senses: Vec<sim::hazards::PlayerSense> = self
             .conns
             .values()
             .filter_map(|c| c.player.as_ref())
             .filter(|p| p.active())
-            .map(|p| p.state.pos.clone())
+            .map(|p| sim::hazards::PlayerSense {
+                id: p.id,
+                feet: p.state.pos.clone(),
+                vel: p.state.vel.clone(),
+                warded: p.state.ward_frames > 0,
+            })
             .collect();
-        self.run
-            .hazards
-            .step(&mut self.run.enemies, &self.run.world, &self.run.level, &feet);
-        // Crumbled platforms stop being solid for every player's controller from the next step.
-        self.run.world.set_tiles(&self.run.hazards.tiles());
+        let effects = self.run.hazards.step(
+            &mut self.run.enemies,
+            &self.run.world,
+            &self.run.level,
+            &senses,
+            &pickups,
+            speed_mul,
+        );
+        let mut shoves: Vec<(u32, Vec3, u8)> = Vec::new();
+        let mut kills: BTreeMap<u32, u8> = BTreeMap::new();
+        for effect in effects {
+            match effect {
+                sim::hazards::HazardEffect::Kill { player, cause } => {
+                    kills.entry(player).or_insert(cause);
+                }
+                sim::hazards::HazardEffect::Shove {
+                    player,
+                    vel,
+                    stagger_ticks,
+                } => shoves.push((player, vel, stagger_ticks)),
+            }
+        }
+
+        // Bulwark Aegis Bloom: on the pulse frame the sim knocks enemies back; other ACTIVE, unwarded
+        // players within 3.0 u (chest to chest) are shoved directly away at 7 u/s with 48 frames of stagger.
+        let pulses: Vec<(u32, Vec3)> = self
+            .conns
+            .values()
+            .filter_map(|c| c.player.as_ref())
+            .filter(|p| p.active() && controller::bulwark_pulse_frame(&p.state))
+            .map(|p| (p.id, Vec3::new(p.state.pos.x, p.state.pos.y + 0.9, p.state.pos.z)))
+            .collect();
+        for (caster_id, centre) in pulses {
+            self.run.hazards.pulse(&mut self.run.enemies, &centre, BULWARK_PULSE_RADIUS);
+            let others: Vec<PulsePlayer> = self
+                .conns
+                .values()
+                .filter_map(|c| c.player.as_ref())
+                .filter(|p| p.active())
+                .map(|p| PulsePlayer {
+                    id: p.id,
+                    feet: p.state.pos.clone(),
+                    warded: p.state.ward_frames > 0,
+                })
+                .collect();
+            for (player_id, vel, stagger_frames) in pulse_stagger_targets(caster_id, &centre, &others) {
+                if let Some(p) = self
+                    .conns
+                    .values_mut()
+                    .filter_map(|c| c.player.as_mut())
+                    .find(|p| p.id == player_id)
+                {
+                    p.state.vel = vel;
+                    p.state.stagger_frames = stagger_frames;
+                }
+            }
+        }
+
+        // Shove effects (e.g. the Rift Warden): velocity is replaced; stagger upgraded to 60 Hz frames.
+        for (player_id, vel, stagger_ticks) in shoves {
+            if let Some(p) = self
+                .conns
+                .values_mut()
+                .filter_map(|c| c.player.as_mut())
+                .find(|p| p.id == player_id && p.active())
+            {
+                p.state.vel = vel;
+                p.state.stagger_frames = stagger_ticks.saturating_mul(3);
+            }
+        }
+
+        // World tiles: hazards (Crumble/Fretted) merged with the collapse (collapse wins on the same id).
+        let tiles = self.run.world_tiles();
+        self.run.world.set_tiles(&tiles);
 
         // Deaths: a spare life (shared by the team) respawns you at the level start; otherwise you spectate.
+        // `kills` come from the hazards (enemy contact, projectiles); the void check stays the cheap early-out.
         let ids = self.joined_ids();
         for (slot, id) in ids.iter().enumerate() {
             let at = self.spawn_point(slot);
@@ -632,8 +730,7 @@ impl Game {
             let cause = if p.state.pos.y < self.run.world.kill_y {
                 Some(DEATH_VOID)
             } else {
-                // Dormant and disguised enemies are harmless; projectiles kill.
-                self.run.hazards.hit(&self.run.enemies, &p.state.pos)
+                kills.get(&p.id).copied()
             };
             let Some(cause) = cause else {
                 continue;
@@ -907,20 +1004,26 @@ mod tests {
         hello(&mut g, 1);
         vote(&mut g, 1);
         drain(&mut rx);
+        // Level 2: all gifts are normal; the last one starts the collapse phase.
         let gifts = g.run.level.gifts.clone();
-        // Normal gifts first, then the golden ones (currency).
-        for gift in gifts
-            .iter()
-            .filter(|g| g.kind != GIFT_GOLDEN)
-            .chain(gifts.iter().filter(|g| g.kind == GIFT_GOLDEN))
-        {
+        for gift in gifts.iter().filter(|g| g.kind != GIFT_GOLDEN) {
             player(&mut g, 1).state.pos = Vec3::new(gift.pos.x, gift.pos.y - 0.9, gift.pos.z);
             for e in &mut g.run.enemies {
                 e.active_in = 1_000; // keep enemies dormant for this test
             }
             g.tick();
         }
+        assert_eq!(g.run.level_phase, protocol::LEVEL_COLLAPSE_PENDING);
+        // Phase 2: a golden gift now sits at every collected position (same ids). Sweep the same spots again.
+        for gift in &gifts {
+            player(&mut g, 1).state.pos = Vec3::new(gift.pos.x, gift.pos.y - 0.9, gift.pos.z);
+            for e in &mut g.run.enemies {
+                e.active_in = 1_000;
+            }
+            g.tick();
+        }
         assert!(g.run.currency > 0);
+        assert_eq!(g.run.golden_taken.len(), gifts.len());
         let beacon = g.run.level.beacon.clone();
         player(&mut g, 1).state.pos = beacon;
         g.tick();
@@ -1512,7 +1615,7 @@ mod tests {
         hello(&mut g, 1);
         vote(&mut g, 1);
         drain(&mut rx);
-        // Replace the drafted enemies with a point-blank turret.
+        // Replace the drafted enemies with a point-blank turret (Bolt Sentry charges flat bolts).
         g.run.enemies.clear();
         g.run.lives = 0;
         let pos = player(&mut g, 1).state.pos.clone();
@@ -1522,22 +1625,31 @@ mod tests {
             Vec3::new(pos.x + 3.0, pos.y, pos.z),
             EnemyParams {
                 behavior: BEHAVIOR_TURRET,
+                speed_mul: 1.0,
                 grace_ticks: 0,
-                fire_interval_ticks: 1,
-                projectile_speed: 50.0,
-                aggro: 100.0,
-                size: 0.5,
-                ..EnemyParams::default()
+                size: 0.8,
             },
         ));
-        for _ in 0..30 {
+        // 12 simulated seconds, draining periodically so the client buffer never fills.
+        let mut summary = None;
+        'outer: for i in 0..240 {
             g.tick();
+            if i % 32 == 31 {
+                summary = drain(&mut rx).into_iter().find_map(|m| match m {
+                    ServerMsg::RunOver { summary } => Some(summary),
+                    _ => None,
+                });
+                if summary.is_some() {
+                    break 'outer;
+                }
+            }
         }
-        let msgs = drain(&mut rx);
-        let summary = msgs.iter().find_map(|m| match m {
-            ServerMsg::RunOver { summary } => Some(summary),
-            _ => None,
-        });
+        if summary.is_none() {
+            summary = drain(&mut rx).into_iter().find_map(|m| match m {
+                ServerMsg::RunOver { summary } => Some(summary),
+                _ => None,
+            });
+        }
         assert_eq!(
             summary.map(|s| s.cause),
             Some(protocol::DEATH_PROJECTILE),
@@ -1588,5 +1700,243 @@ mod tests {
             tiles.iter().any(|t| t.id == 7 && t.state == TILE_WARN),
             "standing on a crumbling platform warns it; snapshot reports it"
         );
+    }
+}
+
+/// Radius of a Bulwark Aegis Bloom pulse (design §3: 3.0 u).
+const BULWARK_PULSE_RADIUS: f32 = 3.0;
+/// Speed of the radial knockback applied by the pulse (7 u/s, away from the caster).
+const BULWARK_PULSE_SPEED: f32 = 7.0;
+/// Stagger applied by the pulse to other players, in 60 Hz frames (0.8 s).
+const BULWARK_PULSE_STAGGER_FRAMES: u8 = 48;
+
+/// One ACTIVE player as seen by a Bulwark pulse.
+struct PulsePlayer {
+    /// Player id (the caster is excluded by id).
+    id: u32,
+    /// Feet position (the chest is derived as `feet + 0.9`).
+    feet: Vec3,
+    /// True while the player is rooted in their own ward (knockback-immune).
+    warded: bool,
+}
+
+/// Compute the player shoves for one Bulwark pulse: every ACTIVE, unwarded player other than the caster
+/// within [`BULWARK_PULSE_RADIUS`] (measured chest to chest). Each is pushed horizontally directly away at
+/// [`BULWARK_PULSE_SPEED`] u/s with [`BULWARK_PULSE_STAGGER_FRAMES`] frames of stagger.
+fn pulse_stagger_targets(caster_id: u32, centre: &Vec3, others: &[PulsePlayer]) -> Vec<(u32, Vec3, u8)> {
+    let mut out = Vec::new();
+    for player in others {
+        if player.id == caster_id || player.warded {
+            continue;
+        }
+        let dx = player.feet.x - centre.x;
+        let dy = (player.feet.y + 0.9) - centre.y;
+        let dz = player.feet.z - centre.z;
+        if dx * dx + dy * dy + dz * dz > BULWARK_PULSE_RADIUS * BULWARK_PULSE_RADIUS {
+            continue;
+        }
+        let horizontal = (dx * dx + dz * dz).sqrt();
+        let (ux, uz) = if horizontal <= 1e-6 {
+            (1.0, 0.0)
+        } else {
+            (dx / horizontal, dz / horizontal)
+        };
+        out.push((
+            player.id,
+            Vec3::new(ux * BULWARK_PULSE_SPEED, 0.0, uz * BULWARK_PULSE_SPEED),
+            BULWARK_PULSE_STAGGER_FRAMES,
+        ));
+    }
+    out
+}
+
+#[cfg(test)]
+mod m3_tests {
+    use super::*;
+
+    fn game2() -> Game {
+        Game::starting_at(2, 42).unwrap()
+    }
+
+    fn connect(game: &mut Game, id: ConnId) -> mpsc::Receiver<Vec<u8>> {
+        let (tx, rx) = mpsc::channel(OUTBOX_CAPACITY);
+        game.handle(GameEvent::Connected { id, out: tx });
+        rx
+    }
+
+    fn hello(game: &mut Game, id: ConnId) {
+        game.handle(GameEvent::Message {
+            id,
+            msg: ClientMsg::Hello {
+                protocol_version: PROTOCOL_VERSION,
+                name: "tester".into(),
+            },
+        });
+    }
+
+    fn drain(rx: &mut mpsc::Receiver<Vec<u8>>) -> Vec<ServerMsg> {
+        let mut out = vec![];
+        while let Ok(b) = rx.try_recv() {
+            out.push(protocol::decode::<ServerMsg>(&b).unwrap());
+        }
+        out
+    }
+
+    fn player(g: &mut Game, id: ConnId) -> &mut Player {
+        g.conns.get_mut(&id).unwrap().player.as_mut().unwrap()
+    }
+
+    fn vote(g: &mut Game, id: ConnId) {
+        let picks = crate::run::valid_picks(&g.run);
+        g.handle(GameEvent::Message {
+            id,
+            msg: ClientMsg::DraftPick { picks },
+        });
+    }
+
+    #[test]
+    fn pulse_stagger_targets_are_radius_limited_and_never_the_caster_nor_warded_players() {
+        let centre = Vec3::new(0.0, 0.9, 0.0);
+        let others = vec![
+            PulsePlayer { id: 7, feet: Vec3::new(0.0, 0.0, 0.0), warded: false },   // the caster (chest at the centre)
+            PulsePlayer { id: 8, feet: Vec3::new(2.9, 0.0, 0.0), warded: false },   // inside the radius
+            PulsePlayer { id: 9, feet: Vec3::new(3.5, 0.0, 0.0), warded: false },   // outside
+            PulsePlayer { id: 10, feet: Vec3::new(1.0, 0.0, 0.0), warded: true },   // warded: immune
+        ];
+        let out = pulse_stagger_targets(7, &centre, &others);
+        assert_eq!(out.len(), 1);
+        let (id, vel, stagger) = &out[0];
+        assert_eq!(*id, 8);
+        assert_eq!(*stagger, BULWARK_PULSE_STAGGER_FRAMES);
+        assert!((((vel.x * vel.x) + (vel.z * vel.z)).sqrt() - BULWARK_PULSE_SPEED).abs() < 1e-4);
+        assert!(vel.x > 0.0, "shoved directly away from the caster");
+        assert_eq!(vel.y, 0.0);
+    }
+
+    #[test]
+    fn bulwark_cast_roots_and_raises_the_ward() {
+        let mut g = Game::starting_at(1, 99).unwrap(); // level 1: the first lobby, class choice is open
+        let _rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        g.handle(GameEvent::Message {
+            id: 1,
+            msg: ClientMsg::ChooseClass {
+                class: protocol::CLASS_BULWARK,
+            },
+        });
+        vote(&mut g, 1);
+        let mut warded = false;
+        for seq in 0..40u32 {
+            g.handle(GameEvent::Message {
+                id: 1,
+                msg: ClientMsg::Inputs {
+                    frames: vec![InputFrame {
+                        seq,
+                        move_x: 0,
+                        move_z: 0,
+                        buttons: BTN_ABILITY,
+                    }],
+                },
+            });
+            g.tick();
+            if g.conns[&1].player.as_ref().unwrap().state.ward_frames > 0 {
+                warded = true;
+                break;
+            }
+        }
+        assert!(warded, "Aegis Bloom raised the ward (rooted, knockback-immune)");
+    }
+
+    #[test]
+    fn rift_warden_knockback_is_applied_with_stagger() {
+        let mut g = game2();
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        vote(&mut g, 1);
+        for e in &mut g.run.enemies {
+            e.active_in = 1_000; // keep the drafted enemies dormant
+        }
+        let pos = player(&mut g, 1).state.pos.clone();
+        g.run.enemies.push(sim::rules::spawn_enemy_with(
+            77,
+            0,
+            Vec3::new(pos.x + 2.0, pos.y, pos.z),
+            sim::rules::EnemyParams {
+                behavior: sim::rules::BEHAVIOR_RIFT_WARDEN,
+                speed_mul: 1.0,
+                size: 1.5,
+                grace_ticks: 0,
+            },
+        ));
+        let mut saw_stagger = false;
+        for i in 0..60 {
+            g.tick();
+            if i % 16 == 15 {
+                let _ = drain(&mut rx); // keep the outbox empty
+            }
+            let p = g.conns[&1].player.as_ref().unwrap();
+            if p.state.stagger_frames > 0 {
+                assert_eq!(p.state.stagger_frames % 3, 0, "stagger is stored in 60 Hz frames");
+                assert!(p.state.vel.x > 0.0, "shoved away from the warden");
+                saw_stagger = true;
+                break;
+            }
+        }
+        assert!(saw_stagger, "the rift warden shoved the player (stagger applied)");
+    }
+
+    #[test]
+    fn last_gift_starts_phase_two_with_the_collapse_banner() {
+        let mut g = game2();
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        vote(&mut g, 1);
+        drain(&mut rx);
+        // Dormantise everything that could kill us and teleport to every gift, one per tick.
+        let gifts: Vec<_> = g.run.level.gifts.clone();
+        for gift in gifts {
+            player(&mut g, 1).state.pos = Vec3::new(gift.pos.x, gift.pos.y - 0.9, gift.pos.z);
+            for e in &mut g.run.enemies {
+                e.active_in = 1_000;
+            }
+            g.tick();
+        }
+        assert_eq!(g.run.level_phase, protocol::LEVEL_COLLAPSE_PENDING);
+        assert!(drain(&mut rx).iter().any(|m| matches!(
+            m,
+            ServerMsg::Notice { kind: NOTICE_EVENT, ids } if ids == &vec!["collapse".to_string()]
+        )));
+        for i in 0..60 {
+            g.tick();
+            if i % 16 == 15 {
+                let _ = drain(&mut rx);
+            }
+        }
+        assert_eq!(g.run.level_phase, protocol::LEVEL_COLLAPSING, "the siren lasts 3.0 s");
+        g.tick();
+        let snap = drain(&mut rx).into_iter().find_map(|m| match m {
+            ServerMsg::Snapshot {
+                collapse_ms,
+                level_phase,
+                ..
+            } => Some((collapse_ms, level_phase)),
+            _ => None,
+        });
+        assert_eq!(snap.map(|s| s.1), Some(protocol::LEVEL_COLLAPSING));
+        assert!(snap.is_some_and(|s| s.0 > 0), "collapse_ms counts down until the last batch falls");
+    }
+
+    #[test]
+    fn milestone_banner_is_broadcast_at_level_start_for_escalation_levels() {
+        let mut g = Game::starting_at(4, 42).unwrap();
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        drain(&mut rx);
+        vote(&mut g, 1); // level 4 starts: Second Step is active
+        assert_eq!(g.run.level_phase, protocol::LEVEL_COLLECT);
+        assert!(drain(&mut rx).iter().any(|m| matches!(
+            m,
+            ServerMsg::Notice { kind: NOTICE_EVENT, ids } if ids == &vec!["milestone_4".to_string()]
+        )));
     }
 }

@@ -2453,3 +2453,23 @@ pub fn generate_with_catalog(cat: &Catalog, seed: u32, level: u32, players: u32)
     }
     builtin_fallback(seed, level, players)
 }
+
+/// The directed platform graph used for reachability checks, exposed so integration tests
+/// plan routes over exactly the same edges `validate` uses: an edge `i -> j` exists iff a
+/// player can get from platform `i`'s top to platform `j`'s top — touching with rise <=
+/// 0.55 u, a design-envelope jump edge-to-edge (`design_max_gap`), or a jump pad reaching
+/// +4.0 u within 5.0 u. All edges are admitted through the same [`can_jump_or_step`] test,
+/// so this is by construction the same graph `validate` checks.
+pub fn platform_graph(level: &LevelData) -> Vec<Vec<usize>> {
+    let platforms = &level.platforms;
+    let n = platforms.len();
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for i in 0..n {
+        for j in 0..n {
+            if i != j && can_jump_or_step(&platforms[i], &platforms[j]) {
+                adj[i].push(j);
+            }
+        }
+    }
+    adj
+}

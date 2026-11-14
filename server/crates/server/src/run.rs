@@ -2,23 +2,26 @@
 //! the enemies the team drafted, the lobby shop, level events and altars. Pure game logic on top of `sim` —
 //! no I/O, fully unit-testable.
 //!
-//! Flow: Lobby (spawn hub + draft offer and, from level 2 on, the shop) → all players vote → generate a level → Playing (collect every normal
-//! gift → golden gifts appear and the beacon opens) → beacon → Lobby for the next level. Death with no lives left
-//! ends that player's run; when everyone is down the run is Over and Restart begins a new one.
+//! Flow: Lobby (spawn hub + draft offer and, from level 2 on, the shop) → all players vote → generate a level →
+//! Playing (two phases: LEVEL_COLLECT until every gift is gathered, then LEVEL_COLLAPSE_PENDING — the siren — and
+//! LEVEL_COLLAPSING; golden gifts exist at the collected positions, the beacon opens, the non-hub platforms fall
+//! in six farthest-first batches) → beacon → Lobby for the next level. The spawn hub is exempt from collapse.
+//! Death with no lives left ends that player's run; when everyone is down the run is Over and Restart begins a new one.
 
 use crate::content::{Content, RunMods};
 use protocol::{
-    CARD_CURSE, CARD_ENEMY, CARD_UPGRADE, DraftCard, EVENT_ICE, EnemyView, GIFT_GOLDEN, LevelData, PHASE_ENEMY_DRAFT,
-    PHASE_OVER, PHASE_PLAYING, Platform, RunInfo, Tuning, Vec3,
+    Aabb, CARD_CURSE, CARD_ENEMY, CARD_UPGRADE, DraftCard, EVENT_ICE, EnemyView, LEVEL_COLLAPSE_PENDING,
+    LEVEL_COLLAPSING, LEVEL_COLLECT, LevelData, PHASE_ENEMY_DRAFT, PHASE_OVER, PHASE_PLAYING, Platform, RunInfo,
+    TILE_GONE, TILE_WARN, TICK_HZ, TileState, Tuning, Vec3,
 };
 use sim::hazards::Hazards;
 use sim::levelgen;
-use sim::rules::{self, BEACON_RADIUS, BEHAVIOR_MIMIC, Enemy, GIFT_RADIUS, enemy_state};
+use sim::rules::{self, BEACON_RADIUS, BEHAVIOR_MIMIC, Enemy, GIFT_RADIUS};
 use sim::world::World;
 use std::collections::BTreeMap;
 
-/// Currency granted per golden gift.
-pub const GOLDEN_VALUE: u32 = 5;
+/// Currency granted per golden gift (design §1.2: one golden gift is worth 1 gold).
+pub const GOLDEN_VALUE: u32 = 1;
 /// Enemy cards offered at the start of a run, and how many the team keeps.
 const ENEMY_OFFER: usize = 4;
 const ENEMY_PICKS: u8 = 2;
@@ -28,6 +31,181 @@ const REWARD_PICKS: u8 = 1;
 const GREATER_EVERY: u32 = 10;
 /// Shop items offered per lobby (first, plain lobby gets none).
 const SHOP_OFFER: usize = 4;
+/// Ticks of siren/banner before the collapse proper begins (design §1.4: 3.0 s).
+const COLLAPSE_PENDING_TICKS: u32 = 3 * TICK_HZ;
+
+/// True when `level` has a milestone row in the escalation table (design §5: level 4+; 25+ is the endless row).
+pub fn escalation_milestone_level(level: u32) -> bool {
+    const ROWS: [u32; 13] = [4, 5, 6, 7, 8, 9, 10, 12, 14, 15, 17, 18, 20];
+    ROWS.contains(&level) || level >= 25
+}
+
+/// Per-tile collapse warning time for `level` (design §5 level 9+: 2.0 s, else 3.0 s).
+pub(crate) fn tile_warning_seconds(level: u32) -> f32 {
+    if level >= 9 { 2.0 } else { 3.0 }
+}
+
+/// Collapse duration D in seconds for `level` (design §1.4; level 17+ loses 3 s with the tier-30 floor, level 25+ loses 1 s per level beyond and the floor drops to 25).
+pub(crate) fn collapse_duration_seconds(level: u32) -> f32 {
+    let base = (52.0 - 2.0 * level.saturating_sub(1) as f32).max(30.0);
+    let hungering = if level >= 17 { 3.0 } else { 0.0 };
+    let endless = if level > 25 { (level - 25) as f32 } else { 0.0 };
+    let floor = if level > 25 { 25.0 } else { 30.0 };
+    (base - hungering - endless).max(floor)
+}
+
+/// Fog multiplier from the escalation table (level 12: Grey Tide +25%, level 18: Deep Night +15%; multiplies with curses).
+pub(crate) fn escalation_fog_mul(level: u32) -> f32 {
+    let mut fog = 1.0;
+    if level >= 12 {
+        fog *= 1.25;
+    }
+    if level >= 18 {
+        fog *= 1.15;
+    }
+    fog
+}
+
+/// Extra enemy speed multiplier from the endless escalation row (+5% per 5 levels past 25).
+pub(crate) fn escalation_speed_mul(level: u32) -> f32 {
+    if level > 25 {
+        1.0 + 0.05 * ((level - 25) / 5) as f32
+    } else {
+        1.0
+    }
+}
+
+/// Extra copies of drafted enemies granted by the escalation table (design §5, cumulative rows, from level 4 on).
+fn escalation_extra_copies(level: u32, drafted: &[String], most_voted: Option<&str>) -> Vec<String> {
+    let mut extra: Vec<String> = Vec::new();
+    if level >= 4 && let Some(mv) = most_voted {
+        extra.push(mv.to_string());
+    }
+    if level >= 6 {
+        if drafted.iter().any(|d| d == "pallbearer") {
+            extra.push("pallbearer".to_string());
+        }
+        // Crowded Wake: +1 copy of every drafted enemy every 3 levels after level 6 (cap +6).
+        let per3 = ((level - 6) / 3 + 1).min(6);
+        for _ in 0..per3 {
+            extra.extend(drafted.iter().cloned());
+        }
+    }
+    if level >= 10 {
+        // Second Front: +1 copy per 2 drafted enemy types, floor, max +4 (round-robin over the drafted list).
+        let types = drafted.len();
+        let n = (types / 2).min(4);
+        for k in 0..n {
+            extra.push(drafted[k % types].clone());
+        }
+    }
+    if level >= 20 {
+        // Full Chorus: one extra copy of every drafted enemy.
+        extra.extend(drafted.iter().cloned());
+    }
+    extra
+}
+
+/// Distance from a point to an AABB in 3D (0 when the point is inside).
+fn point_aabb_distance(p: &Vec3, b: &Aabb) -> f32 {
+    let dx = (b.min.x - p.x).max(0.0).max(p.x - b.max.x);
+    let dy = (b.min.y - p.y).max(0.0).max(p.y - b.max.y);
+    let dz = (b.min.z - p.z).max(0.0).max(p.z - b.max.z);
+    (dx * dx + dy * dy + dz * dz).sqrt()
+}
+
+/// The spawn hub is exempt from collapse: the platform layer whose XZ footprint contains the beacon or the spawn
+/// and whose top is within 2 u of it (the dais/plaza deck) never falls.
+fn is_hub_platform(platform: &Platform, beacon: &Vec3, spawn: &Vec3) -> bool {
+    let covers = |p: &Vec3| {
+        p.x >= platform.bounds.min.x
+            && p.x <= platform.bounds.max.x
+            && p.z >= platform.bounds.min.z
+            && p.z <= platform.bounds.max.z
+    };
+    let top = platform.bounds.max.y;
+    (covers(beacon) && (top - beacon.y).abs() <= 2.0) || (covers(spawn) && (top - spawn.y).abs() <= 2.0)
+}
+
+/// Plan the collapse of a generated level: every non-hub platform, farthest from the beacon first
+/// (ties by platform id ascending), split into 6 contiguous batches; batch i warns at `i*D/6` into phase 2.
+fn build_collapse_plan(platforms: &[Platform], beacon: &Vec3, spawn: &Vec3, level: u32) -> Vec<CollapseEntry> {
+    let duration = collapse_duration_seconds(level);
+    let warn_ticks = (tile_warning_seconds(level) * TICK_HZ as f32).round() as u32;
+    let mut planned: Vec<(f32, u16)> = platforms
+        .iter()
+        .filter(|p| !is_hub_platform(p, beacon, spawn))
+        .map(|p| (point_aabb_distance(beacon, &p.bounds), p.id))
+        .collect();
+    planned.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    let n = planned.len();
+    let mut entries = Vec::with_capacity(n);
+    for (idx, (_, id)) in planned.iter().enumerate() {
+        let batch = (idx as u32 * 6) / (n as u32).max(1);
+        let warn_start_tick = ((batch as f32 * duration / 6.0) * TICK_HZ as f32).round() as u32;
+        entries.push(CollapseEntry {
+            id: *id,
+            warn_start_tick,
+            gone_tick: warn_start_tick + warn_ticks,
+            state: CollapseTile::Normal,
+        });
+    }
+    entries
+}
+
+/// Map every gift's id to the platform it rests on (highest top at or below the gift, within its XZ footprint).
+fn gift_platform_map(platforms: &[Platform], gifts: &[protocol::Gift]) -> BTreeMap<u16, u16> {
+    let mut map = BTreeMap::new();
+    for gift in gifts {
+        let target_y = gift.pos.y - 0.3 + 0.01;
+        let mut best: Option<&Platform> = None;
+        for platform in platforms {
+            let top = platform.bounds.max.y;
+            let covers = gift.pos.x >= platform.bounds.min.x
+                && gift.pos.x <= platform.bounds.max.x
+                && gift.pos.z >= platform.bounds.min.z
+                && gift.pos.z <= platform.bounds.max.z;
+            if !covers || top > target_y {
+                continue;
+            }
+            let better = match best {
+                Some(b) => top > b.bounds.max.y,
+                None => true,
+            };
+            if better {
+                best = Some(platform);
+            }
+        }
+        if let Some(platform) = best {
+            map.insert(gift.id, platform.id);
+        }
+    }
+    map
+}
+
+/// Where a collapsing platform is in its warning cycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CollapseTile {
+    /// Solid and quiet.
+    Normal,
+    /// Warning: shaking, dust; the client draws the telegraph.
+    Warn,
+    /// Gone: no longer solid; the golden gifts on it vanished.
+    Gone,
+}
+
+/// One non-hub platform slated to fall.
+#[derive(Debug, Clone)]
+struct CollapseEntry {
+    /// Platform id.
+    id: u16,
+    /// Tick after phase 2 starts when the warning begins (`i*D/6`, batch i).
+    warn_start_tick: u32,
+    /// Tick after phase 2 starts when the platform becomes `TILE_GONE`.
+    gone_tick: u32,
+    /// Current cycle state.
+    state: CollapseTile,
+}
 
 /// Small deterministic PRNG (SplitMix32) for draft offers, shop offers, altar rolls and level seeds. Server-only.
 #[derive(Debug, Clone)]
@@ -108,6 +286,7 @@ pub struct Run {
     pub level_num: u32,
     pub level: LevelData,
     pub world: World,
+    /// Ids of every gift collected this level (normal; golden gifts reuse the same ids).
     pub gifts_taken: Vec<u16>,
     /// Normal gifts collected over the whole run.
     pub gifts_collected: u32,
@@ -119,7 +298,7 @@ pub struct Run {
     pub curses: Vec<String>,
     pub mods: RunMods,
     pub offer: Option<Offer>,
-    /// Projectiles, crumbling tiles and turret/mimic/corrupter behaviour for the current level.
+    /// Hazards view of the current level: enemies, projectiles, crumbling/fretted tiles.
     pub hazards: Hazards,
     /// Levelgen altar ids already used this level.
     pub altars_used: Vec<u16>,
@@ -127,6 +306,18 @@ pub struct Run {
     pub event_friction_mul: f32,
     /// The lobby shop offer (from level 2 on); `None` outside the shop lobby and while playing.
     pub shop: Option<Vec<ShopOffer>>,
+    /// Phase of the current level: LEVEL_COLLECT, LEVEL_COLLAPSE_PENDING or LEVEL_COLLAPSING.
+    pub level_phase: u8,
+    /// Ids of the golden gifts collected this level (same ids as the collected normal gifts).
+    pub golden_taken: Vec<u16>,
+    /// Ticks since phase 2 (LEVEL_COLLAPSE_PENDING) began; 0 in LEVEL_COLLECT.
+    collapse_elapsed_ticks: u32,
+    /// Collapse plan: one entry per non-hub platform, farthest from the beacon first.
+    collapse: Vec<CollapseEntry>,
+    /// Gift id -> platform id it rests on (for golden gifts vanishing with a fallen tile).
+    gift_platform: BTreeMap<u16, u16>,
+    /// The single most-voted drafted enemy of the last draft (escalation \"Second Step\", level 4+).
+    most_voted_enemy: Option<String>,
     rng: Rng,
 }
 
@@ -154,6 +345,12 @@ impl Run {
             altars_used: Vec::new(),
             event_friction_mul: 1.0,
             shop: None,
+            level_phase: LEVEL_COLLECT,
+            golden_taken: Vec::new(),
+            collapse_elapsed_ticks: 0,
+            collapse: Vec::new(),
+            gift_platform: BTreeMap::new(),
+            most_voted_enemy: None,
             rng: Rng::new(seed),
         };
         run.offer = Some(run.make_offer(content));
@@ -346,7 +543,7 @@ impl Run {
     }
 
     /// Tally everyone's (validated) votes, apply the winning cards and start the generated level.
-    /// Ties go to the card offered first.
+    /// Ties go to the card offered first. The number of voters is the player count used for gift generation.
     pub fn resolve(&mut self, content: &Content, votes: &[Vec<u8>]) {
         let Some(offer) = self.offer.take() else { return };
         let mut tally: BTreeMap<usize, u32> = BTreeMap::new();
@@ -365,7 +562,9 @@ impl Run {
                 .take(n as usize)
                 .collect()
         };
-        for i in winners(true, offer.enemy_picks) {
+        let enemy_winners = winners(true, offer.enemy_picks);
+        self.most_voted_enemy = enemy_winners.first().map(|&i| offer.cards[i].id.clone());
+        for i in enemy_winners {
             self.drafted_enemies.push(offer.cards[i].id.clone());
         }
         for i in winners(false, offer.reward_picks) {
@@ -388,48 +587,72 @@ impl Run {
                 }
             }
         }
-        self.start_level(content);
+        let players = u32::try_from(votes.len()).unwrap_or(1).max(1);
+        self.start_level(content, players);
     }
 
-    fn start_level(&mut self, content: &Content) {
+    fn start_level(&mut self, content: &Content, players: u32) {
         let seed = self.rng.next_u32();
-        let generated = levelgen::generate(seed, self.level_num);
+        let generated = levelgen::generate_for(seed, self.level_num, players);
+        let spawn_slots = generated.enemy_spawns.len();
         self.level = generated.data;
         self.world = World::from_level(&self.level);
         self.gifts_taken.clear();
+        self.golden_taken.clear();
         self.enemies.clear();
         self.hazards.reset();
         self.altars_used.clear();
+        self.level_phase = LEVEL_COLLECT;
+        self.collapse_elapsed_ticks = 0;
+        self.collapse = build_collapse_plan(&self.level.platforms, &self.level.beacon, &self.level.spawn, self.level_num);
+        self.gift_platform = gift_platform_map(&self.level.platforms, &self.level.gifts);
         // The shop lives in the lobby only; starting a level closes it.
         self.shop = None;
         self.event_friction_mul = event_friction_mul(content, self.level.event);
-        let mut roster: Vec<&str> = self.drafted_enemies.iter().map(String::as_str).collect();
+        // Roster: drafted enemies + curse copies + escalation copies (design §5, from level 4 on).
+        let mut roster: Vec<String> = self.drafted_enemies.clone();
         let drafted = self.drafted_enemies.len();
         if drafted > 0 {
             for k in 0..self.mods.extra_enemies as usize {
-                roster.push(self.drafted_enemies[k % drafted].as_str());
+                roster.push(self.drafted_enemies[k % drafted].clone());
             }
         }
-        for (slot, (id, pos)) in roster.iter().zip(generated.enemy_spawns.iter()).enumerate() {
-            if let Some((index, def)) = content.enemy(id) {
-                let params = self.mods.enemy_params(&def.params);
-                let mut pos = pos.clone();
-                // Mimics pose as gifts: spawn them on the platform below the generated spawn
-                // (pos.y = platform top + 0.5). If the spawn is not above any platform, keep the position.
-                if params.behavior == BEHAVIOR_MIMIC
-                    && let Some(top) = platform_top_below(&self.level.platforms, pos.x, pos.z, pos.y)
-                {
-                    pos.y = top + 0.5;
-                }
-                let id = u32::try_from(slot).unwrap_or(u32::MAX - 1) + 1;
-                // kind = index into content.json enemies, so the client draws the right model.
-                self.enemies.push(rules::spawn_enemy_with(
-                    id,
-                    u8::try_from(index).unwrap_or(u8::MAX),
-                    pos,
-                    params,
-                ));
+        roster.extend(escalation_extra_copies(
+            self.level_num,
+            &self.drafted_enemies,
+            self.most_voted_enemy.as_deref(),
+        ));
+        // Level 1 stays plain (design A4): no enemies at all.
+        if self.level_num == 1 {
+            roster.clear();
+        }
+        // The hub has 8 fixed spawn slots; extra copies cycle onto the slots.
+        for (index, id) in roster.iter().enumerate() {
+            let Some((content_index, def)) = content.enemy(id) else {
+                continue;
+            };
+            let mut params = self.mods.enemy_params(&def.params);
+            params.speed_mul *= escalation_speed_mul(self.level_num);
+            let mut pos = if spawn_slots == 0 {
+                self.level.spawn.clone()
+            } else {
+                generated.enemy_spawns[index % spawn_slots].clone()
+            };
+            // Mimics pose as gifts: spawn them on the platform below the generated spawn
+            // (pos.y = platform top + 0.5). If the spawn is not above any platform, keep the position.
+            if params.behavior == BEHAVIOR_MIMIC
+                && let Some(top) = platform_top_below(&self.level.platforms, pos.x, pos.z, pos.y)
+            {
+                pos.y = top + 0.5;
             }
+            let enemy_id = u32::try_from(index).unwrap_or(u32::MAX - 1) + 1;
+            // kind = index into content.json enemies, so the client draws the right model.
+            self.enemies.push(rules::spawn_enemy_with(
+                enemy_id,
+                u8::try_from(content_index).unwrap_or(u8::MAX),
+                pos,
+                params,
+            ));
         }
         self.phase = PHASE_PLAYING;
     }
@@ -440,9 +663,14 @@ impl Run {
         self.level = levelgen::hub();
         self.world = World::from_level(&self.level);
         self.gifts_taken.clear();
+        self.golden_taken.clear();
         self.enemies.clear();
         self.hazards.reset();
         self.altars_used.clear();
+        self.level_phase = LEVEL_COLLECT;
+        self.collapse_elapsed_ticks = 0;
+        self.collapse.clear();
+        self.gift_platform.clear();
         self.event_friction_mul = 1.0;
         self.phase = PHASE_ENEMY_DRAFT;
         self.offer = Some(self.make_offer(content));
@@ -511,35 +739,132 @@ impl Run {
         self.level
             .gifts
             .iter()
-            .filter(|g| g.kind != GIFT_GOLDEN && !self.gifts_taken.contains(&g.id))
+            .filter(|g| !self.gifts_taken.contains(&g.id))
             .count()
     }
 
     pub fn beacon_open(&self) -> bool {
-        self.phase == PHASE_PLAYING && self.normal_left() == 0
+        self.phase == PHASE_PLAYING && self.level_phase != LEVEL_COLLECT
     }
 
-    /// Collect gifts the player at `feet` touches. Golden gifts only count once every normal gift is taken.
-    pub fn collect_gifts(&mut self, feet: &Vec3) {
+    /// Collect gifts the player at `feet` touches. In LEVEL_COLLECT the remaining normal gifts are gathered
+    /// (the last one starts phase 2). From LEVEL_COLLAPSE_PENDING on, golden gifts sitting at the positions of
+    /// the collected normal gifts are collected instead (1 gold each, same gift ids, `golden_taken` lists them).
+    /// Returns the gift positions collected this call (the sim uses them for the pickup events).
+    pub fn collect_gifts(&mut self, feet: &Vec3) -> Vec<Vec3> {
+        let mut picked = Vec::new();
         if self.phase != PHASE_PLAYING {
-            return;
+            return picked;
         }
         let radius = GIFT_RADIUS * self.mods.gift_radius_mul;
-        let golden_open = self.normal_left() == 0;
+        if self.level_phase == LEVEL_COLLECT {
+            for gift in &self.level.gifts {
+                if self.gifts_taken.contains(&gift.id) {
+                    continue;
+                }
+                if rules::gift_touched_within(feet, gift, radius) {
+                    self.gifts_taken.push(gift.id);
+                    self.gifts_collected = self.gifts_collected.saturating_add(1);
+                    picked.push(gift.pos.clone());
+                }
+            }
+            // The last gift (including the vacuous zero-gift case) starts phase 2.
+            if self.normal_left() == 0 {
+                self.enter_collapse_pending();
+            }
+            return picked;
+        }
+        // Phase 2: one golden gift per collected normal gift, at its exact position.
         for gift in &self.level.gifts {
-            let golden = gift.kind == GIFT_GOLDEN;
-            if self.gifts_taken.contains(&gift.id) || (golden && !golden_open) {
+            if !self.gifts_taken.contains(&gift.id) {
+                continue;
+            }
+            if self.golden_taken.contains(&gift.id) {
+                continue;
+            }
+            if self.platform_gone_for_gift(gift.id) {
+                // The tile fell: the uncollected golden gift vanished forever.
                 continue;
             }
             if rules::gift_touched_within(feet, gift, radius) {
-                self.gifts_taken.push(gift.id);
-                if golden {
-                    self.currency = self.currency.saturating_add(GOLDEN_VALUE);
-                } else {
-                    self.gifts_collected = self.gifts_collected.saturating_add(1);
-                }
+                self.golden_taken.push(gift.id);
+                self.currency = self.currency.saturating_add(GOLDEN_VALUE);
+                picked.push(gift.pos.clone());
             }
         }
+        picked
+    }
+
+    /// Enter LEVEL_COLLAPSE_PENDING (phase 2 starts): the siren sounds, the beacon opens.
+    fn enter_collapse_pending(&mut self) {
+        if self.level_phase != LEVEL_COLLECT {
+            return;
+        }
+        self.level_phase = LEVEL_COLLAPSE_PENDING;
+        self.collapse_elapsed_ticks = 0;
+    }
+
+    /// True when the gift rests on a platform that has already fallen.
+    fn platform_gone_for_gift(&self, gift_id: u16) -> bool {
+        let Some(platform_id) = self.gift_platform.get(&gift_id) else {
+            return false;
+        };
+        self.collapse
+            .iter()
+            .find(|e| e.id == *platform_id)
+            .is_some_and(|e| e.state == CollapseTile::Gone)
+    }
+
+    /// Advance the collapse timers one tick: PENDING -> COLLAPSING after 3.0 s, batch warnings, TILE_GONE flips.
+    /// Batches start their warning `i*D/6` after phase 2 begins (the clock starts at PENDING).
+    pub fn tick_collapse(&mut self) {
+        if self.level_phase == LEVEL_COLLECT {
+            return;
+        }
+        self.collapse_elapsed_ticks = self.collapse_elapsed_ticks.saturating_add(1);
+        if self.level_phase == LEVEL_COLLAPSE_PENDING && self.collapse_elapsed_ticks >= COLLAPSE_PENDING_TICKS {
+            self.level_phase = LEVEL_COLLAPSING;
+        }
+        let clock = self.collapse_elapsed_ticks;
+        for entry in &mut self.collapse {
+            if entry.state == CollapseTile::Gone {
+                continue;
+            }
+            if clock >= entry.gone_tick {
+                entry.state = CollapseTile::Gone;
+            } else if clock >= entry.warn_start_tick {
+                entry.state = CollapseTile::Warn;
+            }
+        }
+    }
+
+    /// Milliseconds until the last collapse batch has fallen (0 before phase 2 and once the collapse is done).
+    pub fn collapse_ms(&self) -> u32 {
+        if self.level_phase == LEVEL_COLLECT {
+            return 0;
+        }
+        let last_gone = self.collapse.iter().map(|e| e.gone_tick).max().unwrap_or(0);
+        let remaining = last_gone.saturating_sub(self.collapse_elapsed_ticks);
+        remaining.saturating_mul(1000 / TICK_HZ)
+    }
+
+    /// Tiles to simulate and report: the hazards tiles overlaid by the collapse (collapse wins on the same id).
+    pub fn world_tiles(&self) -> Vec<TileState> {
+        let mut merged: BTreeMap<u16, TileState> = BTreeMap::new();
+        for tile in self.hazards.tiles() {
+            merged.insert(tile.id, tile);
+        }
+        for entry in &self.collapse {
+            let state = match entry.state {
+                CollapseTile::Normal => None,
+                CollapseTile::Warn => Some(TILE_WARN),
+                CollapseTile::Gone => Some(TILE_GONE),
+            };
+            if let Some(state) = state {
+                merged.insert(entry.id, TileState { id: entry.id, state });
+            }
+        }
+        merged.into_values().collect()
     }
 
     /// The shared tuning: movement mods plus the level event's friction override.
@@ -555,21 +880,7 @@ impl Run {
     }
 
     pub fn enemy_views(&self) -> Vec<EnemyView> {
-        self.enemies
-            .iter()
-            .map(|e| EnemyView {
-                id: e.id,
-                kind: e.kind,
-                pos: e.pos.clone(),
-                radius: e.params.size,
-                // DORMANT / HUNTING / DISGUISED (mimic still posing as a gift).
-                state: enemy_state(e),
-                // M3 (T-053): telegraph anchor / progress / heavy flag.
-                target: Vec3::ZERO,
-                prog: 0,
-                flags: 0,
-            })
-            .collect()
+        self.hazards.views(&self.enemies)
     }
 
     pub fn info(&self) -> RunInfo {
@@ -579,7 +890,7 @@ impl Run {
             lives: self.lives,
             currency: self.currency,
             tuning: self.tuning(),
-            fog_density_mul: self.mods.fog_density_mul,
+            fog_density_mul: self.mods.fog_density_mul * escalation_fog_mul(self.level_num),
             enemies: self.drafted_enemies.clone(),
             upgrades: self.upgrades.clone(),
             curses: self.curses.clone(),
@@ -642,7 +953,6 @@ pub(crate) fn valid_picks(run: &Run) -> Vec<u8> {
 mod tests {
     use super::*;
     use protocol::{EVENT_CRUMBLE, EVENT_HIGH_RISE, EVENT_NONE};
-    use sim::rules::ENEMY_KIND_CHASER;
 
     fn content() -> Content {
         Content::load().unwrap()
@@ -689,7 +999,6 @@ mod tests {
         assert!(run.validate_picks(&[200]).is_err());
     }
 
-    #[test]
     fn resolve_applies_votes_and_generates_a_level_with_drafted_enemies() {
         let c = content();
         let mut run = Run::new(&c, 7, 2);
@@ -698,7 +1007,8 @@ mod tests {
         assert_eq!(run.phase, PHASE_PLAYING);
         assert_eq!(run.drafted_enemies.len(), 2);
         assert_eq!(run.upgrades.len() + run.curses.len(), 1);
-        assert_eq!(run.level.gifts.iter().filter(|g| g.kind != GIFT_GOLDEN).count(), 5);
+        assert!(run.level.gifts.iter().all(|g| g.kind == protocol::GIFT_NORMAL));
+        assert!(!run.level.gifts.is_empty());
         assert_eq!(run.enemies.len() as u32, 2 + run.mods.extra_enemies);
         assert!(run.offer.is_none());
         assert!(run.shop.is_none(), "the shop closes while a level is being played");
@@ -712,18 +1022,22 @@ mod tests {
         run.resolve(&c, &[picks]);
         let feet = |g: &protocol::Gift| Vec3::new(g.pos.x, g.pos.y - 0.9, g.pos.z);
         let gifts = run.level.gifts.clone();
-        let golden: Vec<_> = gifts.iter().filter(|g| g.kind == GIFT_GOLDEN).cloned().collect();
-        assert!(!golden.is_empty());
-        run.collect_gifts(&feet(&golden[0]));
+        assert!(gifts.iter().all(|g| g.kind == protocol::GIFT_NORMAL));
+        assert!(!gifts.is_empty());
+        // Golden gifts do not exist while normal gifts remain.
+        run.collect_gifts(&feet(&gifts[0]));
         assert_eq!(run.currency, 0, "golden gifts are locked while normal gifts remain");
         assert!(!run.beacon_reached(&run.level.beacon.clone()));
-        for g in gifts.iter().filter(|g| g.kind != GIFT_GOLDEN) {
-            run.collect_gifts(&feet(g));
+        for g in &gifts {
+            assert_eq!(run.collect_gifts(&feet(g)).len(), 1);
         }
         assert!(run.beacon_open());
-        run.collect_gifts(&feet(&golden[0]));
-        assert_eq!(run.currency, GOLDEN_VALUE);
-        assert_eq!(run.gifts_collected, 5);
+        // Phase 2: golden gifts at the collected positions, same ids, 1 gold each.
+        for g in &gifts {
+            run.collect_gifts(&feet(g));
+        }
+        assert_eq!(run.currency, gifts.len() as u32 * GOLDEN_VALUE);
+        assert_eq!(run.gifts_collected, gifts.len() as u32);
         assert!(run.beacon_reached(&run.level.beacon.clone()));
         run.finish_level(&c);
         assert_eq!(run.phase, PHASE_ENEMY_DRAFT);
@@ -766,17 +1080,33 @@ mod tests {
         assert!(run.upgrades.contains(&chosen.id) || run.curses.contains(&chosen.id));
     }
 
-    #[test]
     fn dormant_enemies_are_harmless() {
+        use sim::hazards::{HazardEffect, PlayerSense};
         let c = content();
         let mut run = Run::new(&c, 13, 2);
         let picks = valid_picks(&run);
         run.resolve(&c, &[picks]);
+        // Spawn grace keeps the enemies dormant; the sim must emit no kill effect for a touching player.
+        for e in &mut run.enemies {
+            assert!(e.active_in > 0);
+        }
         let e = run.enemies[0].pos.clone();
         let touching = Vec3::new(e.x, e.y - 0.9, e.z);
-        assert_eq!(run.hazards.hit(&run.enemies, &touching), None);
-        run.enemies[0].active_in = 0;
-        assert_eq!(run.hazards.hit(&run.enemies, &touching), Some(protocol::DEATH_ENEMY));
+        let senses = vec![PlayerSense {
+            id: 1,
+            feet: touching,
+            vel: Vec3::new(0.0, 0.0, 0.0),
+            warded: false,
+        }];
+        let effects = run
+            .hazards
+            .step(&mut run.enemies, &run.world, &run.level, &senses, &[], 1.0);
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, HazardEffect::Kill { player, .. } if *player == 1)),
+            "a dormant enemy deals no damage"
+        );
     }
 
     #[test]
@@ -940,6 +1270,223 @@ mod tests {
         assert_eq!(spawn_above, Some(2.0));
         let none_below = platform_top_below(&[], 0.0, 0.0, 10.0);
         assert_eq!(none_below, None);
-        let _ = ENEMY_KIND_CHASER; // silence unused import in this module
+    }
+}
+
+#[cfg(test)]
+mod m3_tests {
+    use super::*;
+    use protocol::{EVENT_NONE, TILE_GONE, TILE_WARN};
+
+    fn feet_above(g: &protocol::Gift) -> Vec3 {
+        Vec3::new(g.pos.x, g.pos.y - 0.9, g.pos.z)
+    }
+
+    #[test]
+    fn goldens_are_phase_two_only_worth_one_and_at_collected_positions() {
+        let c = Content::load().unwrap();
+        let mut run = Run::new(&c, 11, 2);
+        run.resolve(&c, &[valid_picks(&run)]);
+        assert_eq!(run.level_phase, LEVEL_COLLECT);
+        assert!(run.level.gifts.iter().all(|g| g.kind == protocol::GIFT_NORMAL));
+        for g in run.level.gifts.clone() {
+            assert_eq!(run.collect_gifts(&feet_above(&g)).len(), 1);
+            assert_eq!(run.currency, 0, "goldens do not exist during LEVEL_COLLECT");
+        }
+        assert_eq!(run.level_phase, LEVEL_COLLAPSE_PENDING, "last gift starts phase 2");
+        let collected = run.level.gifts.len();
+        for g in run.level.gifts.clone() {
+            let before = run.currency;
+            let picked = run.collect_gifts(&feet_above(&g));
+            assert_eq!(picked.len(), 1, "golden {} at the collected position", g.id);
+            assert_eq!(run.currency, before + 1, "goldens are worth 1");
+        }
+        assert_eq!(run.golden_taken.len(), collected);
+        // Re-touching a collected position collects nothing twice.
+        for g in run.level.gifts.clone() {
+            assert!(run.collect_gifts(&feet_above(&g)).is_empty());
+        }
+    }
+
+    #[test]
+    fn golden_vanishes_once_its_platform_falls() {
+        let c = Content::load().unwrap();
+        let mut run = Run::new(&c, 13, 2);
+        run.resolve(&c, &[valid_picks(&run)]);
+        for g in run.level.gifts.clone() {
+            run.collect_gifts(&feet_above(&g));
+        }
+        // A gift that rests on a platform which is part of the collapse plan.
+        let target = run
+            .level
+            .gifts
+            .iter()
+            .find(|g| {
+                run.gift_platform
+                    .get(&g.id)
+                    .is_some_and(|pid| run.collapse.iter().any(|e| e.id == *pid))
+            })
+            .cloned()
+            .expect("some gift rests on a collapsible platform");
+        let pid = run.gift_platform[&target.id];
+        for entry in &mut run.collapse {
+            if entry.id == pid {
+                entry.state = CollapseTile::Gone;
+            }
+        }
+        let picked = run.collect_gifts(&feet_above(&target));
+        assert!(picked.is_empty(), "a golden on a fallen tile is gone forever");
+        assert!(!run.golden_taken.contains(&target.id));
+    }
+
+    #[test]
+    fn beacon_is_closed_during_collect_and_opens_from_pending() {
+        let c = Content::load().unwrap();
+        let mut run = Run::new(&c, 17, 2);
+        run.resolve(&c, &[valid_picks(&run)]);
+        assert!(!run.beacon_reached(&run.level.beacon.clone()));
+        for g in run.level.gifts.clone() {
+            run.collect_gifts(&feet_above(&g));
+        }
+        assert_eq!(run.level_phase, LEVEL_COLLAPSE_PENDING);
+        assert!(run.beacon_reached(&run.level.beacon.clone()));
+    }
+
+    #[test]
+    fn collapse_plan_is_farthest_first_excludes_the_hub_and_breaks_ties_by_id() {
+        let mk = |id: u16, cx: f32| Platform {
+            id,
+            kind: protocol::PLATFORM_NORMAL,
+            bounds: protocol::Aabb {
+                min: Vec3::new(cx - 1.5, -0.5, -1.5),
+                max: Vec3::new(cx + 1.5, 0.0, 1.5),
+            },
+        };
+        let platforms = vec![
+            mk(0, 0.0),   // spawn hub (contains beacon and spawn, top 0)
+            mk(1, 8.0),   // near
+            mk(2, 19.0),  // tie, lower id
+            mk(3, -19.0), // tie, higher id
+            mk(4, 41.0),  // far
+        ];
+        let beacon = Vec3::new(0.0, 0.0, 0.0);
+        let spawn = Vec3::new(0.0, 0.0, 0.0);
+        let plan = build_collapse_plan(&platforms, &beacon, &spawn, 1);
+        let ids: Vec<u16> = plan.iter().map(|e| e.id).collect();
+        assert_eq!(ids, vec![4, 2, 3, 1], "farthest first; ties by platform id ascending; hub exempted");
+        let warns: Vec<u32> = plan.iter().map(|e| e.warn_start_tick).collect();
+        for w in warns.windows(2) {
+            assert!(w[0] <= w[1], "batch warnings are issued in order");
+        }
+        assert_eq!(plan[0].warn_start_tick, 0, "the farthest batch starts warning at once");
+    }
+
+    #[test]
+    fn warn_then_gone_flip_and_collapse_ms_counts_to_zero() {
+        let c = Content::load().unwrap();
+        let mut run = Run::new(&c, 5, 1);
+        let mk = |id: u16, cx: f32| Platform {
+            id,
+            kind: protocol::PLATFORM_NORMAL,
+            bounds: protocol::Aabb {
+                min: Vec3::new(cx - 1.5, -0.5, -1.5),
+                max: Vec3::new(cx + 1.5, 0.0, 1.5),
+            },
+        };
+        run.level = LevelData {
+            level: 1,
+            seed: 1,
+            spawn: Vec3::new(0.0, 0.0, 0.0),
+            beacon: Vec3::new(0.0, 0.0, 0.0),
+            kill_y: -50.0,
+            platforms: vec![mk(0, 0.0), mk(1, 30.0)],
+            gifts: Vec::new(),
+            event: EVENT_NONE,
+            altars: Vec::new(),
+        };
+        run.world = World::from_level(&run.level);
+        run.enemies.clear();
+        // Level 2 warning time (3.0 s), one collapsing platform.
+        run.collapse = build_collapse_plan(&run.level.platforms, &run.level.beacon, &run.level.spawn, 2);
+        run.gift_platform.clear();
+        run.phase = PHASE_PLAYING;
+        // A level with no gifts completes phase 1 vacuously on the first collection pass.
+        run.collect_gifts(&Vec3::new(0.0, 0.0, 0.0));
+        assert_eq!(run.level_phase, LEVEL_COLLAPSE_PENDING);
+        run.tick_collapse();
+        assert!(run.world_tiles().iter().any(|t| t.id == 1 && t.state == TILE_WARN));
+        for _ in 0..60 {
+            run.tick_collapse();
+        }
+        assert!(run.world_tiles().iter().any(|t| t.id == 1 && t.state == TILE_GONE));
+        assert_eq!(run.level_phase, LEVEL_COLLAPSING, "the siren window is 3.0 s");
+        assert_eq!(run.collapse_ms(), 0);
+    }
+
+    #[test]
+    fn collapse_duration_matches_the_design_table() {
+        assert_eq!(collapse_duration_seconds(1), 52.0);
+        assert_eq!(collapse_duration_seconds(6), 42.0);
+        assert_eq!(collapse_duration_seconds(11), 32.0);
+        assert_eq!(collapse_duration_seconds(17), 30.0, "Hunger is absorbed by the 30 s floor");
+        assert_eq!(collapse_duration_seconds(25), 30.0);
+        assert_eq!(collapse_duration_seconds(30), 25.0, "level 30: floor 25");
+        assert_eq!(collapse_duration_seconds(40), 25.0);
+    }
+
+    #[test]
+    fn escalation_extra_copies_follow_the_table() {
+        let drafted = vec!["pallbearer".to_string(), "snapshrike".to_string(), "turret".to_string()];
+        // Below level 4: nothing.
+        assert!(escalation_extra_copies(3, &drafted, Some("pallbearer")).is_empty());
+        // Level 4 (Second Step): one copy of the most-voted enemy.
+        assert_eq!(
+            escalation_extra_copies(4, &drafted, Some("snapshrike")),
+            vec!["snapshrike".to_string()]
+        );
+        // Level 6 (Crowded Wake): most-voted + pallbearer + one full roster copy.
+        let six = escalation_extra_copies(6, &drafted, Some("turret"));
+        let count = |s: &str| six.iter().filter(|e| e.as_str() == s).count();
+        assert_eq!(count("turret"), 2, "most-voted + per-3 copy");
+        assert_eq!(count("pallbearer"), 2, "level-6 pallbearer + per-3 copy");
+        assert_eq!(count("snapshrike"), 1, "per-3 copy");
+        // Level 21: per-3 capped at 6, plus Second Front (floor(3/2)=1, k=0 -> pallbearer) and Full Chorus.
+        let many = escalation_extra_copies(21, &drafted, None);
+        let count = |s: &str| many.iter().filter(|e| e.as_str() == s).count();
+        assert_eq!(count("pallbearer"), 9, "per-3 (6) + L6 pallbearer + Second Front + Full Chorus");
+        assert_eq!(count("snapshrike"), 7, "per-3 (6) + Full Chorus");
+        // Level 40: per-3 pinned at the +6 cap.
+        let endless = escalation_extra_copies(40, &drafted, None);
+        let count = |s: &str| endless.iter().filter(|e| e.as_str() == s).count();
+        assert_eq!(count("turret"), 7, "per-3 (6) + Full Chorus");
+    }
+
+    #[test]
+    fn fog_and_milestone_escalation() {
+        assert_eq!(escalation_fog_mul(4), 1.0);
+        assert_eq!(escalation_fog_mul(12), 1.25);
+        assert!((escalation_fog_mul(18) - 1.4375).abs() < 1e-6, "Grey Tide and Deep Night stack");
+        assert!(escalation_milestone_level(4));
+        assert!(escalation_milestone_level(9));
+        assert!(escalation_milestone_level(17));
+        assert!(escalation_milestone_level(20));
+        assert!(escalation_milestone_level(25));
+        assert!(escalation_milestone_level(40));
+        assert!(!escalation_milestone_level(1));
+        assert!(!escalation_milestone_level(11));
+        assert!(!escalation_milestone_level(24));
+    }
+
+    #[test]
+    fn collapse_pending_lasts_exactly_three_seconds() {
+        let c = Content::load().unwrap();
+        let mut run = Run::new(&c, 5, 1);
+        run.phase = PHASE_PLAYING;
+        run.level_phase = LEVEL_COLLAPSE_PENDING;
+        run.collapse_elapsed_ticks = 0;
+        for _ in 0..COLLAPSE_PENDING_TICKS {
+            run.tick_collapse();
+        }
+        assert_eq!(run.level_phase, LEVEL_COLLAPSING);
     }
 }
