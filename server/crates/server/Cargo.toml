@@ -9,6 +9,9 @@ publish.workspace = true
 name = "voidwrap-server"
 path = "src/main.rs"
 
+[features]
+desktop = ["dep:wry", "dep:tao"]
+
 [dependencies]
 protocol.workspace = true
 sim.workspace = true
@@ -20,6 +23,9 @@ serde_json.workspace = true
 tower-http = { version = "0.6", features = ["fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+wry = { version = "0.57", optional = true }
+tao = { version = "0.37", optional = true }
+igd-next = { version = "0.18", features = ["aio_tokio"] }
 
 
 [lints]

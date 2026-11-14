@@ -99,3 +99,12 @@ Paid route usage: 0 tickets (0%).
 - First round is plain (no hunters/upgrades/curses); the lobby still opens so players gather. Test
   `first_round_is_plain_then_hunters_are_drafted`; card tests start at level 2.
 - Draft card overlap: fixed `w-60` cards inside narrower grid cells -> cards fill their cell. Verified by screenshot.
+
+## T-044 - Desktop window + in-game hosting (INKLING, max) - ACCEPTED after OVERSEER API fixes
+- r0 applied. OVERSEER fixes (allowed: unverifiable external API signatures, flagged by Inkling in NOTES):
+  igd-next 0.18 `add_port(protocol, ext_port, local SocketAddr, lease u32, desc)` / `remove_port(protocol, port)`;
+  tao 0.37 `EventLoop::new()` is infallible and `run` diverges; window now waits up to 8 s for server cleanup
+  (UPnP removal) before exiting, because tao ends the process when its loop exits; one clippy collapsible-if.
+- Verified: clippy clean with and without `--features desktop`; 42 server tests; launched the desktop build: native
+  window shows the title screen; `/api/host` GET/POST toggles hosting, LAN address listed, UPnP on this router
+  reports "No response within timeout" -> plain-language fallback message; graceful close logs shutdown and exits.
