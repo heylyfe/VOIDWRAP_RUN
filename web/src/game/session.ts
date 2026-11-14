@@ -11,6 +11,7 @@ import {
   type InputFrame,
   type LevelData,
   type ServerMsg,
+  type TileState,
   type Vec3,
 } from "@/protocol/generated";
 import { buttonsFromKeys, emptyKeys, wishFromKeys, type KeyState } from "./input";
@@ -41,6 +42,10 @@ export class GameSession {
   private readonly enemies = new SnapshotBuffer();
   /** Body radius per enemy id, from the latest snapshot (draw size = server body size). */
   readonly enemyRadius = new Map<number, number>();
+  /** Enemy state (ENEMY_DORMANT / HUNTING / DISGUISED) and content kind per enemy id, latest snapshot. */
+  readonly enemyInfo = new Map<number, { kind: number; state: number }>();
+  private readonly projectiles = new SnapshotBuffer();
+  private noticeSeq = 0;
   private needsReset = true;
   private readonly conn: Connection;
   private accumulator = 0;
@@ -89,7 +94,15 @@ export class GameSession {
         this.needsReset = true;
         this.accumulator = 0;
         this.onLevel(msg.data);
-        store.set({ level: msg.data.level, giftsTotal: msg.data.gifts.length, giftsTaken: [], runOver: null });
+        this.sim.setTiles([]);
+        store.set({
+          level: msg.data.level,
+          giftsTotal: msg.data.gifts.length,
+          giftsTaken: [],
+          runOver: null,
+          tiles: [],
+          altarsUsed: [],
+        });
         return;
       case "Snapshot": {
         if (!this.level || msg.level !== this.level.level) return; // stale: from before a level change
@@ -106,7 +119,19 @@ export class GameSession {
         );
         this.enemies.push(now, msg.enemies);
         this.enemyRadius.clear();
-        for (const en of msg.enemies) this.enemyRadius.set(en.id, en.radius);
+        this.enemyInfo.clear();
+        for (const en of msg.enemies) {
+          this.enemyRadius.set(en.id, en.radius);
+          this.enemyInfo.set(en.id, { kind: en.kind, state: en.state });
+        }
+        this.projectiles.push(now, msg.projectiles);
+        if (!sameTiles(msg.tiles, store.tiles)) {
+          // Crumbled platforms must stop being solid in the predictor too, or prediction diverges.
+          this.sim.setTiles(msg.tiles);
+          store.set({ tiles: msg.tiles });
+        }
+        if (msg.altarsUsed.length !== store.altarsUsed.length) store.set({ altarsUsed: msg.altarsUsed });
+        if (msg.you.class !== store.myClass) store.set({ myClass: msg.you.class });
         const me = msg.players.find((p) => p.id === this.playerId);
         const activeIds = msg.players.filter((p) => p.mode === PLAYER_ACTIVE).map((p) => p.id);
         if (me && me.mode !== store.myMode) store.set({ myMode: me.mode });
@@ -129,8 +154,16 @@ export class GameSession {
       case "RunState":
         this.sim.setTuning(msg.info.tuning);
         store.set({ runInfo: msg.info });
-        if (msg.info.phase !== PHASE_ENEMY_DRAFT) store.set({ draft: null });
+        if (msg.info.phase !== PHASE_ENEMY_DRAFT) store.set({ draft: null, shop: null });
         return;
+      case "Shop":
+        store.set({ shop: msg.items });
+        return;
+      case "Notice": {
+        const notice = { seq: ++this.noticeSeq, kind: msg.kind, ids: msg.ids, at: performance.now() };
+        store.set({ notices: [...store.notices.slice(-4), notice] });
+        return;
+      }
       case "Draft":
         store.set({
           draft: { enemyPicks: msg.enemyPicks, rewardPicks: msg.rewardPicks, cards: msg.cards, submitted: false },
@@ -146,6 +179,21 @@ export class GameSession {
     if (!store.draft || store.draft.submitted) return;
     this.conn.send({ type: "DraftPick", picks });
     store.set({ draft: { ...store.draft, submitted: true } });
+  }
+
+  /** Buy one shop item (lobby only; the server checks money and stock). */
+  buy(itemId: string): void {
+    this.conn.send({ type: "Buy", item: itemId });
+  }
+
+  /** Pick this player's class (CLASS_*; the server accepts it in the lobby before level 1). */
+  chooseClass(cls: number): void {
+    this.conn.send({ type: "ChooseClass", class: cls });
+  }
+
+  /** Projectile positions drawn at the newest server position (like enemies). */
+  projectilePositions(now: number): Map<number, Vec3> {
+    return this.projectiles.sample(now, 0, 1.5);
   }
 
   /** Ask the server for a fresh run (honoured once the whole team is down). */
@@ -200,4 +248,8 @@ export class GameSession {
     this.stopPing();
     this.conn.close();
   }
+}
+
+function sameTiles(a: readonly TileState[], b: readonly TileState[]): boolean {
+  return a.length === b.length && a.every((t, i) => t.id === b[i]?.id && t.state === b[i]?.state);
 }

@@ -1,6 +1,6 @@
 // HUD-facing client state. The hot path (positions, prediction) lives outside React/zustand.
 import { create } from "zustand";
-import type { DraftCard, RunInfo, RunSummary } from "@/protocol/generated";
+import type { DraftCard, RunInfo, RunSummary, ShopItem, TileState } from "@/protocol/generated";
 
 export interface DraftOffer {
   enemyPicks: number;
@@ -8,6 +8,18 @@ export interface DraftOffer {
   cards: DraftCard[];
   /** True once this client has submitted its picks and waits for the other players. */
   submitted: boolean;
+}
+
+/** A short-lived message for the HUD (altar results, purchases, level events). */
+export interface Notice {
+  /** Increasing id, for React keys and expiry. */
+  seq: number;
+  /** NOTICE_ALTAR / NOTICE_BOUGHT / NOTICE_EVENT. */
+  kind: number;
+  /** Content ids (cards, shop items, event ids) the notice is about. */
+  ids: string[];
+  /** performance.now() when it arrived. */
+  at: number;
 }
 
 export type ConnStatus = "connecting" | "connected" | "closed";
@@ -37,6 +49,16 @@ export interface GameStore {
   myMode: number;
   /** Ids of players still playing the level (for the spectator HUD and follow camera). */
   activeIds: number[];
+  /** Lobby shop offer (null outside the lobby or before the server sends one). */
+  shop: ShopItem[] | null;
+  /** Recent notices, newest last (the HUD expires them). */
+  notices: Notice[];
+  /** This player's class (CLASS_*), from the latest snapshot. */
+  myClass: number;
+  /** Platforms not in their normal state (crumbling or gone), from the latest snapshot. */
+  tiles: TileState[];
+  /** Altar ids already used on this level. */
+  altarsUsed: number[];
   set(patch: Partial<Omit<GameStore, "set">>): void;
 }
 
@@ -57,5 +79,10 @@ export const useGameStore = create<GameStore>((set) => ({
   draft: null,
   myMode: 0,
   activeIds: [],
+  shop: null,
+  notices: [],
+  myClass: 0,
+  tiles: [],
+  altarsUsed: [],
   set: (patch) => set(patch),
 }));

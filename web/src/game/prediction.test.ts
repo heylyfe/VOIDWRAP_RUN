@@ -25,6 +25,7 @@ class FakeStepper implements Stepper {
   s: ControllerState = state(0);
   loadLevel(_level: LevelData) {}
   setTuning() {}
+  setTiles() {}
   setState(s: ControllerState) {
     this.s = structuredClone(s);
   }

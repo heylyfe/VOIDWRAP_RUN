@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { LevelData } from "@/protocol/generated";
-import { WasmStepper } from "./sim";
+import { encodeTiles, WasmStepper } from "./sim";
 
 const wasmPath = join(__dirname, "../../public/sim.wasm");
 
@@ -31,5 +31,23 @@ describe.runIf(existsSync(wasmPath))("WasmStepper (real sim.wasm)", () => {
     sim.setState(start);
     for (let i = 0; i < 120; i++) sim.step(0, 0, 0);
     expect(sim.getState()).toEqual(landed);
+    // A gone tile is not solid: the player falls through; restoring it makes it solid again.
+    sim.setTiles([{ id: 0, state: 2 }]);
+    sim.setState(start);
+    for (let i = 0; i < 120; i++) sim.step(0, 0, 0);
+    expect(sim.getState().pos.y).toBeLessThan(-1);
+    sim.setTiles([]);
+    sim.setState(start);
+    for (let i = 0; i < 120; i++) sim.step(0, 0, 0);
+    expect(sim.getState()).toEqual(landed);
+  });
+});
+
+describe("encodeTiles", () => {
+  it("matches bincode Vec<TileState> (u64 length, u16 id, u8 state)", () => {
+    expect(Array.from(encodeTiles([{ id: 3, state: 1 }, { id: 258, state: 2 }]))).toEqual([
+      2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 1, 2, 1, 2,
+    ]);
+    expect(Array.from(encodeTiles([]))).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
   });
 });

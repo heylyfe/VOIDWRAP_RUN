@@ -7,8 +7,21 @@ import {
   encodeTuning,
   type ControllerState,
   type LevelData,
+  type TileState,
   type Tuning,
 } from "@/protocol/generated";
+
+/** bincode (fixint, little endian) of `Vec<TileState>`: u64 length, then (u16 id, u8 state) per tile. */
+export function encodeTiles(tiles: readonly TileState[]): Uint8Array {
+  const out = new Uint8Array(8 + tiles.length * 3);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, tiles.length, true); // high 32 bits stay 0
+  tiles.forEach((t, i) => {
+    view.setUint16(8 + i * 3, t.id, true);
+    view.setUint8(10 + i * 3, t.state);
+  });
+  return out;
+}
 
 /** One fixed physics step of the character controller. */
 export interface Stepper {
@@ -18,6 +31,8 @@ export interface Stepper {
   getState(): ControllerState;
   /** Movement multipliers from upgrades/curses; must match the server's for exact prediction. */
   setTuning(tuning: Tuning): void;
+  /** Platforms that are crumbling/gone (TILE_GONE ones are not solid); must match the server's world. */
+  setTiles(tiles: readonly TileState[]): void;
 }
 
 interface SimExports {
@@ -29,6 +44,7 @@ interface SimExports {
   vw_step(moveX: number, moveZ: number, buttons: number): void;
   vw_get_state(): number;
   vw_set_tuning(len: number): number;
+  vw_set_tiles(len: number): number;
 }
 
 const REQUIRED = [
@@ -40,6 +56,7 @@ const REQUIRED = [
   "vw_step",
   "vw_get_state",
   "vw_set_tuning",
+  "vw_set_tiles",
 ];
 
 export class WasmStepper implements Stepper {
@@ -75,6 +92,10 @@ export class WasmStepper implements Stepper {
 
   setTuning(tuning: Tuning): void {
     if (this.x.vw_set_tuning(this.write(encodeTuning(tuning))) !== 0) throw new Error("sim rejected tuning");
+  }
+
+  setTiles(tiles: readonly TileState[]): void {
+    if (this.x.vw_set_tiles(this.write(encodeTiles(tiles))) !== 0) throw new Error("sim rejected tiles");
   }
 
   step(moveX: number, moveZ: number, buttons: number): void {
