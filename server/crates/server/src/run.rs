@@ -110,6 +110,15 @@ impl Run {
     }
 
     fn make_offer(&mut self, content: &Content) -> Offer {
+        // The first round of a run is plain: no hunters, no upgrades, no curses. The lobby
+        // still opens so everyone can gather and press Continue together.
+        if self.level_num == 1 {
+            return Offer {
+                enemy_picks: 0,
+                reward_picks: 0,
+                cards: Vec::new(),
+            };
+        }
         let mut cards = Vec::new();
         let enemy_picks = if self.drafted_enemies.is_empty() {
             for i in self.rng.sample(content.enemies.len(), ENEMY_OFFER) {
@@ -250,12 +259,14 @@ impl Run {
             }
         }
         for (slot, (id, pos)) in roster.iter().zip(generated.enemy_spawns.iter()).enumerate() {
-            if let Some(def) = content.enemy(id) {
+            if let Some(index) = content.enemies.iter().position(|e| e.id == *id) {
+                let def = &content.enemies[index];
                 let params = self.mods.enemy_params(&def.params);
                 let id = u32::try_from(slot).unwrap_or(u32::MAX - 1) + 1;
+                // kind = index into content.json enemies, so the client draws the right model.
                 self.enemies.push(rules::spawn_enemy_with(
                     id,
-                    rules::ENEMY_KIND_CHASER,
+                    u8::try_from(index).unwrap_or(u8::MAX),
                     pos.clone(),
                     params,
                 ));
@@ -350,6 +361,7 @@ impl Run {
                 id: e.id,
                 kind: e.kind,
                 pos: e.pos.clone(),
+                radius: e.params.size,
             })
             .collect()
     }
@@ -395,9 +407,25 @@ mod tests {
     }
 
     #[test]
-    fn first_offer_has_enemies_and_mixed_rewards() {
+    fn first_round_is_plain_then_hunters_are_drafted() {
         let c = content();
-        let run = Run::new(&c, 7, 1);
+        let mut run = Run::new(&c, 7, 1);
+        let offer = run.offer.clone().unwrap();
+        assert!(offer.cards.is_empty());
+        assert_eq!((offer.enemy_picks, offer.reward_picks), (0, 0));
+        assert_eq!(run.validate_picks(&[]), Ok(()));
+        run.resolve(&c, &[vec![]]);
+        assert_eq!(run.phase, PHASE_PLAYING);
+        assert!(run.enemies.is_empty() && run.upgrades.is_empty() && run.curses.is_empty());
+        run.finish_level(&c);
+        let next = run.offer.clone().unwrap();
+        assert_eq!(next.enemy_picks, 2);
+    }
+
+    #[test]
+    fn second_level_offer_has_enemies_and_mixed_rewards() {
+        let c = content();
+        let run = Run::new(&c, 7, 2);
         let offer = run.offer.clone().unwrap();
         assert_eq!(offer.enemy_picks, 2);
         assert_eq!(offer.cards.iter().filter(|k| k.kind == CARD_ENEMY).count(), 4);
@@ -409,7 +437,7 @@ mod tests {
     #[test]
     fn picks_are_validated() {
         let c = content();
-        let run = Run::new(&c, 7, 1);
+        let run = Run::new(&c, 7, 2);
         let good = valid_picks(&run);
         assert!(run.validate_picks(&good).is_ok());
         assert!(run.validate_picks(&[]).is_err());
@@ -421,7 +449,7 @@ mod tests {
     #[test]
     fn resolve_applies_votes_and_generates_a_level_with_drafted_enemies() {
         let c = content();
-        let mut run = Run::new(&c, 7, 1);
+        let mut run = Run::new(&c, 7, 2);
         let picks = valid_picks(&run);
         run.resolve(&c, &[picks]);
         assert_eq!(run.phase, PHASE_PLAYING);
@@ -435,7 +463,7 @@ mod tests {
     #[test]
     fn golden_gifts_only_after_normal_ones_then_beacon_then_lobby() {
         let c = content();
-        let mut run = Run::new(&c, 11, 1);
+        let mut run = Run::new(&c, 11, 2);
         let picks = valid_picks(&run);
         run.resolve(&c, &[picks]);
         let feet = |g: &protocol::Gift| Vec3::new(g.pos.x, g.pos.y - 0.9, g.pos.z);
@@ -455,7 +483,7 @@ mod tests {
         assert!(run.beacon_reached(&run.level.beacon.clone()));
         run.finish_level(&c);
         assert_eq!(run.phase, PHASE_ENEMY_DRAFT);
-        assert_eq!(run.level_num, 2);
+        assert_eq!(run.level_num, 3);
         let offer = run.offer.clone().unwrap();
         assert_eq!(offer.enemy_picks, 0, "enemies are drafted once per run");
         assert_eq!(offer.cards.len(), 3);
@@ -481,7 +509,7 @@ mod tests {
     #[test]
     fn votes_tally_majority_with_ties_to_first_offered() {
         let c = content();
-        let mut run = Run::new(&c, 5, 1);
+        let mut run = Run::new(&c, 5, 2);
         let offer = run.offer.clone().unwrap();
         // Enemies: both vote 0; then 1 and 2 tie -> the first offered (1) wins. Rewards: both vote 5.
         run.resolve(&c, &[vec![0, 1, 5], vec![0, 2, 5]]);
@@ -496,7 +524,7 @@ mod tests {
     #[test]
     fn dormant_enemies_are_harmless() {
         let c = content();
-        let mut run = Run::new(&c, 13, 1);
+        let mut run = Run::new(&c, 13, 2);
         let picks = valid_picks(&run);
         run.resolve(&c, &[picks]);
         let e = run.enemies[0].pos.clone();

@@ -189,11 +189,12 @@ function World({ session, level, themeLevel }: { session: GameSession; level: Le
       if (last) last.ok = false;
     }
     let e = 0;
-    for (const o of session.enemyPositions(now).values()) {
+    for (const [id, o] of session.enemyPositions(now)) {
       const r = enemies.current[e++];
       if (!r) break;
       r.visible = true;
       r.position.set(o.x, o.y, o.z);
+      r.scale.setScalar(session.enemyRadius.get(id) ?? 0.5);
     }
     for (; e < MAX_ENEMIES; e++) {
       const r = enemies.current[e];

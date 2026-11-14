@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 4;
+pub const PROTOCOL_VERSION: u16 = 5;
 pub const TICK_HZ: u32 = 20;
 pub const PHYSICS_HZ: u32 = 60;
 pub const MAX_INPUTS_PER_MSG: u32 = 32;
@@ -101,11 +101,13 @@ pub struct PlayerView {
     pub mode: u8,
 }
 
+/// kind indexes design/content.json enemies; radius is the hit sphere radius (the client draws the body at this size).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EnemyView {
     pub id: u32,
     pub kind: u8,
     pub pos: Vec3,
+    pub radius: f32,
 }
 
 /// End-of-run stats. cause is one of DEATH_VOID / DEATH_ENEMY.

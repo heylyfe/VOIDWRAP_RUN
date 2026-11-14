@@ -89,3 +89,13 @@ findings actionable. Paid route: 0 tickets.
 alone is never a rejection reason (a model cannot reproduce rustfmt byte-for-byte); every other static failure is.
 
 Paid route usage: 0 tickets (0%).
+
+## 2026-11-14 - User feedback fixes (OVERSEER, direct)
+- Enemy hitbox: the cube hit box (half size up to 1.5) was drawn as a fixed 0.7 model, and enemies were drawn
+  100 ms behind the server. Now: sphere hit test at 0.85 x body radius, protocol v5 `EnemyView.radius` (+ `kind` =
+  content index), client scales the unit model to that radius and draws enemies at the newest snapshot
+  (extrapolated up to 1.5 ticks). Tests: `hit_sphere_has_no_cube_corners`, `grazing_the_body_edge_is_survivable`,
+  interpolation extrapolation test.
+- First round is plain (no hunters/upgrades/curses); the lobby still opens so players gather. Test
+  `first_round_is_plain_then_hunters_are_drafted`; card tests start at level 2.
+- Draft card overlap: fixed `w-60` cards inside narrower grid cells -> cards fill their cell. Verified by screenshot.

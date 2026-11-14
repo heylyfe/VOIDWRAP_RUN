@@ -4,10 +4,9 @@
 //! and the client-side predictor can run the exact same code. Only `+ - * /` and
 //! `sqrt` are used, so results are bit-identical on every target.
 
-use protocol::{Aabb, Gift, TICK_HZ, Vec3};
+use protocol::{Gift, TICK_HZ, Vec3};
 
 use crate::controller::player_box;
-use crate::world::overlaps;
 
 /// A gift is collected when the player centre is within this distance of it.
 pub const GIFT_RADIUS: f32 = 1.1;
@@ -27,7 +26,7 @@ pub const CHASER_SPEED: f32 = 5.5;
 /// A chaser only pursues targets within this 3D distance.
 pub const CHASER_AGGRO_RADIUS: f32 = 22.0;
 
-/// Half extent of the chaser's cubic hit box, centred on its position.
+/// Body radius of the default chaser (the hit sphere is this times [`ENEMY_HIT_FORGIVENESS`]).
 pub const CHASER_HALF_SIZE: f32 = 0.5;
 
 /// Ticks a freshly spawned chaser stays dormant (3 s at 20 Hz).
@@ -36,7 +35,7 @@ pub const CHASER_GRACE_TICKS: u32 = 60;
 /// Height of the player's centre above their feet.
 const PLAYER_CENTRE_HEIGHT: f32 = 0.9;
 
-/// Per-enemy tuning: flight speed, aggro radius, hit box half size and grace ticks.
+/// Per-enemy tuning: flight speed, aggro radius, body radius and grace ticks.
 ///
 /// [`EnemyParams::default`] is exactly the M1 chaser, so an enemy spawned without
 /// explicit params behaves as it always did.
@@ -46,7 +45,7 @@ pub struct EnemyParams {
     pub speed: f32,
     /// 3D distance within which the enemy pursues a target.
     pub aggro: f32,
-    /// Half extent of the cubic hit box, centred on the enemy position.
+    /// Body radius: the client draws the enemy this big; see [`enemy_hit_radius`].
     pub size: f32,
     /// Ticks the enemy stays dormant after spawning.
     pub grace_ticks: u32,
@@ -189,15 +188,25 @@ pub fn step_enemy(enemy: &mut Enemy, targets: &[Vec3]) {
     }
 }
 
-/// True when the enemy's cube (half extent `enemy.params.size`) overlaps the
-/// player's collision box.
+/// Fraction of the drawn body radius that actually kills. Slightly under 1 so a hit
+/// always looks like a hit: grazing the glowing edge of the model is survivable.
+pub const ENEMY_HIT_FORGIVENESS: f32 = 0.85;
+
+/// Radius of the lethal sphere around the enemy centre.
+pub fn enemy_hit_radius(enemy: &Enemy) -> f32 {
+    enemy.params.size * ENEMY_HIT_FORGIVENESS
+}
+
+/// True when the enemy's hit sphere (see [`enemy_hit_radius`]) overlaps the player's
+/// collision box. The sphere matches the drawn body, so there are no invisible corners.
 pub fn enemy_touches(enemy: &Enemy, player_feet: &Vec3) -> bool {
-    let half = enemy.params.size;
-    let cube = Aabb {
-        min: Vec3::new(enemy.pos.x - half, enemy.pos.y - half, enemy.pos.z - half),
-        max: Vec3::new(enemy.pos.x + half, enemy.pos.y + half, enemy.pos.z + half),
-    };
-    overlaps(&cube, &player_box(player_feet))
+    let b = player_box(player_feet);
+    let c = &enemy.pos;
+    let dx = c.x - c.x.clamp(b.min.x, b.max.x);
+    let dy = c.y - c.y.clamp(b.min.y, b.max.y);
+    let dz = c.z - c.z.clamp(b.min.z, b.max.z);
+    let r = enemy_hit_radius(enemy);
+    dx * dx + dy * dy + dz * dz <= r * r
 }
 
 #[cfg(test)]
@@ -314,6 +323,31 @@ mod tests {
         assert!(enemy_touches(&enemy, &player));
         enemy.pos = Vec3::new(1.9, 0.9, 0.0);
         assert!(!enemy_touches(&enemy, &player));
+    }
+
+    #[test]
+    fn hit_sphere_has_no_cube_corners() {
+        // A big enemy diagonal to the player: a cube of half size 1.3 would reach the
+        // player box here, the drawn sphere does not.
+        let params = EnemyParams {
+            size: 1.3,
+            ..EnemyParams::default()
+        };
+        let enemy = spawn_enemy_with(1, ENEMY_KIND_CHASER, Vec3::new(1.4, 2.9, 1.4), params);
+        assert!(!enemy_touches(&enemy, &feet(0.0, 0.0, 0.0)));
+    }
+
+    #[test]
+    fn grazing_the_body_edge_is_survivable() {
+        let params = EnemyParams {
+            size: 1.0,
+            ..EnemyParams::default()
+        };
+        // Player box edge at x = 0.4 (half width); the body surface (radius 1.0) overlaps it
+        // by 0.05, but the lethal sphere is 0.85.
+        let edge = 0.4 + 0.95;
+        let enemy = spawn_enemy_with(1, ENEMY_KIND_CHASER, Vec3::new(edge, 0.9, 0.0), params);
+        assert!(!enemy_touches(&enemy, &feet(0.0, 0.0, 0.0)));
     }
 
     #[test]

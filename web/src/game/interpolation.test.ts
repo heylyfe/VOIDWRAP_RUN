@@ -18,3 +18,14 @@ describe("SnapshotBuffer", () => {
     expect(b.sample(10_000).size).toBe(0);
   });
 });
+
+describe("SnapshotBuffer extrapolation", () => {
+  it("extrapolates past the newest snapshot up to the cap", () => {
+    const b = new SnapshotBuffer();
+    b.push(0, [{ id: 1, pos: { x: 0, y: 0, z: 0 } }]);
+    b.push(50, [{ id: 1, pos: { x: 1, y: 0, z: 0 } }]);
+    expect(b.sample(75, 0, 1.5).get(1)!.x).toBeCloseTo(1.5);
+    expect(b.sample(500, 0, 1.5).get(1)!.x).toBeCloseTo(1.5);
+    expect(b.sample(500).get(1)!.x).toBeCloseTo(1);
+  });
+});

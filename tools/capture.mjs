@@ -46,13 +46,16 @@ try {
   const t1 = await tickOf();
   console.log(`capture: client saw ${t1 - t0} server ticks in ~1 s`);
   if (t1 - t0 < 15) errors.push(`tick rate too low at the client: ${t1 - t0}/s`);
-  // Lobby: the draft screen over the spawn hub. Pick two hunters and one reward by hotkey, then Continue.
+  // Lobby: the draft screen over the spawn hub. Pick two hunters and one reward by hotkey (when offered), then Continue.
   await page.getByTestId("draft-screen").waitFor({ timeout: 15_000 });
   await page.waitForTimeout(600);
   await shot("01-lobby");
-  for (const key of ["Digit1", "Digit2", "Digit5"]) await page.keyboard.press(key);
-  await page.waitForTimeout(200);
-  await shot("01b-lobby-picked");
+  // Level 1 is a plain round with no cards; later lobbies (or VOIDWRAP_START_LEVEL >= 2) offer them.
+  if ((await page.getByTestId("draft-first-round").count()) === 0) {
+    for (const key of ["Digit1", "Digit2", "Digit5"]) await page.keyboard.press(key);
+    await page.waitForTimeout(200);
+    await shot("01b-lobby-picked");
+  }
   await page.getByTestId("draft-continue").click();
   await page.getByTestId("draft-screen").waitFor({ state: "detached", timeout: 15_000 });
   await page.getByTestId("gift-counter").waitFor({ timeout: 15_000 });

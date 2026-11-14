@@ -2,7 +2,7 @@
 /* eslint-disable */
 import { Reader, Writer } from "./codec";
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 export const TICK_HZ = 20;
 export const PHYSICS_HZ = 60;
 export const MAX_INPUTS_PER_MSG = 32;
@@ -300,21 +300,25 @@ export function decodePlayerView(bytes: Uint8Array): PlayerView {
   return v;
 }
 
+/** kind indexes design/content.json enemies; radius is the hit sphere radius (the client draws the body at this size). */
 export interface EnemyView {
   id: number;
   kind: number;
   pos: Vec3;
+  radius: number;
 }
 export function writeEnemyView(w: Writer, v: EnemyView): void {
   w.u32(v.id);
   w.u8(v.kind);
   writeVec3(w, v.pos);
+  w.f32(v.radius);
 }
 export function readEnemyView(r: Reader): EnemyView {
   return {
     id: r.u32(),
     kind: r.u8(),
     pos: readVec3(r),
+    radius: r.f32(),
   };
 }
 export function encodeEnemyView(v: EnemyView): Uint8Array<ArrayBuffer> {

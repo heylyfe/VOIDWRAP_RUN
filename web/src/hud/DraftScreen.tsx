@@ -107,9 +107,21 @@ function DraftScreenInner(props: DraftScreenProps): JSX.Element {
           </div>
         </header>
 
-        <p className="text-xs tracking-widest" style={{ color: MUTED }}>
-          {enemySelected}/{enemyLimit} hunters · {rewardSelected}/{rewardLimit} rewards · keys 1-9 toggle · enter continues
-        </p>
+        {cards.length === 0 ? (
+          <section data-testid="draft-first-round" className="flex flex-col gap-2 py-6 text-center">
+            <h2 className="text-lg font-bold tracking-[0.25em] text-white/90">A CLEAN START</h2>
+            <p className="text-sm text-white/75">
+              No hunters, no upgrades, no curses this round. Collect every gift and reach the beacon.
+            </p>
+            <p className="text-xs tracking-widest" style={{ color: MUTED }}>
+              After this level you vote on who hunts you. Press CONTINUE (or Enter) when you are ready.
+            </p>
+          </section>
+        ) : (
+          <p className="text-xs tracking-widest" style={{ color: MUTED }}>
+            {enemySelected}/{enemyLimit} hunters · {rewardSelected}/{rewardLimit} rewards · keys 1-9 toggle · enter continues
+          </p>
+        )}
 
         {enemyCount > 0 && (
           <section className="flex flex-col gap-3">
@@ -121,7 +133,7 @@ function DraftScreenInner(props: DraftScreenProps): JSX.Element {
                 card.kind === CARD_ENEMY ? (
                   <span
                     key={`${index}:${card.id}`}
-                    className={waiting ? 'pointer-events-none opacity-60' : undefined}
+                    className={waiting ? 'block min-w-0 pointer-events-none opacity-60' : 'block min-w-0'}
                   >
                     <DraftCard
                       kind={card.kind}
@@ -147,7 +159,7 @@ function DraftScreenInner(props: DraftScreenProps): JSX.Element {
                 card.kind === CARD_ENEMY ? null : (
                   <span
                     key={`${index}:${card.id}`}
-                    className={waiting ? 'pointer-events-none opacity-60' : undefined}
+                    className={waiting ? 'block min-w-0 pointer-events-none opacity-60' : 'block min-w-0'}
                   >
                     <DraftCard
                       kind={card.kind}

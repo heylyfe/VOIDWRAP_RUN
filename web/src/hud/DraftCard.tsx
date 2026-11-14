@@ -129,7 +129,7 @@ export function DraftCard(props: {
       aria-pressed={selected}
       onClick={onToggle}
       className={[
-        'relative flex w-60 flex-col gap-2 rounded-lg border p-4 text-left font-mono leading-snug transition',
+        'relative flex h-full w-full min-w-0 flex-col gap-2 break-words rounded-lg border p-4 text-left font-mono leading-snug transition',
         'bg-[#120f1f]/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40',
         selected ? 'scale-[1.03] border-[3px]' : 'border border-white/15',
       ].join(' ')}

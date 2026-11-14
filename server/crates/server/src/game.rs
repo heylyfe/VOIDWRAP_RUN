@@ -618,7 +618,7 @@ mod tests {
     use protocol::GIFT_GOLDEN;
 
     fn game() -> Game {
-        Game::starting_at(1, 42).unwrap()
+        Game::starting_at(2, 42).unwrap()
     }
 
     fn connect(game: &mut Game, id: ConnId) -> mpsc::Receiver<Vec<u8>> {
@@ -765,7 +765,7 @@ mod tests {
         player(&mut g, 1).state.pos = beacon;
         g.tick();
         assert_eq!(g.run.phase, PHASE_ENEMY_DRAFT);
-        assert_eq!(g.run.level_num, 2);
+        assert_eq!(g.run.level_num, 3);
         let msgs = drain(&mut rx);
         assert!(
             msgs.iter()
@@ -869,7 +869,7 @@ mod tests {
         player(&mut g, 2).state.pos.y = kill_y - 5.0;
         g.tick();
         assert_eq!(g.run.phase, PHASE_ENEMY_DRAFT);
-        assert_eq!(g.run.level_num, 2);
+        assert_eq!(g.run.level_num, 3);
         assert!(player(&mut g, 1).active() && player(&mut g, 2).active());
     }
 

@@ -8,17 +8,19 @@ import type { Group, Mesh, MeshStandardMaterial } from "three";
 import type { Vec3 } from "@/protocol/generated";
 import { COMMON } from "./theme";
 
+// Unit-radius model: the parent scales it by the enemy's body radius from the server, so the
+// solid core is exactly the body the hit sphere is derived from (sim::rules::enemy_hit_radius).
 const SHARD_OFFSETS: ReadonlyArray<readonly [number, number, number]> = [
-  [0.95, 0.25, 0],
-  [-0.95, 0.25, 0],
-  [0, 0.95, 0.35],
-  [0, -0.95, -0.35],
+  [1.3, 0.3, 0],
+  [-1.3, 0.3, 0],
+  [0, 1.3, 0.45],
+  [0, -1.3, -0.45],
 ];
 
 const CORE_EMISSIVE = 2.2;
 const SHARD_EMISSIVE = 0.8;
-const AURA_RADIUS = 1.3;
-const AURA_BASE_OPACITY = 0.12;
+const AURA_RADIUS = 1.45;
+const AURA_BASE_OPACITY = 0.07;
 const AURA_SCALE_RANGE = 0.06;
 
 export function Chaser(props: { position: Vec3 }): JSX.Element {
@@ -55,7 +57,7 @@ export function Chaser(props: { position: Vec3 }): JSX.Element {
   return (
     <group position={[props.position.x, props.position.y, props.position.z]}>
       <mesh ref={coreRef}>
-        <octahedronGeometry args={[0.7]} />
+        <icosahedronGeometry args={[1, 0]} />
         <meshStandardMaterial
           color={COMMON.enemy.body}
           emissive={COMMON.enemy.glow}
@@ -66,7 +68,7 @@ export function Chaser(props: { position: Vec3 }): JSX.Element {
       <group ref={shardsRef}>
         {SHARD_OFFSETS.map((offset, index) => (
           <mesh key={index} position={offset as [number, number, number]}>
-            <octahedronGeometry args={[0.14]} />
+            <octahedronGeometry args={[0.18]} />
             <meshStandardMaterial
               color={COMMON.enemy.body}
               emissive={COMMON.enemy.glow}

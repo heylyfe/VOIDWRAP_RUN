@@ -3,7 +3,7 @@
   "constants": {
     "PROTOCOL_VERSION": [
       "u16",
-      4
+      5
     ],
     "TICK_HZ": [
       "u32",
@@ -302,6 +302,7 @@
     },
     {
       "name": "EnemyView",
+      "$comment": "kind indexes design/content.json enemies; radius is the hit sphere radius (the client draws the body at this size).",
       "struct": [
         [
           "id",
@@ -314,6 +315,10 @@
         [
           "pos",
           "Vec3"
+        ],
+        [
+          "radius",
+          "f32"
         ]
       ]
     },

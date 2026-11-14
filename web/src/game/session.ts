@@ -39,6 +39,8 @@ export class GameSession {
   private readonly predictor: Predictor;
   private readonly remote = new SnapshotBuffer();
   private readonly enemies = new SnapshotBuffer();
+  /** Body radius per enemy id, from the latest snapshot (draw size = server body size). */
+  readonly enemyRadius = new Map<number, number>();
   private needsReset = true;
   private readonly conn: Connection;
   private accumulator = 0;
@@ -103,6 +105,8 @@ export class GameSession {
           msg.players.filter((p) => p.id !== this.playerId && p.mode === PLAYER_ACTIVE),
         );
         this.enemies.push(now, msg.enemies);
+        this.enemyRadius.clear();
+        for (const en of msg.enemies) this.enemyRadius.set(en.id, en.radius);
         const me = msg.players.find((p) => p.id === this.playerId);
         const activeIds = msg.players.filter((p) => p.mode === PLAYER_ACTIVE).map((p) => p.id);
         if (me && me.mode !== store.myMode) store.set({ myMode: me.mode });
@@ -176,8 +180,10 @@ export class GameSession {
     return this.remote.sample(now);
   }
 
+  /** Enemies are drawn at the newest server position (lightly extrapolated), not delayed like
+   *  other players: the server tests hits against where they are now. */
   enemyPositions(now: number): Map<number, Vec3> {
-    return this.enemies.sample(now);
+    return this.enemies.sample(now, 0, 1.5);
   }
 
   /** Full predicted controller state of the local player (animation reads grounded/dash). */
