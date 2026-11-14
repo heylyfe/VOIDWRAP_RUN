@@ -246,6 +246,22 @@ for (const file of PATTERN_FILES) {
     }
     if (patternIds.has(id)) err(`${file}: duplicate pattern id ${id} (also in ${patternIds.get(id)})`);
     else patternIds.set(id, file);
+    // A pattern's own platforms must not intersect: the placement rules only check a
+    // pattern against the ones already placed, so an intra-pattern overlap reaches the
+    // level and `validate` rejects every attempt that uses it.
+    const plats = Array.isArray(entry.platforms) ? entry.platforms : [];
+    for (let i = 0; i < plats.length; i += 1) {
+      for (let j = i + 1; j < plats.length; j += 1) {
+        const a = plats[i]?.min;
+        const b = plats[i]?.max;
+        const c = plats[j]?.min;
+        const d = plats[j]?.max;
+        if (![a, b, c, d].every((v) => Array.isArray(v) && v.length === 3)) continue;
+        const EPS = 1e-4;
+        const hit = [0, 1, 2].every((k) => a[k] < d[k] - EPS && b[k] > c[k] + EPS);
+        if (hit) err(`${file}: ${id}: platforms ${i} and ${j} intersect`);
+      }
+    }
   }
 }
 

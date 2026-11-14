@@ -240,6 +240,36 @@ fn composition_plans_diverge_and_never_repeat() {
     );
 }
 
+/// The shipped catalog is the 25 legacy chunks plus the two authored batches. A
+/// regression that drops a catalog file would silently shrink the pool, so count the
+/// ids in the three files the sim crate merges.
+#[test]
+fn shipped_catalog_has_at_least_fifty_patterns() {
+    const SOURCES: [&str; 3] = [
+        include_str!("../../../../design/chunks.json"),
+        include_str!("../../../../design/patterns-a.json"),
+        include_str!("../../../../design/patterns-b.json"),
+    ];
+    let mut ids: BTreeSet<String> = BTreeSet::new();
+    for source in SOURCES {
+        let doc: serde_json::Value = serde_json::from_str(source).expect("catalog file is valid JSON");
+        let list = doc
+            .get("chunks")
+            .or_else(|| doc.get("patterns"))
+            .and_then(serde_json::Value::as_array)
+            .expect("catalog file has a chunks or patterns array");
+        for entry in list {
+            let id = entry
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .expect("pattern has an id");
+            assert!(ids.insert(id.to_string()), "duplicate pattern id {id}");
+        }
+    }
+    assert!(ids.len() >= 50, "expected at least 50 patterns, found {}", ids.len());
+    println!("shipped catalog: {} patterns", ids.len());
+}
+
 #[test]
 fn generated_levels_validate_and_reproduce() {
     let mut failures = 0usize;
