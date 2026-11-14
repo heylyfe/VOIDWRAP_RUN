@@ -16,6 +16,7 @@ function state(x: number): ControllerState {
     abilityCooldownFrames: 0,
     abilityActiveFrames: 0,
     abilityDir: zero,
+    class: 0,
   };
 }
 

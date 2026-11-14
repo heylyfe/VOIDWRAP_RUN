@@ -7,8 +7,8 @@
 
 use crate::content::{Content, RunMods};
 use protocol::{
-    CARD_CURSE, CARD_ENEMY, CARD_UPGRADE, DEATH_ENEMY, DEATH_VOID, DraftCard, EnemyView, GIFT_GOLDEN, LevelData,
-    PHASE_ENEMY_DRAFT, PHASE_OVER, PHASE_PLAYING, RunInfo, Vec3,
+    CARD_CURSE, CARD_ENEMY, CARD_UPGRADE, DEATH_ENEMY, DEATH_VOID, DraftCard, ENEMY_DORMANT, ENEMY_HUNTING, EnemyView,
+    GIFT_GOLDEN, LevelData, PHASE_ENEMY_DRAFT, PHASE_OVER, PHASE_PLAYING, RunInfo, Vec3,
 };
 use sim::levelgen;
 use sim::rules::{self, BEACON_RADIUS, Enemy, GIFT_RADIUS};
@@ -361,6 +361,7 @@ impl Run {
                 kind: e.kind,
                 pos: e.pos.clone(),
                 radius: e.params.size,
+                state: if e.active_in == 0 { ENEMY_HUNTING } else { ENEMY_DORMANT },
             })
             .collect()
     }

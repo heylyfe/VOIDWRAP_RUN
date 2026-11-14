@@ -2,7 +2,7 @@
 /* eslint-disable */
 import { Reader, Writer } from "./codec";
 
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 export const TICK_HZ = 20;
 export const PHYSICS_HZ = 60;
 export const MAX_INPUTS_PER_MSG = 32;
@@ -28,6 +28,26 @@ export const PLAYER_ACTIVE = 0;
 export const PLAYER_FINISHED = 1;
 export const PLAYER_DEAD = 2;
 export const PLAYER_WAITING = 3;
+export const DEATH_PROJECTILE = 2;
+export const CLASS_STRIKER = 0;
+export const CLASS_GRAPPLER = 1;
+export const CLASS_BLINKER = 2;
+export const CLASS_GLIDER = 3;
+export const EVENT_NONE = 0;
+export const EVENT_HIGH_RISE = 1;
+export const EVENT_ICE = 2;
+export const EVENT_CRUMBLE = 3;
+export const PLATFORM_NORMAL = 0;
+export const PLATFORM_CRUMBLE = 1;
+export const TILE_WARN = 1;
+export const TILE_GONE = 2;
+export const ENEMY_DORMANT = 0;
+export const ENEMY_HUNTING = 1;
+export const ENEMY_DISGUISED = 2;
+export const NOTICE_ALTAR = 0;
+export const NOTICE_BOUGHT = 1;
+export const NOTICE_EVENT = 2;
+export const MAX_ITEM_LEN = 32;
 
 export interface Vec3 {
   x: number;
@@ -117,7 +137,7 @@ export function decodeInputFrame(bytes: Uint8Array): InputFrame {
   return v;
 }
 
-/** Complete kinematic character state. Must contain everything the step function reads so client reconciliation is exact. */
+/** Complete kinematic character state. Must contain everything the step function reads so client reconciliation is exact. class: CLASS_* - which ability BTN_ABILITY triggers (striker dash, grappler grapple, blinker blink, glider glide). */
 export interface ControllerState {
   pos: Vec3;
   vel: Vec3;
@@ -129,6 +149,7 @@ export interface ControllerState {
   abilityCooldownFrames: number;
   abilityActiveFrames: number;
   abilityDir: Vec3;
+  class: number;
 }
 export function writeControllerState(w: Writer, v: ControllerState): void {
   writeVec3(w, v.pos);
@@ -141,6 +162,7 @@ export function writeControllerState(w: Writer, v: ControllerState): void {
   w.u16(v.abilityCooldownFrames);
   w.u8(v.abilityActiveFrames);
   writeVec3(w, v.abilityDir);
+  w.u8(v.class);
 }
 export function readControllerState(r: Reader): ControllerState {
   return {
@@ -154,6 +176,7 @@ export function readControllerState(r: Reader): ControllerState {
     abilityCooldownFrames: r.u16(),
     abilityActiveFrames: r.u8(),
     abilityDir: readVec3(r),
+    class: r.u8(),
   };
 }
 export function encodeControllerState(v: ControllerState): Uint8Array<ArrayBuffer> {
@@ -226,6 +249,33 @@ export function decodeGift(bytes: Uint8Array): Gift {
   return v;
 }
 
+export interface Altar {
+  id: number;
+  pos: Vec3;
+}
+export function writeAltar(w: Writer, v: Altar): void {
+  w.u16(v.id);
+  writeVec3(w, v.pos);
+}
+export function readAltar(r: Reader): Altar {
+  return {
+    id: r.u16(),
+    pos: readVec3(r),
+  };
+}
+export function encodeAltar(v: Altar): Uint8Array<ArrayBuffer> {
+  const w = new Writer();
+  writeAltar(w, v);
+  return w.finish();
+}
+export function decodeAltar(bytes: Uint8Array): Altar {
+  const r = new Reader(bytes);
+  const v = readAltar(r);
+  r.end();
+  return v;
+}
+
+/** event: EVENT_*; altars: interactable shrines (BTN_INTERACT nearby). */
 export interface LevelData {
   level: number;
   seed: number;
@@ -234,6 +284,8 @@ export interface LevelData {
   killY: number;
   platforms: Platform[];
   gifts: Gift[];
+  event: number;
+  altars: Altar[];
 }
 export function writeLevelData(w: Writer, v: LevelData): void {
   w.u32(v.level);
@@ -243,6 +295,8 @@ export function writeLevelData(w: Writer, v: LevelData): void {
   w.f32(v.killY);
   w.vec(v.platforms, (x) => writePlatform(w, x));
   w.vec(v.gifts, (x) => writeGift(w, x));
+  w.u8(v.event);
+  w.vec(v.altars, (x) => writeAltar(w, x));
 }
 export function readLevelData(r: Reader): LevelData {
   return {
@@ -253,6 +307,8 @@ export function readLevelData(r: Reader): LevelData {
     killY: r.f32(),
     platforms: r.vec(() => readPlatform(r)),
     gifts: r.vec(() => readGift(r)),
+    event: r.u8(),
+    altars: r.vec(() => readAltar(r)),
   };
 }
 export function encodeLevelData(v: LevelData): Uint8Array<ArrayBuffer> {
@@ -273,12 +329,14 @@ export interface PlayerView {
   pos: Vec3;
   vel: Vec3;
   mode: number;
+  class: number;
 }
 export function writePlayerView(w: Writer, v: PlayerView): void {
   w.u32(v.id);
   writeVec3(w, v.pos);
   writeVec3(w, v.vel);
   w.u8(v.mode);
+  w.u8(v.class);
 }
 export function readPlayerView(r: Reader): PlayerView {
   return {
@@ -286,6 +344,7 @@ export function readPlayerView(r: Reader): PlayerView {
     pos: readVec3(r),
     vel: readVec3(r),
     mode: r.u8(),
+    class: r.u8(),
   };
 }
 export function encodePlayerView(v: PlayerView): Uint8Array<ArrayBuffer> {
@@ -300,18 +359,20 @@ export function decodePlayerView(bytes: Uint8Array): PlayerView {
   return v;
 }
 
-/** kind indexes design/content.json enemies; radius is the hit sphere radius (the client draws the body at this size). */
+/** kind indexes design/content.json enemies; radius is the hit sphere radius (the client draws the body at this size). state: ENEMY_DORMANT / ENEMY_HUNTING / ENEMY_DISGUISED (a mimic still posing as a gift). */
 export interface EnemyView {
   id: number;
   kind: number;
   pos: Vec3;
   radius: number;
+  state: number;
 }
 export function writeEnemyView(w: Writer, v: EnemyView): void {
   w.u32(v.id);
   w.u8(v.kind);
   writeVec3(w, v.pos);
   w.f32(v.radius);
+  w.u8(v.state);
 }
 export function readEnemyView(r: Reader): EnemyView {
   return {
@@ -319,6 +380,7 @@ export function readEnemyView(r: Reader): EnemyView {
     kind: r.u8(),
     pos: readVec3(r),
     radius: r.f32(),
+    state: r.u8(),
   };
 }
 export function encodeEnemyView(v: EnemyView): Uint8Array<ArrayBuffer> {
@@ -329,6 +391,89 @@ export function encodeEnemyView(v: EnemyView): Uint8Array<ArrayBuffer> {
 export function decodeEnemyView(bytes: Uint8Array): EnemyView {
   const r = new Reader(bytes);
   const v = readEnemyView(r);
+  r.end();
+  return v;
+}
+
+export interface ProjectileView {
+  id: number;
+  pos: Vec3;
+}
+export function writeProjectileView(w: Writer, v: ProjectileView): void {
+  w.u32(v.id);
+  writeVec3(w, v.pos);
+}
+export function readProjectileView(r: Reader): ProjectileView {
+  return {
+    id: r.u32(),
+    pos: readVec3(r),
+  };
+}
+export function encodeProjectileView(v: ProjectileView): Uint8Array<ArrayBuffer> {
+  const w = new Writer();
+  writeProjectileView(w, v);
+  return w.finish();
+}
+export function decodeProjectileView(bytes: Uint8Array): ProjectileView {
+  const r = new Reader(bytes);
+  const v = readProjectileView(r);
+  r.end();
+  return v;
+}
+
+/** A platform not in its normal state: TILE_WARN (about to crumble) or TILE_GONE (not solid). Platforms absent from the list are solid. */
+export interface TileState {
+  id: number;
+  state: number;
+}
+export function writeTileState(w: Writer, v: TileState): void {
+  w.u16(v.id);
+  w.u8(v.state);
+}
+export function readTileState(r: Reader): TileState {
+  return {
+    id: r.u16(),
+    state: r.u8(),
+  };
+}
+export function encodeTileState(v: TileState): Uint8Array<ArrayBuffer> {
+  const w = new Writer();
+  writeTileState(w, v);
+  return w.finish();
+}
+export function decodeTileState(bytes: Uint8Array): TileState {
+  const r = new Reader(bytes);
+  const v = readTileState(r);
+  r.end();
+  return v;
+}
+
+/** id refers to design/content.json shop; stock 0 = sold out. */
+export interface ShopItem {
+  id: string;
+  cost: number;
+  stock: number;
+}
+export function writeShopItem(w: Writer, v: ShopItem): void {
+  w.string(v.id);
+  w.u32(v.cost);
+  w.u8(v.stock);
+}
+export function readShopItem(r: Reader): ShopItem {
+  return {
+    id: r.string(),
+    cost: r.u32(),
+    stock: r.u8(),
+  };
+}
+export function encodeShopItem(v: ShopItem): Uint8Array<ArrayBuffer> {
+  const w = new Writer();
+  writeShopItem(w, v);
+  return w.finish();
+}
+export function decodeShopItem(bytes: Uint8Array): ShopItem {
+  const r = new Reader(bytes);
+  const v = readShopItem(r);
   r.end();
   return v;
 }
@@ -363,7 +508,7 @@ export function decodeRunSummary(bytes: Uint8Array): RunSummary {
   return v;
 }
 
-/** Movement multipliers from upgrades/curses. Applied identically by the server and the WASM predictor. */
+/** Movement multipliers from upgrades/curses. Applied identically by the server and the WASM predictor. friction_mul scales ground acceleration/braking (EVENT_ICE lowers it). */
 export interface Tuning {
   runSpeedMul: number;
   jumpMul: number;
@@ -371,6 +516,7 @@ export interface Tuning {
   dashSpeedMul: number;
   dashCooldownMul: number;
   airJumps: number;
+  frictionMul: number;
 }
 export function writeTuning(w: Writer, v: Tuning): void {
   w.f32(v.runSpeedMul);
@@ -379,6 +525,7 @@ export function writeTuning(w: Writer, v: Tuning): void {
   w.f32(v.dashSpeedMul);
   w.f32(v.dashCooldownMul);
   w.u8(v.airJumps);
+  w.f32(v.frictionMul);
 }
 export function readTuning(r: Reader): Tuning {
   return {
@@ -388,6 +535,7 @@ export function readTuning(r: Reader): Tuning {
     dashSpeedMul: r.f32(),
     dashCooldownMul: r.f32(),
     airJumps: r.u8(),
+    frictionMul: r.f32(),
   };
 }
 export function encodeTuning(v: Tuning): Uint8Array<ArrayBuffer> {
@@ -483,6 +631,8 @@ export type ClientMsg =
   | { type: "Ping"; t: number }
   | { type: "Restart" }
   | { type: "DraftPick"; picks: number[] }
+  | { type: "Buy"; item: string }
+  | { type: "ChooseClass"; class: number }
 ;
 export function writeClientMsg(w: Writer, v: ClientMsg): void {
   switch (v.type) {
@@ -506,6 +656,14 @@ export function writeClientMsg(w: Writer, v: ClientMsg): void {
       w.u32(4);
       w.vec(v.picks, (x) => w.u8(x));
       return;
+    case "Buy":
+      w.u32(5);
+      w.string(v.item);
+      return;
+    case "ChooseClass":
+      w.u32(6);
+      w.u8(v.class);
+      return;
   }
 }
 export function readClientMsg(r: Reader): ClientMsg {
@@ -521,6 +679,10 @@ export function readClientMsg(r: Reader): ClientMsg {
       return { type: "Restart" };
     case 4:
       return { type: "DraftPick", picks: r.vec(() => r.u8()) };
+    case 5:
+      return { type: "Buy", item: r.string() };
+    case 6:
+      return { type: "ChooseClass", class: r.u8() };
     default:
       throw new Error(`ClientMsg: unknown variant tag ${tag}`);
   }
@@ -540,12 +702,14 @@ export function decodeClientMsg(bytes: Uint8Array): ClientMsg {
 export type ServerMsg =
   | { type: "Welcome"; protocolVersion: number; playerId: number; tick: number }
   | { type: "Level"; data: LevelData }
-  | { type: "Snapshot"; tick: number; level: number; lastInputSeq: number; you: ControllerState; players: PlayerView[]; enemies: EnemyView[]; giftsTaken: number[] }
+  | { type: "Snapshot"; tick: number; level: number; lastInputSeq: number; you: ControllerState; players: PlayerView[]; enemies: EnemyView[]; giftsTaken: number[]; projectiles: ProjectileView[]; tiles: TileState[]; altarsUsed: number[] }
   | { type: "Pong"; t: number }
   | { type: "Error"; code: number; message: string }
   | { type: "RunOver"; summary: RunSummary }
   | { type: "RunState"; info: RunInfo }
   | { type: "Draft"; enemyPicks: number; rewardPicks: number; cards: DraftCard[] }
+  | { type: "Shop"; items: ShopItem[] }
+  | { type: "Notice"; kind: number; ids: string[] }
 ;
 export function writeServerMsg(w: Writer, v: ServerMsg): void {
   switch (v.type) {
@@ -568,6 +732,9 @@ export function writeServerMsg(w: Writer, v: ServerMsg): void {
       w.vec(v.players, (x) => writePlayerView(w, x));
       w.vec(v.enemies, (x) => writeEnemyView(w, x));
       w.vec(v.giftsTaken, (x) => w.u16(x));
+      w.vec(v.projectiles, (x) => writeProjectileView(w, x));
+      w.vec(v.tiles, (x) => writeTileState(w, x));
+      w.vec(v.altarsUsed, (x) => w.u16(x));
       return;
     case "Pong":
       w.u32(3);
@@ -592,6 +759,15 @@ export function writeServerMsg(w: Writer, v: ServerMsg): void {
       w.u8(v.rewardPicks);
       w.vec(v.cards, (x) => writeDraftCard(w, x));
       return;
+    case "Shop":
+      w.u32(8);
+      w.vec(v.items, (x) => writeShopItem(w, x));
+      return;
+    case "Notice":
+      w.u32(9);
+      w.u8(v.kind);
+      w.vec(v.ids, (x) => w.string(x));
+      return;
   }
 }
 export function readServerMsg(r: Reader): ServerMsg {
@@ -602,7 +778,7 @@ export function readServerMsg(r: Reader): ServerMsg {
     case 1:
       return { type: "Level", data: readLevelData(r) };
     case 2:
-      return { type: "Snapshot", tick: r.u32(), level: r.u32(), lastInputSeq: r.u32(), you: readControllerState(r), players: r.vec(() => readPlayerView(r)), enemies: r.vec(() => readEnemyView(r)), giftsTaken: r.vec(() => r.u16()) };
+      return { type: "Snapshot", tick: r.u32(), level: r.u32(), lastInputSeq: r.u32(), you: readControllerState(r), players: r.vec(() => readPlayerView(r)), enemies: r.vec(() => readEnemyView(r)), giftsTaken: r.vec(() => r.u16()), projectiles: r.vec(() => readProjectileView(r)), tiles: r.vec(() => readTileState(r)), altarsUsed: r.vec(() => r.u16()) };
     case 3:
       return { type: "Pong", t: r.u32() };
     case 4:
@@ -613,6 +789,10 @@ export function readServerMsg(r: Reader): ServerMsg {
       return { type: "RunState", info: readRunInfo(r) };
     case 7:
       return { type: "Draft", enemyPicks: r.u8(), rewardPicks: r.u8(), cards: r.vec(() => readDraftCard(r)) };
+    case 8:
+      return { type: "Shop", items: r.vec(() => readShopItem(r)) };
+    case 9:
+      return { type: "Notice", kind: r.u8(), ids: r.vec(() => r.string()) };
     default:
       throw new Error(`ServerMsg: unknown variant tag ${tag}`);
   }
@@ -637,9 +817,13 @@ export const CODECS = {
   ControllerState: { encode: encodeControllerState, decode: decodeControllerState },
   Platform: { encode: encodePlatform, decode: decodePlatform },
   Gift: { encode: encodeGift, decode: decodeGift },
+  Altar: { encode: encodeAltar, decode: decodeAltar },
   LevelData: { encode: encodeLevelData, decode: decodeLevelData },
   PlayerView: { encode: encodePlayerView, decode: decodePlayerView },
   EnemyView: { encode: encodeEnemyView, decode: decodeEnemyView },
+  ProjectileView: { encode: encodeProjectileView, decode: decodeProjectileView },
+  TileState: { encode: encodeTileState, decode: decodeTileState },
+  ShopItem: { encode: encodeShopItem, decode: decodeShopItem },
   RunSummary: { encode: encodeRunSummary, decode: decodeRunSummary },
   Tuning: { encode: encodeTuning, decode: decodeTuning },
   DraftCard: { encode: encodeDraftCard, decode: decodeDraftCard },

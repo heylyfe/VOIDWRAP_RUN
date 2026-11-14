@@ -170,6 +170,7 @@ impl RunMods {
             dash_speed_mul: self.dash_speed_mul,
             dash_cooldown_mul: self.dash_cooldown_mul,
             air_jumps: self.air_jumps as u8,
+            friction_mul: 1.0,
         }
     }
 

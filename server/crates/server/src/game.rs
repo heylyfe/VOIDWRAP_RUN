@@ -344,6 +344,8 @@ impl Game {
                 }
             }
             ClientMsg::Ping { t } => self.send(id, &ServerMsg::Pong { t }),
+            // M2: shop purchases and class choice are wired in by T-043.
+            ClientMsg::Buy { .. } | ClientMsg::ChooseClass { .. } => {}
             ClientMsg::DraftPick { picks } => {
                 if picks.len() > MAX_DRAFT_PICKS as usize {
                     return self.reject(id, 400, "too many draft picks");
@@ -441,6 +443,7 @@ impl Game {
                 pos: p.state.pos.clone(),
                 vel: p.state.vel.clone(),
                 mode: p.mode,
+                class: p.state.class,
             })
             .collect();
         let enemies = self.run.enemy_views();
@@ -456,6 +459,9 @@ impl Game {
                 players: players.clone(),
                 enemies: enemies.clone(),
                 gifts_taken: self.run.gifts_taken.clone(),
+                projectiles: Vec::new(),
+                tiles: Vec::new(),
+                altars_used: Vec::new(),
             };
             self.send(id, &msg);
         }

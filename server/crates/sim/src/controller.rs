@@ -30,6 +30,7 @@ pub fn spawn_state(pos: Vec3) -> ControllerState {
         ability_cooldown_frames: 0,
         ability_active_frames: 0,
         ability_dir: Vec3::ZERO,
+        class: protocol::CLASS_STRIKER,
     }
 }
 
@@ -700,6 +701,7 @@ mod tests {
             dash_speed_mul: f32::NAN,
             dash_cooldown_mul: f32::NAN,
             air_jumps: 0,
+            friction_mul: f32::NAN,
         };
         let mut plain = spawn_state(Vec3::new(0.0, 2.0, 0.0));
         let mut tuned = spawn_state(Vec3::new(0.0, 2.0, 0.0));

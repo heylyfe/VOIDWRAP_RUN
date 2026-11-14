@@ -33,6 +33,26 @@ export const ROUTES = {
   utility: { retired: "chores go to --target glm (docs) or --target deepseek (fixtures, seed data)" },
 };
 
+/** Never inlined into a ticket, whatever the ticket asks: secrets and local-only data. */
+const INCLUDE_DENY = [/(^|\/)\.env/i, /(^|\/)shots\//, /key/i, /secret/i, /token/i, /\.pem$/i];
+
+/**
+ * Replace each line `@include <repo-relative path>` with that file's contents in a fenced block.
+ * Lets OVERSEER reference current code instead of pasting it. Only files inside the repository
+ * that are tracked-style source (no secrets, no screenshots) can be included.
+ */
+export function expandIncludes(text) {
+  return text.replace(/^@include[ \t]+(\S+)[ \t]*$/gm, (_, rel) => {
+    const norm = rel.replace(/\\/g, "/");
+    if (norm.startsWith("/") || /^[a-zA-Z]:/.test(norm) || norm.split("/").includes("..")) throw new Error(`@include: unsafe path ${rel}`);
+    if (INCLUDE_DENY.some((re) => re.test(norm))) throw new Error(`@include: refused ${rel}`);
+    const abs = join(root, norm);
+    if (!existsSync(abs)) throw new Error(`@include: not found ${rel}`);
+    const ext = norm.split(".").pop() ?? "";
+    return `\`${norm}\` (current contents):\n~~~~${ext}\n${readFileSync(abs, "utf8").replace(/\s+$/, "")}\n~~~~`;
+  });
+}
+
 function parseArgs(argv) {
   const args = { images: [], timeout: 900 };
   for (let i = 0; i < argv.length; i++) {
@@ -177,11 +197,14 @@ async function main() {
   const via = args.via ?? route.default;
   if (!route[via]) throw new Error(`target ${args.target} has no '${via}' route`);
   if (args.images.length && !route.vision) throw new Error(`target ${args.target} is text-only; --image not allowed`);
-  const ticketPath = resolve(args.ticket);
-  if (!existsSync(ticketPath)) throw new Error(`ticket not found: ${ticketPath}`);
+  const sourceTicket = resolve(args.ticket);
+  if (!existsSync(sourceTicket)) throw new Error(`ticket not found: ${sourceTicket}`);
   for (const img of args.images) if (!existsSync(img)) throw new Error(`image not found: ${img}`);
 
-  const outPath = ticketPath.replace(/\.md$/, "") + ".response.md";
+  const outPath = sourceTicket.replace(/\.md$/, "") + ".response.md";
+  // Expand `@include path` lines into the repository file's contents (see expandIncludes).
+  const ticketPath = join(mkdtempSync(join(tmpdir(), "vw-ticket-")), "TICKET.md");
+  writeFileSync(ticketPath, expandIncludes(readFileSync(sourceTicket, "utf8")));
   const maxAttempts = 3;
   let result;
   let attempt = 0;

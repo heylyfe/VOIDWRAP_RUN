@@ -44,6 +44,8 @@ pub fn bootstrap() -> LevelData {
         kill_y: -30.0,
         platforms: vec![slab(0, 0.0, 0.0, 0.0, 20.0, 20.0)],
         gifts: vec![],
+        event: protocol::EVENT_NONE,
+        altars: Vec::new(),
     }
 }
 
@@ -93,6 +95,8 @@ fn design_one() -> LevelData {
         spawn: Vec3::new(0.0, 0.0, 0.0),
         beacon: Vec3::new(-2.0, 0.0, -6.0),
         kill_y: -20.0,
+        event: protocol::EVENT_NONE,
+        altars: Vec::new(),
         platforms: vec![
             slab(0, 0.0, 0.0, 0.0, 3.0, 3.0),
             slab(1, 0.0, 0.0, 7.0, 2.0, 2.0),
@@ -122,6 +126,8 @@ fn design_two() -> LevelData {
         spawn: Vec3::new(0.0, 0.0, 0.0),
         beacon: Vec3::new(-2.0, 0.0, -6.0),
         kill_y: -20.0,
+        event: protocol::EVENT_NONE,
+        altars: Vec::new(),
         platforms: vec![
             slab(0, 0.0, 0.0, 0.0, 3.0, 3.0),
             slab(1, 0.0, 1.5, 7.0, 2.0, 2.0),
@@ -151,6 +157,8 @@ fn design_three() -> LevelData {
         spawn: Vec3::new(0.0, 0.0, 0.0),
         beacon: Vec3::new(0.0, 3.0, -33.0),
         kill_y: -20.0,
+        event: protocol::EVENT_NONE,
+        altars: Vec::new(),
         platforms: vec![
             slab(0, 0.0, 0.0, 0.0, 3.0, 3.0),
             slab(1, -6.0, 0.0, -6.0, 2.0, 2.0),

@@ -157,6 +157,7 @@ mod tests {
             dash_speed_mul: 1.0,
             dash_cooldown_mul: 1.0,
             air_jumps: 1,
+            friction_mul: 1.0,
         };
         let len = write_io(&protocol::encode(&tuning).unwrap());
         assert_eq!(vw_set_tuning(len), 0);

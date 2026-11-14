@@ -3,7 +3,7 @@
   "constants": {
     "PROTOCOL_VERSION": [
       "u16",
-      5
+      6
     ],
     "TICK_HZ": [
       "u32",
@@ -104,6 +104,86 @@
     "PLAYER_WAITING": [
       "u8",
       3
+    ],
+    "DEATH_PROJECTILE": [
+      "u8",
+      2
+    ],
+    "CLASS_STRIKER": [
+      "u8",
+      0
+    ],
+    "CLASS_GRAPPLER": [
+      "u8",
+      1
+    ],
+    "CLASS_BLINKER": [
+      "u8",
+      2
+    ],
+    "CLASS_GLIDER": [
+      "u8",
+      3
+    ],
+    "EVENT_NONE": [
+      "u8",
+      0
+    ],
+    "EVENT_HIGH_RISE": [
+      "u8",
+      1
+    ],
+    "EVENT_ICE": [
+      "u8",
+      2
+    ],
+    "EVENT_CRUMBLE": [
+      "u8",
+      3
+    ],
+    "PLATFORM_NORMAL": [
+      "u8",
+      0
+    ],
+    "PLATFORM_CRUMBLE": [
+      "u8",
+      1
+    ],
+    "TILE_WARN": [
+      "u8",
+      1
+    ],
+    "TILE_GONE": [
+      "u8",
+      2
+    ],
+    "ENEMY_DORMANT": [
+      "u8",
+      0
+    ],
+    "ENEMY_HUNTING": [
+      "u8",
+      1
+    ],
+    "ENEMY_DISGUISED": [
+      "u8",
+      2
+    ],
+    "NOTICE_ALTAR": [
+      "u8",
+      0
+    ],
+    "NOTICE_BOUGHT": [
+      "u8",
+      1
+    ],
+    "NOTICE_EVENT": [
+      "u8",
+      2
+    ],
+    "MAX_ITEM_LEN": [
+      "u8",
+      32
     ]
   },
   "types": [
@@ -161,7 +241,7 @@
     },
     {
       "name": "ControllerState",
-      "$comment": "Complete kinematic character state. Must contain everything the step function reads so client reconciliation is exact.",
+      "$comment": "Complete kinematic character state. Must contain everything the step function reads so client reconciliation is exact. class: CLASS_* - which ability BTN_ABILITY triggers (striker dash, grappler grapple, blinker blink, glider glide).",
       "struct": [
         [
           "pos",
@@ -202,6 +282,10 @@
         [
           "ability_dir",
           "Vec3"
+        ],
+        [
+          "class",
+          "u8"
         ]
       ]
     },
@@ -236,6 +320,19 @@
         [
           "kind",
           "u8"
+        ]
+      ]
+    },
+    {
+      "name": "Altar",
+      "struct": [
+        [
+          "id",
+          "u16"
+        ],
+        [
+          "pos",
+          "Vec3"
         ]
       ]
     },
@@ -275,8 +372,20 @@
             "vec",
             "Gift"
           ]
+        ],
+        [
+          "event",
+          "u8"
+        ],
+        [
+          "altars",
+          [
+            "vec",
+            "Altar"
+          ]
         ]
-      ]
+      ],
+      "$comment": "event: EVENT_*; altars: interactable shrines (BTN_INTERACT nearby)."
     },
     {
       "name": "PlayerView",
@@ -296,13 +405,17 @@
         [
           "mode",
           "u8"
+        ],
+        [
+          "class",
+          "u8"
         ]
       ],
       "$comment": "mode: PLAYER_ACTIVE playing; PLAYER_FINISHED reached the beacon (spectating); PLAYER_DEAD out of lives (spectating); PLAYER_WAITING joined mid-level (spectating until the next lobby)."
     },
     {
       "name": "EnemyView",
-      "$comment": "kind indexes design/content.json enemies; radius is the hit sphere radius (the client draws the body at this size).",
+      "$comment": "kind indexes design/content.json enemies; radius is the hit sphere radius (the client draws the body at this size). state: ENEMY_DORMANT / ENEMY_HUNTING / ENEMY_DISGUISED (a mimic still posing as a gift).",
       "struct": [
         [
           "id",
@@ -319,6 +432,55 @@
         [
           "radius",
           "f32"
+        ],
+        [
+          "state",
+          "u8"
+        ]
+      ]
+    },
+    {
+      "name": "ProjectileView",
+      "struct": [
+        [
+          "id",
+          "u32"
+        ],
+        [
+          "pos",
+          "Vec3"
+        ]
+      ]
+    },
+    {
+      "name": "TileState",
+      "$comment": "A platform not in its normal state: TILE_WARN (about to crumble) or TILE_GONE (not solid). Platforms absent from the list are solid.",
+      "struct": [
+        [
+          "id",
+          "u16"
+        ],
+        [
+          "state",
+          "u8"
+        ]
+      ]
+    },
+    {
+      "name": "ShopItem",
+      "$comment": "id refers to design/content.json shop; stock 0 = sold out.",
+      "struct": [
+        [
+          "id",
+          "string"
+        ],
+        [
+          "cost",
+          "u32"
+        ],
+        [
+          "stock",
+          "u8"
         ]
       ]
     },
@@ -342,7 +504,7 @@
     },
     {
       "name": "Tuning",
-      "$comment": "Movement multipliers from upgrades/curses. Applied identically by the server and the WASM predictor.",
+      "$comment": "Movement multipliers from upgrades/curses. Applied identically by the server and the WASM predictor. friction_mul scales ground acceleration/braking (EVENT_ICE lowers it).",
       "struct": [
         [
           "run_speed_mul",
@@ -367,6 +529,10 @@
         [
           "air_jumps",
           "u8"
+        ],
+        [
+          "friction_mul",
+          "f32"
         ]
       ]
     },
@@ -487,6 +653,24 @@
               ]
             ]
           ]
+        ],
+        [
+          "Buy",
+          [
+            [
+              "item",
+              "string"
+            ]
+          ]
+        ],
+        [
+          "ChooseClass",
+          [
+            [
+              "class",
+              "u8"
+            ]
+          ]
         ]
       ]
     },
@@ -558,6 +742,27 @@
                 "vec",
                 "u16"
               ]
+            ],
+            [
+              "projectiles",
+              [
+                "vec",
+                "ProjectileView"
+              ]
+            ],
+            [
+              "tiles",
+              [
+                "vec",
+                "TileState"
+              ]
+            ],
+            [
+              "altars_used",
+              [
+                "vec",
+                "u16"
+              ]
             ]
           ]
         ],
@@ -617,6 +822,34 @@
               [
                 "vec",
                 "DraftCard"
+              ]
+            ]
+          ]
+        ],
+        [
+          "Shop",
+          [
+            [
+              "items",
+              [
+                "vec",
+                "ShopItem"
+              ]
+            ]
+          ]
+        ],
+        [
+          "Notice",
+          [
+            [
+              "kind",
+              "u8"
+            ],
+            [
+              "ids",
+              [
+                "vec",
+                "string"
               ]
             ]
           ]
@@ -686,7 +919,8 @@
               "x": 0,
               "y": 0,
               "z": 1
-            }
+            },
+            "class": 2
           },
           "players": [
             {
@@ -701,13 +935,49 @@
                 "y": 0,
                 "z": 0
               },
-              "mode": 0
+              "mode": 0,
+              "class": 3
             }
           ],
-          "enemies": [],
+          "enemies": [
+            {
+              "id": 7,
+              "kind": 5,
+              "pos": {
+                "x": 1,
+                "y": 2.5,
+                "z": -3
+              },
+              "radius": 0.75,
+              "state": 2
+            }
+          ],
           "gifts_taken": [
             2,
             65535
+          ],
+          "projectiles": [
+            {
+              "id": 40,
+              "pos": {
+                "x": -1,
+                "y": 1,
+                "z": 0.5
+              }
+            }
+          ],
+          "tiles": [
+            {
+              "id": 3,
+              "state": 1
+            },
+            {
+              "id": 9,
+              "state": 2
+            }
+          ],
+          "altars_used": [
+            1
           ]
         }
       }
@@ -787,7 +1057,8 @@
               "gravity_mul": 0.9,
               "dash_speed_mul": 1,
               "dash_cooldown_mul": 0.75,
-              "air_jumps": 1
+              "air_jumps": 1,
+              "friction_mul": 0.25
             },
             "fog_density_mul": 1.25,
             "enemies": [
@@ -798,6 +1069,57 @@
             ],
             "curses": []
           }
+        }
+      }
+    },
+    {
+      "name": "client_buy",
+      "type": "ClientMsg",
+      "value": {
+        "Buy": {
+          "item": "spare_heart"
+        }
+      }
+    },
+    {
+      "name": "client_choose_class",
+      "type": "ClientMsg",
+      "value": {
+        "ChooseClass": {
+          "class": 1
+        }
+      }
+    },
+    {
+      "name": "server_shop",
+      "type": "ServerMsg",
+      "value": {
+        "Shop": {
+          "items": [
+            {
+              "id": "spare_heart",
+              "cost": 15,
+              "stock": 1
+            },
+            {
+              "id": "reroll",
+              "cost": 5,
+              "stock": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "server_notice",
+      "type": "ServerMsg",
+      "value": {
+        "Notice": {
+          "kind": 0,
+          "ids": [
+            "twin_feather",
+            "swarm_seed"
+          ]
         }
       }
     }

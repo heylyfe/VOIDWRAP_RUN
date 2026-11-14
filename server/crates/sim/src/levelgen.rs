@@ -590,6 +590,8 @@ fn build(rng_seed: u32, out_seed: u32, level: u32) -> Option<GeneratedLevel> {
         spawn: Vec3::ZERO,
         beacon,
         kill_y,
+        event: protocol::EVENT_NONE,
+        altars: Vec::new(),
         platforms,
         gifts,
     };
@@ -661,6 +663,8 @@ fn fallback(seed: u32, level: u32) -> GeneratedLevel {
         spawn: Vec3::ZERO,
         beacon,
         kill_y: -13.0,
+        event: protocol::EVENT_NONE,
+        altars: Vec::new(),
         platforms,
         gifts,
     };
@@ -689,6 +693,8 @@ pub fn hub() -> LevelData {
             bounds: spawn_b,
         }],
         gifts: Vec::new(),
+        event: protocol::EVENT_NONE,
+        altars: Vec::new(),
     }
 }
 
@@ -1132,6 +1138,8 @@ mod tests {
             kill_y: -13.0,
             platforms: vec![spawn_platform(), w],
             gifts: gifts_on_spawn(),
+            event: protocol::EVENT_NONE,
+            altars: Vec::new(),
         };
         assert_eq!(validate(&data), Ok(()));
     }
@@ -1158,6 +1166,8 @@ mod tests {
             spawn: Vec3::ZERO,
             beacon: Vec3::new(2.0, 0.0, 2.0),
             kill_y: -13.0,
+            event: protocol::EVENT_NONE,
+            altars: Vec::new(),
             platforms: vec![spawn_platform(), far],
             gifts,
         };
@@ -1182,6 +1192,8 @@ mod tests {
             kill_y: -13.0,
             platforms: vec![spawn_platform(), p],
             gifts: Vec::new(),
+            event: protocol::EVENT_NONE,
+            altars: Vec::new(),
         };
         assert!(validate(&data).is_err());
     }
@@ -1204,6 +1216,8 @@ mod tests {
             kill_y: -13.0,
             platforms: vec![p],
             gifts: Vec::new(),
+            event: protocol::EVENT_NONE,
+            altars: Vec::new(),
         };
         assert!(validate(&data).is_err());
     }
@@ -1226,6 +1240,8 @@ mod tests {
             kill_y: -13.0,
             platforms: vec![spawn_platform(), far],
             gifts: gifts_on_spawn(),
+            event: protocol::EVENT_NONE,
+            altars: Vec::new(),
         };
         assert!(validate(&data).is_err());
     }
@@ -1250,6 +1266,8 @@ mod tests {
             kill_y: -13.0,
             platforms: vec![spawn_platform(), drop_down],
             gifts: gifts_on_spawn(),
+            event: protocol::EVENT_NONE,
+            altars: Vec::new(),
         };
         assert!(validate(&data).is_err());
     }
@@ -1273,6 +1291,8 @@ mod tests {
             kill_y: -13.0,
             platforms: vec![spawn_platform(), raised],
             gifts: gifts_on_spawn(),
+            event: protocol::EVENT_NONE,
+            altars: Vec::new(),
         };
         assert!(validate(&data).is_err());
     }

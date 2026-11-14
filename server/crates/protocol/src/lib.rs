@@ -59,6 +59,7 @@ impl Default for Tuning {
             dash_speed_mul: 1.0,
             dash_cooldown_mul: 1.0,
             air_jumps: 0,
+            friction_mul: 1.0,
         }
     }
 }

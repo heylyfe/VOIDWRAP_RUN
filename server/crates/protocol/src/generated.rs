@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 5;
+pub const PROTOCOL_VERSION: u16 = 6;
 pub const TICK_HZ: u32 = 20;
 pub const PHYSICS_HZ: u32 = 60;
 pub const MAX_INPUTS_PER_MSG: u32 = 32;
@@ -29,6 +29,26 @@ pub const PLAYER_ACTIVE: u8 = 0;
 pub const PLAYER_FINISHED: u8 = 1;
 pub const PLAYER_DEAD: u8 = 2;
 pub const PLAYER_WAITING: u8 = 3;
+pub const DEATH_PROJECTILE: u8 = 2;
+pub const CLASS_STRIKER: u8 = 0;
+pub const CLASS_GRAPPLER: u8 = 1;
+pub const CLASS_BLINKER: u8 = 2;
+pub const CLASS_GLIDER: u8 = 3;
+pub const EVENT_NONE: u8 = 0;
+pub const EVENT_HIGH_RISE: u8 = 1;
+pub const EVENT_ICE: u8 = 2;
+pub const EVENT_CRUMBLE: u8 = 3;
+pub const PLATFORM_NORMAL: u8 = 0;
+pub const PLATFORM_CRUMBLE: u8 = 1;
+pub const TILE_WARN: u8 = 1;
+pub const TILE_GONE: u8 = 2;
+pub const ENEMY_DORMANT: u8 = 0;
+pub const ENEMY_HUNTING: u8 = 1;
+pub const ENEMY_DISGUISED: u8 = 2;
+pub const NOTICE_ALTAR: u8 = 0;
+pub const NOTICE_BOUGHT: u8 = 1;
+pub const NOTICE_EVENT: u8 = 2;
+pub const MAX_ITEM_LEN: u8 = 32;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Vec3 {
@@ -52,7 +72,7 @@ pub struct InputFrame {
     pub buttons: u8,
 }
 
-/// Complete kinematic character state. Must contain everything the step function reads so client reconciliation is exact.
+/// Complete kinematic character state. Must contain everything the step function reads so client reconciliation is exact. class: CLASS_* - which ability BTN_ABILITY triggers (striker dash, grappler grapple, blinker blink, glider glide).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ControllerState {
     pub pos: Vec3,
@@ -65,6 +85,7 @@ pub struct ControllerState {
     pub ability_cooldown_frames: u16,
     pub ability_active_frames: u8,
     pub ability_dir: Vec3,
+    pub class: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -82,6 +103,13 @@ pub struct Gift {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Altar {
+    pub id: u16,
+    pub pos: Vec3,
+}
+
+/// event: EVENT_*; altars: interactable shrines (BTN_INTERACT nearby).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LevelData {
     pub level: u32,
     pub seed: u32,
@@ -90,6 +118,8 @@ pub struct LevelData {
     pub kill_y: f32,
     pub platforms: Vec<Platform>,
     pub gifts: Vec<Gift>,
+    pub event: u8,
+    pub altars: Vec<Altar>,
 }
 
 /// mode: PLAYER_ACTIVE playing; PLAYER_FINISHED reached the beacon (spectating); PLAYER_DEAD out of lives (spectating); PLAYER_WAITING joined mid-level (spectating until the next lobby).
@@ -99,15 +129,38 @@ pub struct PlayerView {
     pub pos: Vec3,
     pub vel: Vec3,
     pub mode: u8,
+    pub class: u8,
 }
 
-/// kind indexes design/content.json enemies; radius is the hit sphere radius (the client draws the body at this size).
+/// kind indexes design/content.json enemies; radius is the hit sphere radius (the client draws the body at this size). state: ENEMY_DORMANT / ENEMY_HUNTING / ENEMY_DISGUISED (a mimic still posing as a gift).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EnemyView {
     pub id: u32,
     pub kind: u8,
     pub pos: Vec3,
     pub radius: f32,
+    pub state: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectileView {
+    pub id: u32,
+    pub pos: Vec3,
+}
+
+/// A platform not in its normal state: TILE_WARN (about to crumble) or TILE_GONE (not solid). Platforms absent from the list are solid.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TileState {
+    pub id: u16,
+    pub state: u8,
+}
+
+/// id refers to design/content.json shop; stock 0 = sold out.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShopItem {
+    pub id: String,
+    pub cost: u32,
+    pub stock: u8,
 }
 
 /// End-of-run stats. cause is one of DEATH_VOID / DEATH_ENEMY.
@@ -118,7 +171,7 @@ pub struct RunSummary {
     pub cause: u8,
 }
 
-/// Movement multipliers from upgrades/curses. Applied identically by the server and the WASM predictor.
+/// Movement multipliers from upgrades/curses. Applied identically by the server and the WASM predictor. friction_mul scales ground acceleration/braking (EVENT_ICE lowers it).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Tuning {
     pub run_speed_mul: f32,
@@ -127,6 +180,7 @@ pub struct Tuning {
     pub dash_speed_mul: f32,
     pub dash_cooldown_mul: f32,
     pub air_jumps: u8,
+    pub friction_mul: f32,
 }
 
 /// A card offered in a draft. id refers to design/content.json; kind 0 enemy, 1 upgrade, 2 curse.
@@ -157,18 +211,22 @@ pub enum ClientMsg {
     Ping { t: u32 },
     Restart,
     DraftPick { picks: Vec<u8> },
+    Buy { item: String },
+    ChooseClass { class: u8 },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ServerMsg {
     Welcome { protocol_version: u16, player_id: u32, tick: u32 },
     Level { data: LevelData },
-    Snapshot { tick: u32, level: u32, last_input_seq: u32, you: ControllerState, players: Vec<PlayerView>, enemies: Vec<EnemyView>, gifts_taken: Vec<u16> },
+    Snapshot { tick: u32, level: u32, last_input_seq: u32, you: ControllerState, players: Vec<PlayerView>, enemies: Vec<EnemyView>, gifts_taken: Vec<u16>, projectiles: Vec<ProjectileView>, tiles: Vec<TileState>, altars_used: Vec<u16> },
     Pong { t: u32 },
     Error { code: u16, message: String },
     RunOver { summary: RunSummary },
     RunState { info: RunInfo },
     Draft { enemy_picks: u8, reward_picks: u8, cards: Vec<DraftCard> },
+    Shop { items: Vec<ShopItem> },
+    Notice { kind: u8, ids: Vec<String> },
 }
 
 #[cfg(test)]
@@ -180,9 +238,13 @@ pub(crate) fn fixture_encode(type_name: &str, value: serde_json::Value) -> Resul
         "ControllerState" => crate::encode(&serde_json::from_value::<ControllerState>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "Platform" => crate::encode(&serde_json::from_value::<Platform>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "Gift" => crate::encode(&serde_json::from_value::<Gift>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
+        "Altar" => crate::encode(&serde_json::from_value::<Altar>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "LevelData" => crate::encode(&serde_json::from_value::<LevelData>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "PlayerView" => crate::encode(&serde_json::from_value::<PlayerView>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "EnemyView" => crate::encode(&serde_json::from_value::<EnemyView>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
+        "ProjectileView" => crate::encode(&serde_json::from_value::<ProjectileView>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
+        "TileState" => crate::encode(&serde_json::from_value::<TileState>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
+        "ShopItem" => crate::encode(&serde_json::from_value::<ShopItem>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "RunSummary" => crate::encode(&serde_json::from_value::<RunSummary>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "Tuning" => crate::encode(&serde_json::from_value::<Tuning>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "DraftCard" => crate::encode(&serde_json::from_value::<DraftCard>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),

@@ -18,6 +18,8 @@ describe.runIf(existsSync(wasmPath))("WasmStepper (real sim.wasm)", () => {
       killY: -30,
       platforms: [{ id: 0, kind: 0, bounds: { min: { x: -5, y: -1, z: -5 }, max: { x: 5, y: 0, z: 5 } } }],
       gifts: [],
+      event: 0,
+      altars: [],
     };
     sim.loadLevel(level);
     const start = { ...sim.getState(), pos: { x: 0, y: 2, z: 0 } };
