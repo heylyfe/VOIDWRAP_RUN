@@ -3,7 +3,8 @@
    Validates design/chunks.json against design/CHUNK_FORMAT.md (+ binding M3 amendments:
    walkable 0.5 u risers, >= 3 u walkways, 4 u stacking clearance, design hop envelope with
    a 1.0 u comfort margin and a 2.0 u minimum landing extent, internal reachability;
-   plain jumps climb at most +2.0 u, the +2.25 u apex being unreachable in practice).
+   plain jumps climb at most +2.0 u, the +2.25 u apex being unreachable in practice;
+   jump pads climb at most +3.5 u, the +4.0 u pad apex being unreachable in practice).
    Node 24+, ESM, no packages.
    Exit 0 = ok; exit 1 = errors (printed, one per line). Always prints a per-chunk summary. */
 import { readFile } from "node:fs/promises";
@@ -21,6 +22,8 @@ const FACINGS = new Set(["N", "E", "S", "W"]);
 // (12^2 / (2*32)), so a +2.25 u rise can never be cleared in practice. Touching drops
 // (gap ~0, rise < -0.55) are always fine. Jump edges additionally require a >= 2.0 u
 // smaller landing extent and a 1.0 u comfort margin (gap <= row value - 1.0).
+// Jump pads climb at most +3.5 u: the pad apex is exactly +4.0 u (16^2 / (2*32)),
+// 3.87 u at 60 Hz, so a +4.0 u rise can never be cleared in practice.
 const ENV = [[-4, 8], [-3, 7.5], [-2, 7], [-1, 6.5], [0, 6], [0.5, 5.5], [1, 5], [1.5, 4.5], [2, 4]];
 function envelopeGap(dy) {
   if (dy < -4.0 - EPS) return 8;        // deeper drop: same fall budget as the Δ-4.0 row
@@ -210,7 +213,7 @@ function validateChunk(c) {
     // <= design max gap for the rise minus a 1.0 u comfort margin.
     const landingSmall = Math.min(v.rect.x1 - v.rect.x0, v.rect.z1 - v.rect.z0);
     if (landingSmall + EPS < 2.0) continue;
-    if (u.kind === "JUMP_PAD" && dy >= -0.5 - EPS && dy <= 4.0 + EPS && d <= 5.0 + EPS) { adj[i].push(j); continue; }  // pad splash
+    if (u.kind === "JUMP_PAD" && dy >= -0.5 - EPS && dy <= 3.5 + EPS && d <= 4.5 + EPS) { adj[i].push(j); continue; }  // pad launch (apex - 0.5)
     const mg = envelopeGap(dy);                                                        // design envelope, 1.0 u comfort
     if (mg !== null && d <= (mg - 1.0) + EPS) { adj[i].push(j); continue; }
   }

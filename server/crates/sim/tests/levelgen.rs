@@ -6,13 +6,11 @@
 //! per amendment A3, altar frequency, determinism).
 
 use protocol::{
-    Aabb, EVENT_CRUMBLE, EVENT_HIGH_RISE, EVENT_ICE, EVENT_NONE, Gift, LevelData, PLATFORM_NORMAL,
-    Platform, Vec3,
+    Aabb, EVENT_CRUMBLE, EVENT_HIGH_RISE, EVENT_ICE, EVENT_NONE, Gift, LevelData, PLATFORM_NORMAL, Platform, Vec3,
 };
 use sim::levelgen::{
-    Catalog, Facing, OpenSocket, event_for, facing_bridge, generate, generate_for,
-    generate_with_catalog, hub, parse_catalog, parse_catalog_lenient, plan_join, platform_pair_ok,
-    validate,
+    Catalog, Facing, OpenSocket, event_for, facing_bridge, generate, generate_for, generate_with_catalog, hub,
+    parse_catalog, parse_catalog_lenient, plan_join, platform_pair_ok, validate,
 };
 
 fn inline_catalog() -> Catalog {
@@ -112,12 +110,18 @@ fn island_level(beacon_far: bool, gift_far: bool) -> LevelData {
     let p0 = Platform {
         id: 0,
         kind: PLATFORM_NORMAL,
-        bounds: Aabb { min: Vec3::new(-6.0, -1.0, -6.0), max: Vec3::new(6.0, 0.0, 6.0) },
+        bounds: Aabb {
+            min: Vec3::new(-6.0, -1.0, -6.0),
+            max: Vec3::new(6.0, 0.0, 6.0),
+        },
     };
     let p1 = Platform {
         id: 1,
         kind: PLATFORM_NORMAL,
-        bounds: Aabb { min: Vec3::new(30.0, -1.0, -1.5), max: Vec3::new(36.0, 0.0, 1.5) },
+        bounds: Aabb {
+            min: Vec3::new(30.0, -1.0, -1.5),
+            max: Vec3::new(36.0, 0.0, 1.5),
+        },
     };
     let beacon = if beacon_far {
         Vec3::new(33.0, 0.0, 0.0)
@@ -125,7 +129,11 @@ fn island_level(beacon_far: bool, gift_far: bool) -> LevelData {
         Vec3::new(0.0, 0.0, 5.0)
     };
     let gifts = vec![
-        Gift { id: 0, pos: Vec3::new(-3.0, 0.3, -3.0), kind: protocol::GIFT_NORMAL },
+        Gift {
+            id: 0,
+            pos: Vec3::new(-3.0, 0.3, -3.0),
+            kind: protocol::GIFT_NORMAL,
+        },
         Gift {
             id: 1,
             pos: if gift_far {
@@ -158,9 +166,18 @@ fn rotation_math_joins_facing_sockets() {
     let straight = cat.chunks.iter().find(|c| c.id == "straight").expect("straight chunk");
 
     // Anchor: hub's E socket at (8, 0, 0) facing E. straight's W socket (idx 0) joins as-is.
-    let anchor = OpenSocket { pos: Vec3::new(8.0, 0.0, 0.0), facing: Facing::E, width: 4.0, failures: 0 };
+    let anchor = OpenSocket {
+        pos: Vec3::new(8.0, 0.0, 0.0),
+        facing: Facing::E,
+        width: 4.0,
+        failures: 0,
+    };
     let plan = plan_join(straight, 0, 0, &anchor).expect("straight W socket joins the hub E socket");
-    let w = plan.sockets.iter().find(|s| s.facing == Facing::W).expect("joined socket stays in placement");
+    let w = plan
+        .sockets
+        .iter()
+        .find(|s| s.facing == Facing::W)
+        .expect("joined socket stays in placement");
     assert!((w.pos.x - 8.0).abs() < 1e-4 && (w.pos.z - 0.0).abs() < 1e-4);
     let e = plan.sockets.iter().find(|s| s.facing == Facing::E).expect("far socket");
     assert!((e.pos.x - 16.0).abs() < 1e-4);
@@ -169,38 +186,80 @@ fn rotation_math_joins_facing_sockets() {
     assert!((plan.platforms[0].1.max.x - 16.0).abs() < 1e-4);
 
     // |dy| > 0.5 must reject the join.
-    let high = OpenSocket { pos: Vec3::new(8.0, 0.6, 0.0), facing: Facing::E, width: 4.0, failures: 0 };
+    let high = OpenSocket {
+        pos: Vec3::new(8.0, 0.6, 0.0),
+        facing: Facing::E,
+        width: 4.0,
+        failures: 0,
+    };
     assert!(plan_join(straight, 0, 0, &high).is_none());
 
     // Wrong facing must reject the join.
-    let north = OpenSocket { pos: Vec3::new(0.0, 0.0, 7.0), facing: Facing::N, width: 4.0, failures: 0 };
+    let north = OpenSocket {
+        pos: Vec3::new(0.0, 0.0, 7.0),
+        facing: Facing::N,
+        width: 4.0,
+        failures: 0,
+    };
     assert!(plan_join(straight, 0, 0, &north).is_none());
 
     // Three quarter-turns bring straight's W socket around to S, facing the hub's N socket.
     let plan3 = plan_join(straight, 0, 3, &north).expect("3 quarter turns bring W to S");
-    let joined = plan3.sockets.iter().find(|s| s.facing == Facing::S).expect("joined socket faces south");
+    let joined = plan3
+        .sockets
+        .iter()
+        .find(|s| s.facing == Facing::S)
+        .expect("joined socket faces south");
     assert!((joined.pos.x - 0.0).abs() < 1e-4 && (joined.pos.z - 7.0).abs() < 1e-4);
 }
 
 #[test]
 fn stacking_rule_rejects_cramped_layers_but_allows_resting_contact() {
-    let a = Aabb { min: Vec3::new(0.0, 0.0, 0.0), max: Vec3::new(4.0, 1.0, 4.0) };
-    let intersecting = Aabb { min: Vec3::new(1.0, 0.0, 1.0), max: Vec3::new(5.0, 1.0, 5.0) };
+    let a = Aabb {
+        min: Vec3::new(0.0, 0.0, 0.0),
+        max: Vec3::new(4.0, 1.0, 4.0),
+    };
+    let intersecting = Aabb {
+        min: Vec3::new(1.0, 0.0, 1.0),
+        max: Vec3::new(5.0, 1.0, 5.0),
+    };
     assert!(!platform_pair_ok(&a, &intersecting), "volume intersection rejected");
-    let one_u_gap = Aabb { min: Vec3::new(0.0, 2.0, 0.0), max: Vec3::new(4.0, 3.0, 4.0) };
+    let one_u_gap = Aabb {
+        min: Vec3::new(0.0, 2.0, 0.0),
+        max: Vec3::new(4.0, 3.0, 4.0),
+    };
     assert!(!platform_pair_ok(&a, &one_u_gap), "1 u clearance rejected");
-    let resting = Aabb { min: Vec3::new(0.0, 1.0, 0.0), max: Vec3::new(4.0, 2.0, 4.0) };
+    let resting = Aabb {
+        min: Vec3::new(0.0, 1.0, 0.0),
+        max: Vec3::new(4.0, 2.0, 4.0),
+    };
     assert!(platform_pair_ok(&a, &resting), "resting contact allowed");
-    let four_u = Aabb { min: Vec3::new(0.0, 5.0, 0.0), max: Vec3::new(4.0, 6.0, 4.0) };
+    let four_u = Aabb {
+        min: Vec3::new(0.0, 5.0, 0.0),
+        max: Vec3::new(4.0, 6.0, 4.0),
+    };
     assert!(platform_pair_ok(&a, &four_u), "exactly 4.0 u clearance allowed");
-    let side_by_side = Aabb { min: Vec3::new(10.0, 0.0, 0.0), max: Vec3::new(14.0, 1.0, 4.0) };
+    let side_by_side = Aabb {
+        min: Vec3::new(10.0, 0.0, 0.0),
+        max: Vec3::new(14.0, 1.0, 4.0),
+    };
     assert!(platform_pair_ok(&a, &side_by_side), "no XZ overlap: fine at any height");
 }
 
 #[test]
 fn facing_bridge_geometry() {
-    let a = OpenSocket { pos: Vec3::new(0.0, 2.0, 0.0), facing: Facing::E, width: 3.0, failures: 0 };
-    let b = OpenSocket { pos: Vec3::new(8.0, 2.2, 0.3), facing: Facing::W, width: 3.0, failures: 0 };
+    let a = OpenSocket {
+        pos: Vec3::new(0.0, 2.0, 0.0),
+        facing: Facing::E,
+        width: 3.0,
+        failures: 0,
+    };
+    let b = OpenSocket {
+        pos: Vec3::new(8.0, 2.2, 0.3),
+        facing: Facing::W,
+        width: 3.0,
+        failures: 0,
+    };
     let Some((_kind, bounds)) = facing_bridge(&a, &b) else {
         panic!("facing sockets within 12 u must produce a bridge");
     };
@@ -209,19 +268,44 @@ fn facing_bridge_geometry() {
     assert!((bounds.max.z - bounds.min.z - 3.5).abs() < 1e-4, "bridge is 3.5 u wide");
 
     // dy > 0.5 rejects.
-    let b_high = OpenSocket { pos: Vec3::new(8.0, 3.0, 0.3), facing: Facing::W, width: 3.0, failures: 0 };
+    let b_high = OpenSocket {
+        pos: Vec3::new(8.0, 3.0, 0.3),
+        facing: Facing::W,
+        width: 3.0,
+        failures: 0,
+    };
     assert!(facing_bridge(&a, &b_high).is_none());
     // Beyond 12 u rejects.
-    let b_far = OpenSocket { pos: Vec3::new(14.0, 2.0, 0.0), facing: Facing::W, width: 3.0, failures: 0 };
+    let b_far = OpenSocket {
+        pos: Vec3::new(14.0, 2.0, 0.0),
+        facing: Facing::W,
+        width: 3.0,
+        failures: 0,
+    };
     assert!(facing_bridge(&a, &b_far).is_none());
     // Perpendicular offset > 0.75 rejects.
-    let b_off = OpenSocket { pos: Vec3::new(8.0, 2.0, 1.5), facing: Facing::W, width: 3.0, failures: 0 };
+    let b_off = OpenSocket {
+        pos: Vec3::new(8.0, 2.0, 1.5),
+        facing: Facing::W,
+        width: 3.0,
+        failures: 0,
+    };
     assert!(facing_bridge(&a, &b_off).is_none());
     // Not facing each other rejects.
-    let b_north = OpenSocket { pos: Vec3::new(8.0, 2.0, 0.0), facing: Facing::N, width: 3.0, failures: 0 };
+    let b_north = OpenSocket {
+        pos: Vec3::new(8.0, 2.0, 0.0),
+        facing: Facing::N,
+        width: 3.0,
+        failures: 0,
+    };
     assert!(facing_bridge(&a, &b_north).is_none());
     // Facing away rejects (along <= 0).
-    let b_behind = OpenSocket { pos: Vec3::new(-8.0, 2.0, 0.0), facing: Facing::W, width: 3.0, failures: 0 };
+    let b_behind = OpenSocket {
+        pos: Vec3::new(-8.0, 2.0, 0.0),
+        facing: Facing::W,
+        width: 3.0,
+        failures: 0,
+    };
     assert!(facing_bridge(&a, &b_behind).is_none());
 }
 
@@ -330,7 +414,10 @@ fn lenient_parser_without_a_hub_is_an_error_not_a_panic() {
        "gift_slots":[],"enemy_slots":[],"altar_slots":[]}
     ]}"#;
     assert!(parse_catalog(json).is_err());
-    assert!(parse_catalog_lenient(json).is_err(), "lenient parse without a hub must fail, not panic");
+    assert!(
+        parse_catalog_lenient(json).is_err(),
+        "lenient parse without a hub must fail, not panic"
+    );
     assert!(parse_catalog_lenient("not json").is_err());
 }
 
@@ -426,7 +513,10 @@ fn gifts_scale_per_a3() {
             let by_area = (eligible_normal_area(&built.data) / 9.0).floor() as u32;
             let expected = a3.min(by_area);
             let got = built.data.gifts.len() as u32;
-            assert!(got <= expected, "seed {seed} level {level}: {got} gifts exceeds A3 cap {expected}");
+            assert!(
+                got <= expected,
+                "seed {seed} level {level}: {got} gifts exceeds A3 cap {expected}"
+            );
             assert!(
                 got * 5 >= expected * 4,
                 "seed {seed} level {level}: {got} gifts, expected ~{expected} (>= 80%)"
@@ -472,7 +562,10 @@ fn generate_level_20_within_budget() {
     let built = generate(12345, 20);
     let check = validate(&built.data);
     let elapsed = start.elapsed();
-    println!("level 20: generate + validate in {elapsed:?} ({} platforms)", built.data.platforms.len());
+    println!(
+        "level 20: generate + validate in {elapsed:?} ({} platforms)",
+        built.data.platforms.len()
+    );
     assert!(check.is_ok(), "{check:?}");
     assert!(elapsed.as_millis() < 150, "level 20 took {elapsed:?}");
 }

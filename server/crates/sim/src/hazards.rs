@@ -13,16 +13,16 @@
 
 use protocol::{
     DEATH_ENEMY, DEATH_PROJECTILE, ENEMY_ATTACK, ENEMY_DISGUISED, ENEMY_DORMANT, ENEMY_FLAG_HEAVY, ENEMY_HUNTING,
-    ENEMY_RECOVER, ENEMY_TELEGRAPH, LevelData, PLATFORM_CRUMBLE, Platform, ProjectileView, TICK_HZ, TILE_FRETTED,
-    TILE_GONE, TILE_WARN, TileState, Vec3,
+    ENEMY_RECOVER, ENEMY_TELEGRAPH, LevelData, PLATFORM_CRUMBLE, ProjectileView, TICK_HZ, TILE_FRETTED, TILE_GONE,
+    TILE_WARN, TileState, Vec3,
 };
 
 use crate::rules::{
-    Brain, CorrupterBrain, CorrupterPhase, ENEMY_HIT_FORGIVENESS, Enemy, EnemyParams, GaleWightBrain, GalePhase,
-    LanternLeechBrain, LeechPhase, MimicBrain, MimicPhase, MotelingBrain, MotelingPhase, PallbearerBrain,
-    PallbearerPhase, RiftWardenBrain, RiftPhase, SnapshrikeBrain, SnapshrikePhase, TurretBrain, TurretPhase,
-    aabb_distance, dir_normalized, distance, flat_direction, horizontal_distance, move_toward, player_centre,
-    segment_intersects_aabb, sphere_hits_player_box,
+    Brain, CorrupterBrain, CorrupterPhase, ENEMY_HIT_FORGIVENESS, Enemy, GalePhase, GaleWightBrain, LanternLeechBrain,
+    LeechPhase, MimicBrain, MimicPhase, MotelingBrain, MotelingPhase, PallbearerBrain, PallbearerPhase, RiftPhase,
+    RiftWardenBrain, SnapshrikeBrain, SnapshrikePhase, TurretBrain, TurretPhase, aabb_distance, dir_normalized,
+    distance, flat_direction, horizontal_distance, move_toward, player_centre, segment_intersects_aabb,
+    sphere_hits_player_box,
 };
 use crate::world::World;
 
@@ -217,6 +217,7 @@ struct Ctx<'a> {
     players: &'a [PlayerSense],
     pickups: &'a [Vec3],
     speed_mul: f32,
+    #[allow(dead_code)] // kept for parity with the design notes; damage gating reads the per-enemy grace instead
     damage_ok: bool,
     /// Snapshot of every enemy's start-of-tick position; index matches the `enemies` slice.
     positions: &'a [Vec3],
@@ -267,7 +268,9 @@ impl Hazards {
         speed_mul: f32,
     ) -> Vec<HazardEffect> {
         if !self.rng_seeded {
-            let seed = u64::from(level.seed).wrapping_add(1).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let seed = u64::from(level.seed)
+                .wrapping_add(1)
+                .wrapping_mul(0x9E37_79B9_7F4A_7C15);
             self.rng = RNG_SEED ^ seed | 1;
             self.rng_seeded = true;
         }
@@ -279,7 +282,7 @@ impl Hazards {
 
         // Snapshot positions so the rift warden can find its neighbours without
         // holding a second live borrow of the enemy slice.
-        let enemy_positions: Vec<Vec3> = enemies.iter().map(|enemy| enemy.pos.clone()).collect();
+        let enemy_positions: Vec<Vec3> = enemies.iter().map(|enemy| enemy.pos).collect();
         let ctx = Ctx {
             world,
             level,
@@ -349,10 +352,7 @@ impl Hazards {
     pub fn projectiles(&self) -> Vec<ProjectileView> {
         self.projectiles
             .iter()
-            .map(|p| ProjectileView {
-                id: p.id,
-                pos: p.pos.clone(),
-            })
+            .map(|p| ProjectileView { id: p.id, pos: p.pos })
             .collect()
     }
 
@@ -384,7 +384,7 @@ impl Hazards {
             let hs = (player.vel.x * player.vel.x + player.vel.z * player.vel.z).sqrt();
             push_capped(&mut self.speed_history, player.id, hs, SPEED_HISTORY_TICKS);
             if do_crumb {
-                push_capped(&mut self.crumbs, player.id, player.feet.clone(), CRUMB_KEEP_SAMPLES);
+                push_capped(&mut self.crumbs, player.id, player.feet, CRUMB_KEEP_SAMPLES);
             }
         }
     }
@@ -393,9 +393,9 @@ impl Hazards {
         match self.crumbs.iter().find(|entry| entry.0 == player_id) {
             Some((_, samples)) if !samples.is_empty() => {
                 let index = samples.len().saturating_sub(1 + CRUMB_LAG_SAMPLES);
-                samples.get(index).cloned().unwrap_or_else(|| fallback.clone())
+                samples.get(index).cloned().unwrap_or(*fallback)
             }
-            _ => fallback.clone(),
+            _ => *fallback,
         }
     }
 
@@ -657,7 +657,10 @@ fn push_kill(fx: &mut Vec<HazardEffect>, player: &PlayerSense, cause: u8) {
     if player.warded {
         return; // ward: immune to every Kill except gale blasts
     }
-    fx.push(HazardEffect::Kill { player: player.id, cause });
+    fx.push(HazardEffect::Kill {
+        player: player.id,
+        cause,
+    });
 }
 
 fn push_shove(fx: &mut Vec<HazardEffect>, player: &PlayerSense, vel: Vec3, stagger_ticks: u8) {
@@ -698,7 +701,7 @@ fn step_one(h: &mut Hazards, index: usize, e: &mut Enemy, ctx: &Ctx, fx: &mut Ve
     let id = e.id;
     let speed_mul = e.params.speed_mul * ctx.speed_mul;
     let contact_radius = e.params.size * ENEMY_HIT_FORGIVENESS;
-    let home = e.home.clone();
+    let home = e.home;
     match &mut e.brain {
         Brain::Pallbearer(b) => pallbearer_step(h, &mut e.pos, b, speed_mul, contact_radius, &home, ctx, fx),
         Brain::Snapshrike(b) => snapshrike_step(h, id, &mut e.pos, b, speed_mul, contact_radius, &home, ctx, fx),
@@ -794,8 +797,8 @@ fn pallbearer_step(
 
 #[allow(clippy::too_many_arguments)]
 fn snapshrike_step(
-    h: &mut Hazards,
-    id: u32,
+    _h: &mut Hazards,
+    _id: u32,
     pos: &mut Vec3,
     b: &mut SnapshrikeBrain,
     speed_mul: f32,
@@ -846,10 +849,7 @@ fn snapshrike_step(
         SnapshrikePhase::Lock => {
             if b.timer > SNAPSHRIKE_LOCK_TICKS - SNAPSHRIKE_TRACK_TICKS {
                 // Tracking window: the last 0.35 s the line is frozen.
-                if let Some(target) = b
-                    .target_id
-                    .and_then(|tid| ctx.players.iter().find(|p| p.id == tid))
-                {
+                if let Some(target) = b.target_id.and_then(|tid| ctx.players.iter().find(|p| p.id == tid)) {
                     let centre = player_centre(&target.feet);
                     b.aim = predict_intercept(pos, &centre, &target.vel, SNAPSHRIKE_DASH_SPEED);
                 }
@@ -923,7 +923,7 @@ fn moteling_step(
         MotelingPhase::Wander => {
             match &b.wander_goal {
                 Some(goal) if distance(pos, goal) > 1.0 => {
-                    let goal = goal.clone();
+                    let goal = *goal;
                     move_toward(pos, &goal, MOTELING_WANDER_SPEED * speed_mul * DT);
                 }
                 _ => {
@@ -959,7 +959,7 @@ fn moteling_step(
                 return;
             };
             let centre = player_centre(&target.feet);
-            b.anchor = centre.clone();
+            b.anchor = centre;
             b.orbit_ticks += 1;
             let dx = pos.x - centre.x;
             let dz = pos.z - centre.z;
@@ -1048,9 +1048,7 @@ fn moteling_pick_target(h: &Hazards, players: &[PlayerSense], from: &Vec3) -> Op
         let speed = h.avg_speed(player.id);
         let replace = match best {
             None => true,
-            Some((best_id, best_speed)) => {
-                speed > best_speed || (speed == best_speed && player.id < best_id)
-            }
+            Some((best_id, best_speed)) => speed > best_speed || (speed == best_speed && player.id < best_id),
         };
         if replace {
             best = Some((player.id, speed));
@@ -1181,9 +1179,7 @@ fn gale_wight_step(
             b.cruise_elapsed = b.cruise_elapsed.saturating_add(1);
             let y_target = map_top(ctx.level) + GALE_CRUISE_ALTITUDE;
             let goal_ok = match &b.cruise_goal {
-                Some(goal) => {
-                    horizontal_distance(pos, goal) < 1.5 && (goal.y - y_target).abs() < 0.5
-                }
+                Some(goal) => horizontal_distance(pos, goal) < 1.5 && (goal.y - y_target).abs() < 0.5,
                 None => true,
             };
             if goal_ok {
@@ -1191,7 +1187,7 @@ fn gale_wight_step(
                 let reach = 6.0 + (h.next_rng() % 8000) as f32 / 1000.0;
                 b.cruise_goal = Some(Vec3::new(pos.x + dir.x * reach, y_target, pos.z + dir.z * reach));
             }
-            if let Some(goal) = b.cruise_goal.clone() {
+            if let Some(goal) = b.cruise_goal {
                 move_toward(pos, &goal, GALE_CRUISE_SPEED * speed_mul * DT);
             }
             if b.cruise_elapsed >= GALE_CRUISE_MIN_TICKS {
@@ -1232,12 +1228,12 @@ fn gale_wight_step(
                 }
             }
             if let Some(target) = b.target_id.and_then(|tid| ctx.players.iter().find(|p| p.id == tid)) {
-                b.lag.push(target.feet.clone());
+                b.lag.push(target.feet);
                 if b.lag.len() > GALE_LAG_TICKS + 1 {
                     b.lag.remove(0);
                 }
                 let index = b.lag.len().saturating_sub(1 + GALE_LAG_TICKS);
-                b.anchor = b.lag.get(index).cloned().unwrap_or_else(|| target.feet.clone());
+                b.anchor = b.lag.get(index).cloned().unwrap_or(target.feet);
             }
             b.timer = b.timer.saturating_sub(1);
             if b.timer == 0 {
@@ -1344,9 +1340,7 @@ fn lantern_leech_step(
             // so the rear-back telegraph spans elapsed 0..12 and the first sting
             // lands exactly 0.6 s (12 ticks) into the gorge.
             let elapsed = LEECH_GORGE_TICKS - b.timer;
-            if elapsed == LEECH_REARBACK_TICKS
-                || elapsed == LEECH_REARBACK_TICKS + LEECH_STING_EVERY_TICKS
-            {
+            if elapsed == LEECH_REARBACK_TICKS || elapsed == LEECH_REARBACK_TICKS + LEECH_STING_EVERY_TICKS {
                 for player in ctx.players {
                     let centre = player_centre(&player.feet);
                     if distance(pos, &centre) <= LEECH_STING_RADIUS {
@@ -1373,22 +1367,16 @@ fn lantern_leech_step(
 
 /// Lock onto the newest pickup within 30 u (used in Prowl and Siphon).
 fn apply_pickup_lock(pos: &Vec3, b: &mut LanternLeechBrain, pickups: &[Vec3]) {
-    if let Some(newest) = pickups.last() {
-        if distance(pos, newest) <= LEECH_SIPHON_RANGE {
-            b.phase = LeechPhase::Siphon;
-            b.timer = 0;
-            b.goal = newest.clone();
-        }
+    if let Some(newest) = pickups.last()
+        && distance(pos, newest) <= LEECH_SIPHON_RANGE
+    {
+        b.phase = LeechPhase::Siphon;
+        b.timer = 0;
+        b.goal = *newest;
     }
 }
 
-fn turret_step(
-    h: &mut Hazards,
-    pos: &mut Vec3,
-    b: &mut TurretBrain,
-    speed_mul: f32,
-    ctx: &Ctx,
-) {
+fn turret_step(h: &mut Hazards, pos: &mut Vec3, b: &mut TurretBrain, speed_mul: f32, ctx: &Ctx) {
     let _ = speed_mul;
     match b.phase {
         TurretPhase::Seek => {
@@ -1404,14 +1392,14 @@ fn turret_step(
                     _ => best = Some((i, d)),
                 }
             }
-            if let Some((i, _)) = best {
-                if let Some(target) = ctx.players.get(i) {
-                    let centre = player_centre(&target.feet);
-                    b.aim = predict_intercept(pos, &centre, &target.vel, TURRET_BOLT_SPEED);
-                    b.target_id = Some(target.id);
-                    b.phase = TurretPhase::Charge;
-                    b.timer = TURRET_CHARGE_TICKS;
-                }
+            if let Some((i, _)) = best
+                && let Some(target) = ctx.players.get(i)
+            {
+                let centre = player_centre(&target.feet);
+                b.aim = predict_intercept(pos, &centre, &target.vel, TURRET_BOLT_SPEED);
+                b.target_id = Some(target.id);
+                b.phase = TurretPhase::Charge;
+                b.timer = TURRET_CHARGE_TICKS;
             }
         }
         TurretPhase::Charge => {
@@ -1434,7 +1422,12 @@ fn turret_step(
                     Vec3::new(1.0, 0.0, 0.0)
                 };
                 // Flat bolt at muzzle height.
-                h.spawn_projectile(pos.clone(), Vec3::new(dir.x * TURRET_BOLT_SPEED, 0.0, dir.z * TURRET_BOLT_SPEED), ProjectileKind::Bolt, 0.0);
+                h.spawn_projectile(
+                    *pos,
+                    Vec3::new(dir.x * TURRET_BOLT_SPEED, 0.0, dir.z * TURRET_BOLT_SPEED),
+                    ProjectileKind::Bolt,
+                    0.0,
+                );
                 b.phase = TurretPhase::Fire;
                 b.timer = TURRET_FIRE_TICKS;
             }
@@ -1455,24 +1448,18 @@ fn turret_step(
     }
 }
 
-fn mimic_step(
-    pos: &mut Vec3,
-    b: &mut MimicBrain,
-    speed_mul: f32,
-    ctx: &Ctx,
-    fx: &mut Vec<HazardEffect>,
-) {
+fn mimic_step(pos: &mut Vec3, b: &mut MimicBrain, speed_mul: f32, ctx: &Ctx, fx: &mut Vec<HazardEffect>) {
     let _ = speed_mul;
     match b.phase {
         MimicPhase::Cached => {
             b.shimmer = (b.shimmer + 1) % MIMIC_SHIMMER_PERIOD;
-            if let Some(i) = nearest_index_within(ctx.players, pos, MIMIC_TRIGGER_RADIUS, false) {
-                if let Some(target) = ctx.players.get(i) {
-                    b.phase = MimicPhase::Hiss;
-                    b.timer = MIMIC_HISS_TICKS;
-                    b.trigger = Some(target.id);
-                    b.anchor = player_centre(&target.feet);
-                }
+            if let Some(i) = nearest_index_within(ctx.players, pos, MIMIC_TRIGGER_RADIUS, false)
+                && let Some(target) = ctx.players.get(i)
+            {
+                b.phase = MimicPhase::Hiss;
+                b.timer = MIMIC_HISS_TICKS;
+                b.trigger = Some(target.id);
+                b.anchor = player_centre(&target.feet);
             }
         }
         MimicPhase::Hiss => {
@@ -1511,14 +1498,7 @@ fn mimic_step(
     }
 }
 
-fn corrupter_step(
-    h: &mut Hazards,
-    pos: &mut Vec3,
-    b: &mut CorrupterBrain,
-    speed_mul: f32,
-    home: &Vec3,
-    ctx: &Ctx,
-) {
+fn corrupter_step(h: &mut Hazards, pos: &mut Vec3, b: &mut CorrupterBrain, speed_mul: f32, home: &Vec3, ctx: &Ctx) {
     match b.phase {
         CorrupterPhase::Drift => {
             let target = nearest_index_3d(ctx.players, pos);
@@ -1651,7 +1631,7 @@ fn view_of(enemy: &Enemy) -> protocol::EnemyView {
         return protocol::EnemyView {
             id: enemy.id,
             kind: enemy.kind,
-            pos: enemy.pos.clone(),
+            pos: enemy.pos,
             radius: enemy.params.size,
             state: ENEMY_DORMANT,
             target: ZERO(),
@@ -1664,18 +1644,28 @@ fn view_of(enemy: &Enemy) -> protocol::EnemyView {
             PallbearerPhase::Hunt => (ENEMY_HUNTING, ZERO(), 0, 0),
             PallbearerPhase::Kneel => {
                 let elapsed = PALLBEARER_KNEEL_TICKS - b.timer;
-                (ENEMY_TELEGRAPH, b.locked.clone(), telegraph_prog(elapsed, PALLBEARER_KNEEL_TICKS), 0)
+                (
+                    ENEMY_TELEGRAPH,
+                    b.locked,
+                    telegraph_prog(elapsed, PALLBEARER_KNEEL_TICKS),
+                    0,
+                )
             }
-            PallbearerPhase::Lunge => (ENEMY_ATTACK, b.locked.clone(), 255, 0),
+            PallbearerPhase::Lunge => (ENEMY_ATTACK, b.locked, 255, 0),
             PallbearerPhase::Recover => (ENEMY_RECOVER, ZERO(), 0, 0),
         },
         Brain::Snapshrike(b) => match b.phase {
             SnapshrikePhase::Stalk => (ENEMY_HUNTING, ZERO(), 0, 0),
             SnapshrikePhase::Lock => {
                 let elapsed = SNAPSHRIKE_LOCK_TICKS - b.timer;
-                (ENEMY_TELEGRAPH, b.aim.clone(), telegraph_prog(elapsed, SNAPSHRIKE_LOCK_TICKS), 0)
+                (
+                    ENEMY_TELEGRAPH,
+                    b.aim,
+                    telegraph_prog(elapsed, SNAPSHRIKE_LOCK_TICKS),
+                    0,
+                )
             }
-            SnapshrikePhase::Dash => (ENEMY_ATTACK, b.aim.clone(), 255, 0),
+            SnapshrikePhase::Dash => (ENEMY_ATTACK, b.aim, 255, 0),
             SnapshrikePhase::Stunned => (ENEMY_RECOVER, ZERO(), 0, 0),
             SnapshrikePhase::Recover => (ENEMY_RECOVER, ZERO(), 0, 0),
         },
@@ -1689,7 +1679,7 @@ fn view_of(enemy: &Enemy) -> protocol::EnemyView {
                     0
                 };
                 let flags = if b.acquired { ENEMY_FLAG_HEAVY } else { 0 };
-                (ENEMY_TELEGRAPH, b.anchor.clone(), prog, flags)
+                (ENEMY_TELEGRAPH, b.anchor, prog, flags)
             }
             MotelingPhase::Cooldown => (ENEMY_RECOVER, ZERO(), 0, 0),
         },
@@ -1697,9 +1687,14 @@ fn view_of(enemy: &Enemy) -> protocol::EnemyView {
             RiftPhase::Haunt => (ENEMY_HUNTING, ZERO(), 0, 0),
             RiftPhase::Ignite => {
                 let elapsed = RIFT_IGNITE_TICKS - b.timer;
-                (ENEMY_TELEGRAPH, enemy.pos.clone(), telegraph_prog(elapsed, RIFT_IGNITE_TICKS), 0)
+                (
+                    ENEMY_TELEGRAPH,
+                    enemy.pos,
+                    telegraph_prog(elapsed, RIFT_IGNITE_TICKS),
+                    0,
+                )
             }
-            RiftPhase::Shove => (ENEMY_ATTACK, enemy.pos.clone(), 255, 0),
+            RiftPhase::Shove => (ENEMY_ATTACK, enemy.pos, 255, 0),
             RiftPhase::Settle => (ENEMY_RECOVER, ZERO(), 0, 0),
         },
         Brain::GaleWight(b) => match b.phase {
@@ -1711,18 +1706,18 @@ fn view_of(enemy: &Enemy) -> protocol::EnemyView {
                     0
                 };
                 let flags = if b.acquired { ENEMY_FLAG_HEAVY } else { 0 };
-                (ENEMY_TELEGRAPH, b.anchor.clone(), prog, flags)
+                (ENEMY_TELEGRAPH, b.anchor, prog, flags)
             }
             GalePhase::Lock => {
                 let elapsed = GALE_MARK_TICKS + (GALE_LOCK_TICKS - b.timer);
                 (
                     ENEMY_TELEGRAPH,
-                    b.anchor.clone(),
+                    b.anchor,
                     telegraph_prog(elapsed, GALE_MARK_TICKS + GALE_LOCK_TICKS),
                     ENEMY_FLAG_HEAVY,
                 )
             }
-            GalePhase::Fall => (ENEMY_ATTACK, b.anchor.clone(), 255, 0),
+            GalePhase::Fall => (ENEMY_ATTACK, b.anchor, 255, 0),
             GalePhase::Downtime => (ENEMY_RECOVER, ZERO(), 0, 0),
         },
         Brain::LanternLeech(b) => match b.phase {
@@ -1735,7 +1730,7 @@ fn view_of(enemy: &Enemy) -> protocol::EnemyView {
                 if eta_ticks <= LEECH_FLARE_TICKS as f32 {
                     let prog = ((LEECH_FLARE_TICKS as f32 - eta_ticks) * 255.0 / LEECH_FLARE_TICKS as f32)
                         .clamp(0.0, 255.0) as u8;
-                    (ENEMY_TELEGRAPH, b.goal.clone(), prog, 0)
+                    (ENEMY_TELEGRAPH, b.goal, prog, 0)
                 } else {
                     (ENEMY_HUNTING, ZERO(), 0, 0)
                 }
@@ -1743,9 +1738,14 @@ fn view_of(enemy: &Enemy) -> protocol::EnemyView {
             LeechPhase::Gorge => {
                 let elapsed = LEECH_GORGE_TICKS - b.timer;
                 if elapsed < LEECH_REARBACK_TICKS {
-                    (ENEMY_TELEGRAPH, b.goal.clone(), telegraph_prog(elapsed, LEECH_REARBACK_TICKS), 0)
+                    (
+                        ENEMY_TELEGRAPH,
+                        b.goal,
+                        telegraph_prog(elapsed, LEECH_REARBACK_TICKS),
+                        0,
+                    )
                 } else {
-                    (ENEMY_ATTACK, b.goal.clone(), 255, 0)
+                    (ENEMY_ATTACK, b.goal, 255, 0)
                 }
             }
             LeechPhase::Slide => (ENEMY_RECOVER, ZERO(), 0, 0),
@@ -1754,15 +1754,18 @@ fn view_of(enemy: &Enemy) -> protocol::EnemyView {
             TurretPhase::Seek => (ENEMY_HUNTING, ZERO(), 0, 0),
             TurretPhase::Charge => {
                 let elapsed = TURRET_CHARGE_TICKS - b.timer;
-                (ENEMY_TELEGRAPH, b.aim.clone(), telegraph_prog(elapsed, TURRET_CHARGE_TICKS), 0)
+                (ENEMY_TELEGRAPH, b.aim, telegraph_prog(elapsed, TURRET_CHARGE_TICKS), 0)
             }
-            TurretPhase::Fire => (ENEMY_ATTACK, b.aim.clone(), 255, 0),
+            TurretPhase::Fire => (ENEMY_ATTACK, b.aim, 255, 0),
             TurretPhase::Vent => (ENEMY_RECOVER, ZERO(), 0, 0),
         },
         Brain::Mimic(b) => match b.phase {
             MimicPhase::Cached => {
                 let prog = if b.shimmer >= MIMIC_SHIMMER_PERIOD - MIMIC_SHIMMER_TICKS {
-                    telegraph_prog(b.shimmer - (MIMIC_SHIMMER_PERIOD - MIMIC_SHIMMER_TICKS), MIMIC_SHIMMER_TICKS)
+                    telegraph_prog(
+                        b.shimmer - (MIMIC_SHIMMER_PERIOD - MIMIC_SHIMMER_TICKS),
+                        MIMIC_SHIMMER_TICKS,
+                    )
                 } else {
                     0
                 };
@@ -1770,9 +1773,9 @@ fn view_of(enemy: &Enemy) -> protocol::EnemyView {
             }
             MimicPhase::Hiss => {
                 let elapsed = MIMIC_HISS_TICKS - b.timer;
-                (ENEMY_TELEGRAPH, b.anchor.clone(), telegraph_prog(elapsed, MIMIC_HISS_TICKS), 0)
+                (ENEMY_TELEGRAPH, b.anchor, telegraph_prog(elapsed, MIMIC_HISS_TICKS), 0)
             }
-            MimicPhase::Lunge => (ENEMY_ATTACK, b.anchor.clone(), 255, 0),
+            MimicPhase::Lunge => (ENEMY_ATTACK, b.anchor, 255, 0),
             MimicPhase::Spent => (ENEMY_RECOVER, ZERO(), 0, 0),
         },
         Brain::Corrupter(b) => match b.phase {
@@ -1783,7 +1786,7 @@ fn view_of(enemy: &Enemy) -> protocol::EnemyView {
     protocol::EnemyView {
         id: enemy.id,
         kind: enemy.kind,
-        pos: enemy.pos.clone(),
+        pos: enemy.pos,
         radius: enemy.params.size,
         state,
         target,

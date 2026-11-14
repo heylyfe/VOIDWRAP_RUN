@@ -1,3 +1,5 @@
+#![allow(clippy::needless_range_loop)] // index loops over parallel arrays read clearer here
+
 //! Chunk-based level assembler — massive looping maps built from hand-designed chunks.
 //!
 //! Reads the shared chunk catalog (`design/chunks.json`, format `design/CHUNK_FORMAT.md`),
@@ -19,8 +21,8 @@
 //! guaranteed-valid fallback map (hub + straight arms) is returned.
 
 use protocol::{
-    Aabb, Altar, GIFT_GOLDEN, GIFT_NORMAL, EVENT_CRUMBLE, EVENT_HIGH_RISE, EVENT_ICE, EVENT_NONE,
-    Gift, LevelData, PLATFORM_CRUMBLE, PLATFORM_JUMP_PAD, PLATFORM_NORMAL, Platform, Vec3,
+    Aabb, Altar, EVENT_CRUMBLE, EVENT_HIGH_RISE, EVENT_ICE, EVENT_NONE, GIFT_GOLDEN, GIFT_NORMAL, Gift, LevelData,
+    PLATFORM_CRUMBLE, PLATFORM_JUMP_PAD, PLATFORM_NORMAL, Platform, Vec3,
 };
 use serde::Deserialize;
 use std::collections::{BTreeMap, VecDeque};
@@ -66,7 +68,9 @@ struct Rng {
 
 impl Rng {
     fn new(seed: u64) -> Self {
-        Self { s: if seed == 0 { 0x9E37_79B9_7F4A_7C15 } else { seed } }
+        Self {
+            s: if seed == 0 { 0x9E37_79B9_7F4A_7C15 } else { seed },
+        }
     }
 
     fn next_u64(&mut self) -> u64 {
@@ -83,7 +87,11 @@ impl Rng {
     }
 
     fn below(&mut self, n: usize) -> usize {
-        if n == 0 { 0 } else { (self.next_u64() % n as u64) as usize }
+        if n == 0 {
+            0
+        } else {
+            (self.next_u64() % n as u64) as usize
+        }
     }
 
     fn range_f32(&mut self, lo: f32, hi: f32) -> f32 {
@@ -352,14 +360,18 @@ fn verify_socket(
         Facing::W => (pos.x, fp.min.x),
     };
     if (in_plane - edge).abs() > EPS {
-        return Err(format!("chunk '{chunk_id}' socket '{socket_id}' is not on the footprint edge it faces"));
+        return Err(format!(
+            "chunk '{chunk_id}' socket '{socket_id}' is not on the footprint edge it faces"
+        ));
     }
     let (perp, lo, hi) = match facing {
         Facing::N | Facing::S => (pos.x, fp.min.x, fp.max.x),
         Facing::E | Facing::W => (pos.z, fp.min.z, fp.max.z),
     };
     if perp < lo - EPS || perp > hi + EPS {
-        return Err(format!("chunk '{chunk_id}' socket '{socket_id}' is outside the footprint"));
+        return Err(format!(
+            "chunk '{chunk_id}' socket '{socket_id}' is outside the footprint"
+        ));
     }
     let mut covered = false;
     for p in platforms {
@@ -394,8 +406,7 @@ fn verify_socket(
 
 /// Parses and validates a chunk catalog. Malformed input returns `Err`, never a panic.
 pub fn parse_catalog(json: &str) -> Result<Catalog, String> {
-    let raw: RawCatalog =
-        serde_json::from_str(json).map_err(|e| format!("invalid catalog JSON: {e}"))?;
+    let raw: RawCatalog = serde_json::from_str(json).map_err(|e| format!("invalid catalog JSON: {e}"))?;
     if raw.version != 1 {
         return Err(format!("unsupported catalog version {}", raw.version));
     }
@@ -414,8 +425,8 @@ pub fn parse_catalog(json: &str) -> Result<Catalog, String> {
             return Err(format!("duplicate chunk id '{}'", rc.id));
         }
         seen.push(rc.id.as_str());
-        let mut role = ChunkRole::parse(&rc.role)
-            .ok_or_else(|| format!("chunk '{}' has unknown role '{}'", rc.id, rc.role))?;
+        let mut role =
+            ChunkRole::parse(&rc.role).ok_or_else(|| format!("chunk '{}' has unknown role '{}'", rc.id, rc.role))?;
         // A "hub" without a beacon or a full enemy ring cannot be the spawn hub; it still makes a
         // fine wide crossroads, so treat it as a junction instead of rejecting the whole catalog.
         if role == ChunkRole::Hub && (rc.beacon.is_none() || rc.enemy_slots.len() != 8) {
@@ -451,7 +462,12 @@ pub fn parse_catalog(json: &str) -> Result<Catalog, String> {
             }
             let pos = vec3(s.pos);
             verify_socket(&rc.id, &s.id, &platforms, &fp, &pos, facing, s.width)?;
-            sockets.push(ChunkSocket { id: s.id.clone(), pos, facing, width: s.width });
+            sockets.push(ChunkSocket {
+                id: s.id.clone(),
+                pos,
+                facing,
+                width: s.width,
+            });
         }
         if role == ChunkRole::Hub {
             if rc.beacon.is_none() {
@@ -484,7 +500,10 @@ pub fn parse_catalog(json: &str) -> Result<Catalog, String> {
             gift_slots: rc
                 .gift_slots
                 .iter()
-                .map(|g| ChunkGiftSlot { pos: vec3(g.pos), elevated: g.elevated })
+                .map(|g| ChunkGiftSlot {
+                    pos: vec3(g.pos),
+                    elevated: g.elevated,
+                })
                 .collect(),
             enemy_slots: rc.enemy_slots.iter().map(|&s| vec3(s)).collect(),
             altar_slots: rc.altar_slots.iter().map(|&s| vec3(s)).collect(),
@@ -511,8 +530,7 @@ fn catalog() -> Result<&'static Catalog, String> {
 /// chunk named in the error is dropped and parsing is retried. (`tools/validate-chunks.mjs` and the
 /// strict tests still reject a broken catalog; this only keeps a shipped game playable.)
 pub fn parse_catalog_lenient(json: &str) -> Result<Catalog, String> {
-    let mut value: serde_json::Value =
-        serde_json::from_str(json).map_err(|e| format!("invalid catalog JSON: {e}"))?;
+    let mut value: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("invalid catalog JSON: {e}"))?;
     for _ in 0..64 {
         let text = value.to_string();
         let err = match parse_catalog(&text) {
@@ -654,7 +672,10 @@ struct CoarseGrid {
 
 impl CoarseGrid {
     fn new() -> Self {
-        Self { cell: GRID_CELL, cells: BTreeMap::new() }
+        Self {
+            cell: GRID_CELL,
+            cells: BTreeMap::new(),
+        }
     }
 
     fn key(&self, x: f32, z: f32) -> (i32, i32) {
@@ -698,7 +719,11 @@ struct PointGrid {
 
 impl PointGrid {
     fn new() -> Self {
-        Self { cell: GIFT_MIN_SPACING, cells: BTreeMap::new(), points: Vec::new() }
+        Self {
+            cell: GIFT_MIN_SPACING,
+            cells: BTreeMap::new(),
+            points: Vec::new(),
+        }
     }
 
     fn key(&self, x: f32, z: f32) -> (i32, i32) {
@@ -792,7 +817,12 @@ fn build_geometry(chunk: &Chunk, turns: u32, offset: Vec3) -> Placement {
     let platforms: Vec<(u8, Aabb)> = chunk
         .platforms
         .iter()
-        .map(|p| (p.kind, translate_aabb(&rotate_aabb(&Aabb { min: p.min, max: p.max }, turns), offset)))
+        .map(|p| {
+            (
+                p.kind,
+                translate_aabb(&rotate_aabb(&Aabb { min: p.min, max: p.max }, turns), offset),
+            )
+        })
         .collect();
     let sockets: Vec<OpenSocket> = chunk
         .sockets
@@ -901,7 +931,11 @@ fn commit_platforms(
     for (kind, bounds) in plats {
         let idx = platforms.len();
         grid.insert(idx, &bounds);
-        platforms.push(Platform { id: *next_id, kind, bounds });
+        platforms.push(Platform {
+            id: *next_id,
+            kind,
+            bounds,
+        });
         *next_id = next_id.checked_add(1)?;
     }
     Some(())
@@ -946,10 +980,8 @@ fn level_tier(level: u32) -> u32 {
 /// A3 gift target: min(400, 46 + 10*(level-1) + 6*(players-1)).
 fn gift_target(level: u32, players: u32) -> u32 {
     let p = players.max(1);
-    (GIFT_COUNT_BASE
-        + GIFT_COUNT_PER_LEVEL * level.saturating_sub(1)
-        + GIFT_COUNT_PER_PLAYER * p.saturating_sub(1))
-    .min(GIFT_CAP)
+    (GIFT_COUNT_BASE + GIFT_COUNT_PER_LEVEL * level.saturating_sub(1) + GIFT_COUNT_PER_PLAYER * p.saturating_sub(1))
+        .min(GIFT_CAP)
 }
 
 /// Weight for a chunk at a level: prefer lower difficulty, ×3 for climbing tags on HIGH_RISE.
@@ -1129,10 +1161,16 @@ fn stub_bounds(s: &OpenSocket) -> Aabb {
     let top = s.pos.y;
     if fx != 0.0 {
         let x0 = if fx > 0.0 { s.pos.x } else { s.pos.x - len };
-        Aabb { min: Vec3::new(x0, top - 1.0, s.pos.z - half), max: Vec3::new(x0 + len, top, s.pos.z + half) }
+        Aabb {
+            min: Vec3::new(x0, top - 1.0, s.pos.z - half),
+            max: Vec3::new(x0 + len, top, s.pos.z + half),
+        }
     } else {
         let z0 = if fz > 0.0 { s.pos.z } else { s.pos.z - len };
-        Aabb { min: Vec3::new(s.pos.x - half, top - 1.0, z0), max: Vec3::new(s.pos.x + half, top, z0 + len) }
+        Aabb {
+            min: Vec3::new(s.pos.x - half, top - 1.0, z0),
+            max: Vec3::new(s.pos.x + half, top, z0 + len),
+        }
     }
 }
 
@@ -1167,7 +1205,9 @@ fn seal_open_sockets(
             }
             for (si, _) in chunk.sockets.iter().enumerate() {
                 for turns in 0..4u32 {
-                    let Some(p) = plan_join(chunk, si, turns, &socket) else { continue; };
+                    let Some(p) = plan_join(chunk, si, turns, &socket) else {
+                        continue;
+                    };
                     if placement_fits(&p, platforms, grid) {
                         valid.push((p, si));
                     }
@@ -1210,7 +1250,9 @@ fn accept_candidate(
     elevated_flags: &mut Vec<bool>,
 ) -> bool {
     let top = pos.y - 0.3;
-    let Some(i) = platform_top_under(platforms, pos.x, pos.z, top, 0.5) else { return false; };
+    let Some(i) = platform_top_under(platforms, pos.x, pos.z, top, 0.5) else {
+        return false;
+    };
     if platforms[i].kind != PLATFORM_NORMAL {
         return false;
     }
@@ -1222,7 +1264,11 @@ fn accept_candidate(
     }
     let y = platforms[i].bounds.max.y + 0.3;
     grid.insert(Vec3::new(pos.x, y, pos.z));
-    gifts.push(Gift { id: gifts.len() as u16, pos: Vec3::new(pos.x, y, pos.z), kind: GIFT_NORMAL });
+    gifts.push(Gift {
+        id: gifts.len() as u16,
+        pos: Vec3::new(pos.x, y, pos.z),
+        kind: GIFT_NORMAL,
+    });
     elevated_flags.push(elevated);
     true
 }
@@ -1311,7 +1357,15 @@ fn fill_gifts(
             p.bounds.max.y + 0.3,
             rng.range_f32(min_z, max_z),
         );
-        accept_candidate(platforms, &mut grid, beacon, pos, false, &mut gifts, &mut elevated_flags);
+        accept_candidate(
+            platforms,
+            &mut grid,
+            beacon,
+            pos,
+            false,
+            &mut gifts,
+            &mut elevated_flags,
+        );
     }
     GiftFill { gifts }
 }
@@ -1368,7 +1422,9 @@ fn choose_altar(
         let pos = slots[i];
         let si = platform_top_under(platforms, pos.x, pos.z, pos.y, 0.75)
             .or_else(|| platform_top_under(platforms, pos.x, pos.z, pos.y - 0.3, 0.75));
-        let Some(si) = si else { continue; };
+        let Some(si) = si else {
+            continue;
+        };
         if platforms[si].kind != PLATFORM_NORMAL {
             continue;
         }
@@ -1477,8 +1533,10 @@ fn assemble_level(
     if hub_choices.is_empty() {
         return None;
     }
-    let hub_weights: Vec<f32> =
-        hub_choices.iter().map(|&i| chunk_weight(&cat.chunks[i], tier, false)).collect();
+    let hub_weights: Vec<f32> = hub_choices
+        .iter()
+        .map(|&i| chunk_weight(&cat.chunks[i], tier, false))
+        .collect();
     let hub_pick = weighted_pick(&mut rng, &hub_weights)?;
     let hub_chunk = &cat.chunks[hub_choices[hub_pick]];
     let hub_geom = build_geometry(hub_chunk, 0, Vec3::new(0.0, 0.0, 0.0));
@@ -1509,11 +1567,7 @@ fn assemble_level(
     let mut dropped: Vec<OpenSocket> = Vec::new();
     let mut iters = 0usize;
     let mut consecutive_failures = 0u32;
-    while iters < MAX_GROWTH_ITERS
-        && chunk_count < max_chunks
-        && area_sum < target_area_u
-        && !open.is_empty()
-    {
+    while iters < MAX_GROWTH_ITERS && chunk_count < max_chunks && area_sum < target_area_u && !open.is_empty() {
         iters += 1;
         let oi = rng.below(open.len());
         let mut placed: Option<(usize, Placement, usize)> = try_place(
@@ -1630,17 +1684,30 @@ fn assemble_level(
         None => Vec::new(),
     };
 
-    let kill_y = platforms
-        .iter()
-        .map(|p| p.bounds.min.y)
-        .fold(f32::INFINITY, f32::min)
-        - 15.0;
-    let data = LevelData { level, seed: run_seed, spawn, beacon, kill_y, event, altars, platforms, gifts };
+    let kill_y = platforms.iter().map(|p| p.bounds.min.y).fold(f32::INFINITY, f32::min) - 15.0;
+    let data = LevelData {
+        level,
+        seed: run_seed,
+        spawn,
+        beacon,
+        kill_y,
+        event,
+        altars,
+        platforms,
+        gifts,
+    };
     Some(GeneratedLevel { data, enemy_spawns })
 }
 
 /// Builds a level from the catalog with the design 4.3 / amendment A1 budget formulas.
-fn try_build(cat: &Catalog, rng_seed: u32, run_seed: u32, level: u32, players: u32, event: u8) -> Option<GeneratedLevel> {
+fn try_build(
+    cat: &Catalog,
+    rng_seed: u32,
+    run_seed: u32,
+    level: u32,
+    players: u32,
+    event: u8,
+) -> Option<GeneratedLevel> {
     assemble_level(
         cat,
         rng_seed,
@@ -1660,18 +1727,25 @@ fn try_build(cat: &Catalog, rng_seed: u32, run_seed: u32, level: u32, players: u
 /// when they satisfy the placement rules.
 #[allow(clippy::needless_range_loop)]
 fn catalog_fallback(cat: &Catalog, run_seed: u32, level: u32, players: u32) -> Option<GeneratedLevel> {
-    let hub = cat.chunks.iter().find(|c| c.role == ChunkRole::Hub && c.min_level <= level)?;
+    let hub = cat
+        .chunks
+        .iter()
+        .find(|c| c.role == ChunkRole::Hub && c.min_level <= level)?;
     let geom = build_geometry(hub, 0, Vec3::new(0.0, 0.0, 0.0));
     let beacon = geom.beacon?;
     let enemy_spawns = geom.enemy_slots.clone();
     let main_idx = main_platform_index(&geom.platforms);
     let main_top = geom.platforms[main_idx].1.max.y;
-    let main_bounds = geom.platforms[main_idx].1.clone();
+    let main_bounds = geom.platforms[main_idx].1;
     let fp = footprint(
         &geom
             .platforms
             .iter()
-            .map(|(kind, b)| ChunkPlatform { kind: *kind, min: b.min, max: b.max })
+            .map(|(kind, b)| ChunkPlatform {
+                kind: *kind,
+                min: b.min,
+                max: b.max,
+            })
             .collect::<Vec<_>>(),
     );
     // A hub whose own boxes violate the placement rules would produce an invalid fallback
@@ -1695,10 +1769,22 @@ fn catalog_fallback(cat: &Catalog, run_seed: u32, level: u32, players: u32) -> O
         let d0 = 6.0 * (i - 1) as f32;
         let d1 = 6.0 * i as f32;
         let arms = [
-            Aabb { min: Vec3::new(fp.max.x + d0, main_top - 1.0, -1.5), max: Vec3::new(fp.max.x + d1, main_top, 1.5) },
-            Aabb { min: Vec3::new(fp.min.x - d1, main_top - 1.0, -1.5), max: Vec3::new(fp.min.x - d0, main_top, 1.5) },
-            Aabb { min: Vec3::new(-1.5, main_top - 1.0, fp.max.z + d0), max: Vec3::new(1.5, main_top, fp.max.z + d1) },
-            Aabb { min: Vec3::new(-1.5, main_top - 1.0, fp.min.z - d1), max: Vec3::new(1.5, main_top, fp.min.z - d0) },
+            Aabb {
+                min: Vec3::new(fp.max.x + d0, main_top - 1.0, -1.5),
+                max: Vec3::new(fp.max.x + d1, main_top, 1.5),
+            },
+            Aabb {
+                min: Vec3::new(fp.min.x - d1, main_top - 1.0, -1.5),
+                max: Vec3::new(fp.min.x - d0, main_top, 1.5),
+            },
+            Aabb {
+                min: Vec3::new(-1.5, main_top - 1.0, fp.max.z + d0),
+                max: Vec3::new(1.5, main_top, fp.max.z + d1),
+            },
+            Aabb {
+                min: Vec3::new(-1.5, main_top - 1.0, fp.min.z - d1),
+                max: Vec3::new(1.5, main_top, fp.min.z - d0),
+            },
         ];
         for bounds in arms {
             let mut fits = true;
@@ -1716,11 +1802,7 @@ fn catalog_fallback(cat: &Catalog, run_seed: u32, level: u32, players: u32) -> O
     let spawn = spawn_point(&main_bounds, &beacon);
     let mut rng = Rng::new(seed_mix(run_seed, level));
     let fill = fill_gifts(&platforms, &geom.gift_slots, &beacon, level, players, &mut rng);
-    let kill_y = platforms
-        .iter()
-        .map(|p| p.bounds.min.y)
-        .fold(f32::INFINITY, f32::min)
-        - 15.0;
+    let kill_y = platforms.iter().map(|p| p.bounds.min.y).fold(f32::INFINITY, f32::min) - 15.0;
     let data = LevelData {
         level,
         seed: run_seed,
@@ -1741,18 +1823,37 @@ fn builtin_fallback(run_seed: u32, level: u32, players: u32) -> GeneratedLevel {
     platforms.push(Platform {
         id: 0,
         kind: PLATFORM_NORMAL,
-        bounds: Aabb { min: Vec3::new(-6.0, -1.0, -6.0), max: Vec3::new(6.0, 0.0, 6.0) },
+        bounds: Aabb {
+            min: Vec3::new(-6.0, -1.0, -6.0),
+            max: Vec3::new(6.0, 0.0, 6.0),
+        },
     });
     let mut next_id: u16 = 1;
     for i in 1..=5usize {
         let d = i as f32;
         for bounds in [
-            Aabb { min: Vec3::new(6.0 * d, -1.0, -1.5), max: Vec3::new(6.0 * d + 6.0, 0.0, 1.5) },
-            Aabb { min: Vec3::new(-6.0 * d - 6.0, -1.0, -1.5), max: Vec3::new(-6.0 * d, 0.0, 1.5) },
-            Aabb { min: Vec3::new(-1.5, -1.0, 6.0 * d), max: Vec3::new(1.5, 0.0, 6.0 * d + 6.0) },
-            Aabb { min: Vec3::new(-1.5, -1.0, -6.0 * d - 6.0), max: Vec3::new(1.5, 0.0, -6.0 * d) },
+            Aabb {
+                min: Vec3::new(6.0 * d, -1.0, -1.5),
+                max: Vec3::new(6.0 * d + 6.0, 0.0, 1.5),
+            },
+            Aabb {
+                min: Vec3::new(-6.0 * d - 6.0, -1.0, -1.5),
+                max: Vec3::new(-6.0 * d, 0.0, 1.5),
+            },
+            Aabb {
+                min: Vec3::new(-1.5, -1.0, 6.0 * d),
+                max: Vec3::new(1.5, 0.0, 6.0 * d + 6.0),
+            },
+            Aabb {
+                min: Vec3::new(-1.5, -1.0, -6.0 * d - 6.0),
+                max: Vec3::new(1.5, 0.0, -6.0 * d),
+            },
         ] {
-            platforms.push(Platform { id: next_id, kind: PLATFORM_NORMAL, bounds });
+            platforms.push(Platform {
+                id: next_id,
+                kind: PLATFORM_NORMAL,
+                bounds,
+            });
             next_id += 1;
         }
     }
@@ -1853,19 +1954,13 @@ fn design_max_gap(dy: f32) -> Option<f32> {
 
 /// Directed edge: can a player land on `to` from `from`?
 ///
-/// Touching edges (gap <= EPS) are walk/step/drop edges and are always fair:
-///   * a touching step (|rise| <= 0.55 u) is walkable, and
-///   * a touching drop (rise < -0.55 u) is always fine (walk off the edge, no
-///     landing-width requirement).
-/// Every other edge is a JUMP edge (including a touching upward rise above the step
-/// limit) and must be fair for humans too:
-///   * a plain (non-pad) jump may climb at most +2.0 u (apex - 0.25); a higher rise
-///     is only jumpable with a jump pad,
-///   * the landing platform's smaller horizontal extent must be >= 2.0 u (this applies
-///     to jump pads used as landing targets as well, no exception), and
-///   * the edge-to-edge gap must be <= (design max gap for its rise) - 1.0 u comfort.
-/// Jump pads keep their pad-launch rule (rise <= +4.0 u within 5.0 u), but their
-/// targets still need the >= 2.0 u smaller extent.
+/// Touching edges (gap <= EPS) are walk/step/drop edges and always fair: a touching step (|rise| <= 0.55 u) is
+/// walkable and a touching drop (rise < -0.55 u) is fine (walk off the edge, no landing-width requirement).
+/// Every other edge is a JUMP edge (including a touching rise above the step limit) and must be fair for humans
+/// too: a plain jump may climb at most +2.0 u (apex - 0.25; higher needs a jump pad); the landing platform's
+/// smaller horizontal extent must be >= 2.0 u (pad landing targets included); and the edge-to-edge gap must be
+/// <= (design max gap for its rise) - 1.0 u comfort. Jump pads launch to targets up to +3.5 u (apex - 0.5)
+/// within 4.5 u, and their targets still need the >= 2.0 u extent.
 fn can_jump_or_step(from: &Platform, to: &Platform) -> bool {
     let dt = to.bounds.max.y - from.bounds.max.y;
     let gap = rect_gap(&from.bounds, &to.bounds);
@@ -1875,15 +1970,16 @@ fn can_jump_or_step(from: &Platform, to: &Platform) -> bool {
     if gap <= EPS && dt < -0.55 {
         return true; // touching drop (gap ~0, rise < -0.55): always fine
     }
-    let small =
-        (to.bounds.max.x - to.bounds.min.x).min(to.bounds.max.z - to.bounds.min.z);
+    let small = (to.bounds.max.x - to.bounds.min.x).min(to.bounds.max.z - to.bounds.min.z);
     if small < 2.0 - EPS {
         return false; // unfair landing: jumping onto a ledge thinner than 2.0 u
     }
-    if from.kind == PLATFORM_JUMP_PAD && dt <= 4.0 + EPS && gap <= 5.0 + EPS {
-        return true; // pad launch; landing still needs the >= 2.0 u extent (checked above)
+    if from.kind == PLATFORM_JUMP_PAD && dt <= 3.5 + EPS && gap <= 4.5 + EPS {
+        return true; // pad launch (apex - 0.5); landing still needs the >= 2.0 u extent
     }
-    let Some(limit) = design_max_gap(dt) else { return false; };
+    let Some(limit) = design_max_gap(dt) else {
+        return false;
+    };
     gap <= limit - 1.0 + EPS // comfort margin: 1.0 u inside the design envelope
 }
 
@@ -1942,16 +2038,17 @@ pub fn validate(level: &LevelData) -> Result<(), String> {
             let a = &platforms[i].bounds;
             let b = &platforms[j].bounds;
             if aabb_intersect(a, b) {
-                return Err(format!("platforms {} and {} intersect", platforms[i].id, platforms[j].id));
+                return Err(format!(
+                    "platforms {} and {} intersect",
+                    platforms[i].id, platforms[j].id
+                ));
             }
             if xz_overlap_positive(a, b) {
                 let clearance = (a.min.y - b.max.y).max(b.min.y - a.max.y);
                 if clearance > EPS && clearance < STACK_CLEARANCE - EPS {
                     return Err(format!(
                         "platforms {} and {} overlap in XZ with only {:.2} u vertical clearance",
-                        platforms[i].id,
-                        platforms[j].id,
-                        clearance
+                        platforms[i].id, platforms[j].id, clearance
                     ));
                 }
             }
@@ -1990,7 +2087,10 @@ pub fn validate(level: &LevelData) -> Result<(), String> {
             let b = &level.gifts[j].pos;
             let d2 = (a.x - b.x) * (a.x - b.x) + (a.z - b.z) * (a.z - b.z);
             if d2 < (GIFT_MIN_SPACING - EPS) * (GIFT_MIN_SPACING - EPS) {
-                return Err(format!("gifts {} and {} are closer than 2.0 u", level.gifts[i].id, level.gifts[j].id));
+                return Err(format!(
+                    "gifts {} and {} are closer than 2.0 u",
+                    level.gifts[i].id, level.gifts[j].id
+                ));
             }
         }
     }
@@ -2089,17 +2189,17 @@ pub fn validate(level: &LevelData) -> Result<(), String> {
     }
     for gift in &level.gifts {
         let top = gift.pos.y - 0.3;
-        if let Some(i) = platform_top_under(platforms, gift.pos.x, gift.pos.z, top, 0.0) {
-            if !reach[i] {
-                return Err(format!("gift {} is not reachable from spawn", gift.id));
-            }
+        if let Some(i) = platform_top_under(platforms, gift.pos.x, gift.pos.z, top, 0.0)
+            && !reach[i]
+        {
+            return Err(format!("gift {} is not reachable from spawn", gift.id));
         }
     }
     for altar in &level.altars {
-        if let Some(i) = platform_top_under(platforms, altar.pos.x, altar.pos.z, altar.pos.y, 0.75) {
-            if !reach[i] {
-                return Err(format!("altar {} is not reachable from spawn", altar.id));
-            }
+        if let Some(i) = platform_top_under(platforms, altar.pos.x, altar.pos.z, altar.pos.y, 0.75)
+            && !reach[i]
+        {
+            return Err(format!("altar {} is not reachable from spawn", altar.id));
         }
     }
     if !reach[beacon_idx] {
@@ -2124,18 +2224,182 @@ pub fn validate(level: &LevelData) -> Result<(), String> {
     }
     for i in 0..n {
         if reach[i] && !back[i] {
-            return Err(format!("platform {} is a trap (no route back to the beacon)", platforms[i].id));
+            return Err(format!(
+                "platform {} is a trap (no route back to the beacon)",
+                platforms[i].id
+            ));
         }
     }
     Ok(())
 }
 
+/// A1: accept a stalled map once it has reached at least this fraction of the area budget.
+const BUDGET_ACCEPT: f32 = 0.7;
+/// Consecutive failed growth picks (after the all-sockets sweep kicks in) that end the
+/// growth loop when the budget is already at least [`BUDGET_ACCEPT`] filled.
+const STALL_LIMIT: u32 = 48;
+
+/// Tries to place one chunk on `anchor` (up to [`CANDIDATE_TRIALS`] weighted random picks;
+/// each pick checks every socket of that chunk in all four rotations against the coarse
+/// grid). Returns the placement and the index of the chunk socket that joined to `anchor`.
+#[allow(clippy::too_many_arguments)]
+fn try_place(
+    cat: &Catalog,
+    anchor: &OpenSocket,
+    platforms: &[Platform],
+    grid: &CoarseGrid,
+    level: u32,
+    tier: u32,
+    high_rise: bool,
+    junctions_used: u32,
+    max_junctions_u: u32,
+    rng: &mut Rng,
+) -> Option<(Placement, usize)> {
+    for _ in 0..CANDIDATE_TRIALS {
+        let eligible: Vec<usize> = cat
+            .chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                c.min_level <= level
+                    && match c.role {
+                        ChunkRole::Path => true,
+                        ChunkRole::Junction => junctions_used < max_junctions_u,
+                        ChunkRole::Hub | ChunkRole::DeadEnd => false,
+                    }
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if eligible.is_empty() {
+            return None;
+        }
+        let weights: Vec<f32> = eligible
+            .iter()
+            .map(|&i| chunk_weight(&cat.chunks[i], tier, high_rise))
+            .collect();
+        let chosen = weighted_pick(rng, &weights)?;
+        let ci = eligible[chosen];
+        let chunk = &cat.chunks[ci];
+        let mut valid: Vec<(Placement, usize)> = Vec::new();
+        for (si, _) in chunk.sockets.iter().enumerate() {
+            for turns in 0..4u32 {
+                let Some(p) = plan_join(chunk, si, turns, anchor) else {
+                    continue;
+                };
+                if placement_fits(&p, platforms, grid) {
+                    valid.push((p, si));
+                }
+            }
+        }
+        if !valid.is_empty() {
+            let pick = rng.below(valid.len());
+            return Some(valid.swap_remove(pick));
+        }
+    }
+    None
+}
+
+/// Commits a placement made by [`try_place`] (or the growth sweep). `at` is the index of the
+/// consumed anchor in `open`. Ids are assigned by [`commit_platforms`].
+#[allow(clippy::too_many_arguments)]
+fn commit_placement(
+    open: &mut Vec<OpenSocket>,
+    at: usize,
+    placement: Placement,
+    used_socket: usize,
+    platforms: &mut Vec<Platform>,
+    grid: &mut CoarseGrid,
+    next_id: &mut u16,
+    gift_slots: &mut Vec<(Vec3, bool)>,
+    altar_slots: &mut Vec<Vec3>,
+    area_sum: &mut f32,
+    chunk_count: &mut usize,
+    junctions_used: &mut u32,
+) -> Option<()> {
+    let p = placement;
+    open.swap_remove(at);
+    let mut socks = p.sockets;
+    if used_socket < socks.len() {
+        socks.swap_remove(used_socket);
+    }
+    open.extend(socks);
+    *area_sum += p.top_area;
+    *chunk_count += 1;
+    if p.role == ChunkRole::Junction {
+        *junctions_used += 1;
+    }
+    gift_slots.extend(p.gift_slots);
+    altar_slots.extend(p.altar_slots);
+    commit_platforms(platforms, grid, p.platforms, next_id)
+}
+
+/// Commits the railing-less 3 u stub for `socket` iff it satisfies the placement rules.
+/// Returns `true` when the stub was placed.
+fn commit_stub(
+    socket: &OpenSocket,
+    platforms: &mut Vec<Platform>,
+    grid: &mut CoarseGrid,
+    next_id: &mut u16,
+) -> Option<bool> {
+    let bounds = stub_bounds(socket);
+    for idx in grid.candidates(&bounds) {
+        if !platform_pair_ok(&bounds, &platforms[idx].bounds) {
+            return Some(false);
+        }
+    }
+    commit_platforms(platforms, grid, vec![(PLATFORM_NORMAL, bounds)], next_id)?;
+    Some(true)
+}
+
+/// Test hook: runs the full generate pipeline (regeneration attempts, then the
+/// guaranteed-valid fallbacks) against an explicit catalog instead of the shared one.
+/// Normal callers want [`generate`] / [`generate_for`].
+pub fn generate_with_catalog(cat: &Catalog, seed: u32, level: u32, players: u32) -> GeneratedLevel {
+    let event = event_for(seed, level);
+    for attempt in 0..MAX_ATTEMPTS {
+        let aseed = attempt_seed(seed, attempt);
+        if let Some(cand) = try_build(cat, aseed, seed, level, players, event)
+            && validate(&cand.data).is_ok()
+        {
+            return cand;
+        }
+    }
+    if let Some(cand) = catalog_fallback(cat, seed, level, players)
+        && validate(&cand.data).is_ok()
+    {
+        return cand;
+    }
+    builtin_fallback(seed, level, players)
+}
+
+/// The directed platform graph used for reachability checks, exposed so integration tests
+/// plan routes over exactly the same edges `validate` uses: an edge `i -> j` exists iff a
+/// player can get from platform `i`'s top to platform `j`'s top — touching with rise <=
+/// 0.55 u (or a touching drop, rise < -0.55 u at gap ~0), a fair design-envelope jump
+/// edge-to-edge (design max gap for the rise minus a 1.0 u comfort margin, landing's
+/// smaller horizontal extent >= 2.0 u), or a jump pad reaching +3.5 u within 5.0 u
+/// (landing still >= 2.0 u). All edges are admitted through the same [`can_jump_or_step`]
+/// test, so this is by construction the same graph `validate` checks.
+pub fn platform_graph(level: &LevelData) -> Vec<Vec<usize>> {
+    let platforms = &level.platforms;
+    let n = platforms.len();
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for i in 0..n {
+        for j in 0..n {
+            if i != j && can_jump_or_step(&platforms[i], &platforms[j]) {
+                adj[i].push(j);
+            }
+        }
+    }
+    adj
+}
+
 // ------------------------------------------------------------- tests ----
 
 #[cfg(test)]
+#[allow(dead_code)] // shared fixtures; not every helper is used by every build of the tests
 mod tests {
     use super::*;
-    use protocol::*;
 
     fn hub_json_variant() -> String {
         r#"{"version":1,"chunks":[
@@ -2177,7 +2441,7 @@ mod tests {
                          {"pos":[1.5,0.3,-1.5],"elevated":false},{"pos":[-1.5,0.3,-1.5],"elevated":false}],
            "enemy_slots":[],"altar_slots":[]}
          ]}"#
-            .to_string()
+        .to_string()
     }
 
     fn test_catalog() -> Catalog {
@@ -2210,15 +2474,25 @@ mod tests {
         let p0 = Platform {
             id: 0,
             kind: PLATFORM_NORMAL,
-            bounds: Aabb { min: Vec3::new(-6.0, -1.0, -6.0), max: Vec3::new(6.0, 0.0, 6.0) },
+            bounds: Aabb {
+                min: Vec3::new(-6.0, -1.0, -6.0),
+                max: Vec3::new(6.0, 0.0, 6.0),
+            },
         };
         let p1 = Platform {
             id: 1,
             kind: PLATFORM_NORMAL,
-            bounds: Aabb { min: Vec3::new(6.0, -1.0, -1.5), max: Vec3::new(12.0, 0.0, 1.5) },
+            bounds: Aabb {
+                min: Vec3::new(6.0, -1.0, -1.5),
+                max: Vec3::new(12.0, 0.0, 1.5),
+            },
         };
         let gifts = (0..3u16)
-            .map(|i| Gift { id: i, pos: Vec3::new(-4.0 + 4.0 * i as f32, 0.3, -3.0), kind: GIFT_NORMAL })
+            .map(|i| Gift {
+                id: i,
+                pos: Vec3::new(-4.0 + 4.0 * i as f32, 0.3, -3.0),
+                kind: GIFT_NORMAL,
+            })
             .collect();
         LevelData {
             level: 1,
@@ -2324,7 +2598,10 @@ mod tests {
 
     #[test]
     fn rotate_aabb_four_turns_is_identity() {
-        let b = Aabb { min: Vec3::new(2.0, -1.0, 3.0), max: Vec3::new(5.0, 0.0, 8.0) };
+        let b = Aabb {
+            min: Vec3::new(2.0, -1.0, 3.0),
+            max: Vec3::new(5.0, 0.0, 8.0),
+        };
         for k in 0..4u32 {
             let r = rotate_aabb(&b, k * 4);
             assert_eq!(r.min, b.min);
@@ -2336,165 +2613,4 @@ mod tests {
         assert_eq!(r.min.z, -b.max.x);
         assert_eq!(r.max.z, -b.min.x);
     }
-}
-
-/// A1: accept a stalled map once it has reached at least this fraction of the area budget.
-const BUDGET_ACCEPT: f32 = 0.7;
-/// Consecutive failed growth picks (after the all-sockets sweep kicks in) that end the
-/// growth loop when the budget is already at least [`BUDGET_ACCEPT`] filled.
-const STALL_LIMIT: u32 = 48;
-
-/// Tries to place one chunk on `anchor` (up to [`CANDIDATE_TRIALS`] weighted random picks;
-/// each pick checks every socket of that chunk in all four rotations against the coarse
-/// grid). Returns the placement and the index of the chunk socket that joined to `anchor`.
-#[allow(clippy::too_many_arguments)]
-fn try_place(
-    cat: &Catalog,
-    anchor: &OpenSocket,
-    platforms: &[Platform],
-    grid: &CoarseGrid,
-    level: u32,
-    tier: u32,
-    high_rise: bool,
-    junctions_used: u32,
-    max_junctions_u: u32,
-    rng: &mut Rng,
-) -> Option<(Placement, usize)> {
-    for _ in 0..CANDIDATE_TRIALS {
-        let eligible: Vec<usize> = cat
-            .chunks
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| {
-                c.min_level <= level
-                    && match c.role {
-                        ChunkRole::Path => true,
-                        ChunkRole::Junction => junctions_used < max_junctions_u,
-                        ChunkRole::Hub | ChunkRole::DeadEnd => false,
-                    }
-            })
-            .map(|(i, _)| i)
-            .collect();
-        if eligible.is_empty() {
-            return None;
-        }
-        let weights: Vec<f32> =
-            eligible.iter().map(|&i| chunk_weight(&cat.chunks[i], tier, high_rise)).collect();
-        let Some(chosen) = weighted_pick(rng, &weights) else {
-            return None;
-        };
-        let ci = eligible[chosen];
-        let chunk = &cat.chunks[ci];
-        let mut valid: Vec<(Placement, usize)> = Vec::new();
-        for (si, _) in chunk.sockets.iter().enumerate() {
-            for turns in 0..4u32 {
-                let Some(p) = plan_join(chunk, si, turns, anchor) else {
-                    continue;
-                };
-                if placement_fits(&p, platforms, grid) {
-                    valid.push((p, si));
-                }
-            }
-        }
-        if !valid.is_empty() {
-            let pick = rng.below(valid.len());
-            return Some(valid.swap_remove(pick));
-        }
-    }
-    None
-}
-
-/// Commits a placement made by [`try_place`] (or the growth sweep). `at` is the index of the
-/// consumed anchor in `open`. Ids are assigned by [`commit_platforms`].
-#[allow(clippy::too_many_arguments)]
-fn commit_placement(
-    open: &mut Vec<OpenSocket>,
-    at: usize,
-    placement: Placement,
-    used_socket: usize,
-    platforms: &mut Vec<Platform>,
-    grid: &mut CoarseGrid,
-    next_id: &mut u16,
-    gift_slots: &mut Vec<(Vec3, bool)>,
-    altar_slots: &mut Vec<Vec3>,
-    area_sum: &mut f32,
-    chunk_count: &mut usize,
-    junctions_used: &mut u32,
-) -> Option<()> {
-    let p = placement;
-    open.swap_remove(at);
-    let mut socks = p.sockets;
-    if used_socket < socks.len() {
-        socks.swap_remove(used_socket);
-    }
-    open.extend(socks);
-    *area_sum += p.top_area;
-    *chunk_count += 1;
-    if p.role == ChunkRole::Junction {
-        *junctions_used += 1;
-    }
-    gift_slots.extend(p.gift_slots);
-    altar_slots.extend(p.altar_slots);
-    commit_platforms(platforms, grid, p.platforms, next_id)
-}
-
-/// Commits the railing-less 3 u stub for `socket` iff it satisfies the placement rules.
-/// Returns `true` when the stub was placed.
-fn commit_stub(
-    socket: &OpenSocket,
-    platforms: &mut Vec<Platform>,
-    grid: &mut CoarseGrid,
-    next_id: &mut u16,
-) -> Option<bool> {
-    let bounds = stub_bounds(socket);
-    for idx in grid.candidates(&bounds) {
-        if !platform_pair_ok(&bounds, &platforms[idx].bounds) {
-            return Some(false);
-        }
-    }
-    commit_platforms(platforms, grid, vec![(PLATFORM_NORMAL, bounds)], next_id)?;
-    Some(true)
-}
-
-/// Test hook: runs the full generate pipeline (regeneration attempts, then the
-/// guaranteed-valid fallbacks) against an explicit catalog instead of the shared one.
-/// Normal callers want [`generate`] / [`generate_for`].
-pub fn generate_with_catalog(cat: &Catalog, seed: u32, level: u32, players: u32) -> GeneratedLevel {
-    let event = event_for(seed, level);
-    for attempt in 0..MAX_ATTEMPTS {
-        let aseed = attempt_seed(seed, attempt);
-        if let Some(cand) = try_build(cat, aseed, seed, level, players, event) {
-            if validate(&cand.data).is_ok() {
-                return cand;
-            }
-        }
-    }
-    if let Some(cand) = catalog_fallback(cat, seed, level, players) {
-        if validate(&cand.data).is_ok() {
-            return cand;
-        }
-    }
-    builtin_fallback(seed, level, players)
-}
-
-/// The directed platform graph used for reachability checks, exposed so integration tests
-/// plan routes over exactly the same edges `validate` uses: an edge `i -> j` exists iff a
-/// player can get from platform `i`'s top to platform `j`'s top — touching with rise <=
-/// 0.55 u (or a touching drop, rise < -0.55 u at gap ~0), a fair design-envelope jump
-/// edge-to-edge (design max gap for the rise minus a 1.0 u comfort margin, landing's
-/// smaller horizontal extent >= 2.0 u), or a jump pad reaching +4.0 u within 5.0 u
-/// (landing still >= 2.0 u). All edges are admitted through the same [`can_jump_or_step`]
-/// test, so this is by construction the same graph `validate` checks.
-pub fn platform_graph(level: &LevelData) -> Vec<Vec<usize>> {
-    let platforms = &level.platforms;
-    let n = platforms.len();
-    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
-    for i in 0..n {
-        for j in 0..n {
-            if i != j && can_jump_or_step(&platforms[i], &platforms[j]) {
-                adj[i].push(j);
-            }
-        }
-    }
-    adj
 }

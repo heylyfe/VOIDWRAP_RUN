@@ -261,7 +261,7 @@ pub fn step_with(state: &mut ControllerState, input: &InputFrame, world: &World,
     let grapple_locked = rooted || staggered;
     let mut grappling = false;
     if !grapple_locked && class == CLASS_GRAPPLER && state.ability_active_frames > 0 {
-        let target = state.ability_dir.clone();
+        let target = state.ability_dir;
         let dx = target.x - state.pos.x;
         let dy = target.y - state.pos.y;
         let dz = target.z - state.pos.z;
@@ -303,11 +303,7 @@ pub fn step_with(state: &mut ControllerState, input: &InputFrame, world: &World,
         // launch — is not a jump to \"cut\" and keeps PAD_LAUNCH_VEL; a tapped
         // jump is cut on its release frame, exactly as under the pre-M3 rule
         // (the min() below is a no-op once vel.y <= JUMP_CUT_VELOCITY).
-        if !jump_locked
-            && input.buttons & BTN_JUMP == 0
-            && state.prev_buttons & BTN_JUMP != 0
-            && state.vel.y > 0.0
-        {
+        if !jump_locked && input.buttons & BTN_JUMP == 0 && state.prev_buttons & BTN_JUMP != 0 && state.vel.y > 0.0 {
             state.vel.y = state.vel.y.min(JUMP_CUT_VELOCITY);
         }
     }
@@ -373,8 +369,7 @@ pub fn step_with(state: &mut ControllerState, input: &InputFrame, world: &World,
     // CLASS_BULWARK: the frame the wind-up counter reaches zero the ward begins
     // (this is the frame `bulwark_pulse_frame` reports). Afterwards the ward
     // counts down one frame per step.
-    let windup_done =
-        class == CLASS_BULWARK && state.ward_frames == 0 && state.ability_active_frames == 1;
+    let windup_done = class == CLASS_BULWARK && state.ward_frames == 0 && state.ability_active_frames == 1;
     state.ability_active_frames = state.ability_active_frames.saturating_sub(1);
     if windup_done {
         state.ward_frames = BULWARK_WARD_FRAMES;
@@ -627,7 +622,7 @@ fn move_axis(state: &mut ControllerState, world: &World, axis: Axis, delta: f32)
     if delta == 0.0 {
         return false;
     }
-    let mut pos = state.pos.clone();
+    let mut pos = state.pos;
     let target = get(&pos, axis) + delta;
     set(&mut pos, axis, target);
     // Swept box (XZ) used to pick candidate platforms from the spatial grid.
@@ -679,6 +674,7 @@ fn move_axis(state: &mut ControllerState, world: &World, axis: Axis, delta: f32)
 }
 
 #[cfg(test)]
+#[allow(clippy::explicit_counter_loop)] // frame counters double as input sequence numbers
 mod tests {
     use super::*;
     use crate::levels;
@@ -1394,20 +1390,20 @@ mod tests {
         assert_eq!(striker, unknown, "unknown class must behave exactly like CLASS_STRIKER");
     }
 
-// Deleted in M3: CLASS_BULWARK no longer blinks. Replaced by the bulwark tests
-// in `m3_tests`.
+    // Deleted in M3: CLASS_BULWARK no longer blinks. Replaced by the bulwark tests
+    // in `m3_tests`.
 
-// Deleted in M3: CLASS_BULWARK no longer blinks. Replaced by the bulwark tests
-// in `m3_tests`.
+    // Deleted in M3: CLASS_BULWARK no longer blinks. Replaced by the bulwark tests
+    // in `m3_tests`.
 
-// Deleted in M3: CLASS_BULWARK no longer blinks. Replaced by the bulwark tests
-// in `m3_tests`.
+    // Deleted in M3: CLASS_BULWARK no longer blinks. Replaced by the bulwark tests
+    // in `m3_tests`.
 
-// Deleted in M3: CLASS_BULWARK no longer blinks. Replaced by the bulwark tests
-// in `m3_tests`.
+    // Deleted in M3: CLASS_BULWARK no longer blinks. Replaced by the bulwark tests
+    // in `m3_tests`.
 
-// Deleted in M3: CLASS_BULWARK no longer blinks. Replaced by the bulwark tests
-// in `m3_tests`.
+    // Deleted in M3: CLASS_BULWARK no longer blinks. Replaced by the bulwark tests
+    // in `m3_tests`.
 
     #[test]
     fn grapple_picks_nearest_valid_platform_and_lands_on_it() {
@@ -1426,7 +1422,7 @@ mod tests {
             s.ability_dir.y
         );
         assert_eq!(s.ability_dir.z, 0.0);
-        let target = s.ability_dir.clone();
+        let target = s.ability_dir;
         for i in 0..400u32 {
             step_with(&mut s, &idle(1 + i), &w, &Tuning::default());
             if s.ability_active_frames == 0 {
@@ -1739,7 +1735,6 @@ mod tests {
     }
 }
 
-
 /// CLASS_BULWARK: true on the frame the ward begins.
 ///
 /// The wind-up runs `BULWARK_WINDUP_FRAMES` frames after a grounded cast; on
@@ -1833,9 +1828,10 @@ fn launch_pad_if_contact(state: &mut ControllerState, world: &World, movement_lo
 }
 
 #[cfg(test)]
+#[allow(clippy::explicit_counter_loop)] // frame counters double as input sequence numbers
 mod m3_tests {
-    use super::*;
     use super::tests::flat_world;
+    use super::*;
     use crate::tuning::{
         BULWARK_COOLDOWN_MAX_FRAMES, BULWARK_WARD_FRAMES, BULWARK_WINDUP_FRAMES, DASH_COOLDOWN_MIN_FRAMES,
         FRETTED_SPEED_MUL, PAD_LAUNCH_VEL,
@@ -2171,7 +2167,11 @@ mod m3_tests {
             }
         }
         assert!(launched, "the pad must launch the player");
-        assert_eq!(s.vel.x, RUN_SPEED * PAD_HORIZONTAL_VEL_MUL, "horizontal speed is multiplied");
+        assert_eq!(
+            s.vel.x,
+            RUN_SPEED * PAD_HORIZONTAL_VEL_MUL,
+            "horizontal speed is multiplied"
+        );
         assert!(!s.grounded, "the launch leaves the ground");
     }
 
@@ -2384,7 +2384,11 @@ mod m3_tests {
         step_with(&mut s, &idle(0), &w, &Tuning::default());
         assert!(s.grounded);
         step_with(&mut s, &run_x(1, 0), &w, &Tuning::default());
-        assert_eq!(s.vel.x, RUN_SPEED * FRETTED_SPEED_MUL, "fretted ground caps run speed x0.6");
+        assert_eq!(
+            s.vel.x,
+            RUN_SPEED * FRETTED_SPEED_MUL,
+            "fretted ground caps run speed x0.6"
+        );
         // BTN_ABILITY is ignored on fretted ground (striker dash must not fire).
         step_with(&mut s, &run_x(2, BTN_ABILITY), &w, &Tuning::default());
         assert_eq!(s.ability_active_frames, 0);
@@ -2456,7 +2460,10 @@ mod m3_tests {
     fn grid_fast_path_matches_brute_force() {
         let mut w = World::from_level(&grid_test_level());
         w.set_tiles(&[
-            TileState { id: 3, state: protocol::TILE_GONE },
+            TileState {
+                id: 3,
+                state: protocol::TILE_GONE,
+            },
             TileState {
                 id: 9,
                 state: TILE_FRETTED,
@@ -2490,14 +2497,17 @@ mod m3_tests {
                     (solid.min.z + solid.max.z) * 0.5,
                 );
             } else {
-                st.pos = Vec3::new(next_f32(&mut rng, -200.0, 200.0), next_f32(&mut rng, -12.0, 12.0), next_f32(&mut rng, -200.0, 200.0));
+                st.pos = Vec3::new(
+                    next_f32(&mut rng, -200.0, 200.0),
+                    next_f32(&mut rng, -12.0, 12.0),
+                    next_f32(&mut rng, -200.0, 200.0),
+                );
             }
             st.vel = Vec3::ZERO; // vel.y <= 0, as resting_on_solid requires
             let fast = resting_on_solid(&st, &w);
             let bb = player_box(&st.pos);
             let brute = w.solids.iter().any(|s| {
-                let overlaps_xz =
-                    bb.min.x < s.max.x && bb.max.x > s.min.x && bb.min.z < s.max.z && bb.max.z > s.min.z;
+                let overlaps_xz = bb.min.x < s.max.x && bb.max.x > s.min.x && bb.min.z < s.max.z && bb.max.z > s.min.z;
                 overlaps_xz && (st.pos.y - s.max.y).abs() <= GROUND_EPSILON
             });
             assert_eq!(fast, brute, "grid and brute force disagree when resting at {st:?}");
@@ -2505,10 +2515,10 @@ mod m3_tests {
     }
 }
 
-
 // T-052 r3: the pad must launch with buttons unheld, so the variable-jump rule
 // (which now only caps an actual jump release edge) must not clip the pad arc.
 #[cfg(test)]
+#[allow(clippy::explicit_counter_loop)] // frame counters double as input sequence numbers
 mod jump_pad_launch_tests {
     use super::*;
     use crate::tuning::PAD_LAUNCH_VEL;
@@ -2579,23 +2589,45 @@ mod jump_pad_launch_tests {
 
     #[test]
     fn jump_pad_launches_apex_when_dropped_on() {
+        // The pad launches on the first contact frame (the step the player
+        // lands), i.e. it fires once per contact "when walked onto or landed
+        // on". The launch sets vel.y = PAD_LAUNCH_VEL and clears `grounded`
+        // in the same step, so the player never reports `grounded` on the pad
+        // and waiting for `grounded` would wait forever. Assert on the launch
+        // itself instead: vel.y jumps to ~PAD_LAUNCH_VEL and the apex is at
+        // least 3.5 u above the pad.
         let w = probe_world();
         let mut s = spawn_state(Vec3::new(1.5, 3.0, 0.0));
-        let mut max_y = 0.0f32;
-        let mut landed = false;
-        for i in 0..120 {
-            step(&mut s, &idle(i), &w);
-            if s.grounded {
-                landed = true;
-            }
-            if landed {
-                max_y = max_y.max(s.pos.y);
+        let mut seq = 0u32;
+        let mut prev_vel_y = s.vel.y;
+        while s.vel.y != PAD_LAUNCH_VEL {
+            prev_vel_y = s.vel.y;
+            step(&mut s, &idle(seq), &w);
+            seq += 1;
+            assert!(seq < 300, "the pad never launched");
+        }
+        assert!(
+            prev_vel_y <= 0.0,
+            "the pad launches out of a fall, got vel.y = {prev_vel_y} on the frame before launch"
+        );
+        assert!(
+            (s.vel.y - PAD_LAUNCH_VEL).abs() < 1e-4,
+            "the pad must launch the player at ~16 u/s, got vel.y = {}",
+            s.vel.y
+        );
+        assert!(!s.grounded, "the launch leaves the pad on the launch frame");
+        let launch_y = s.pos.y;
+        let mut max_y = s.pos.y;
+        for i in 0..90u32 {
+            step(&mut s, &idle(seq + i), &w);
+            if s.pos.y > max_y {
+                max_y = s.pos.y;
             }
         }
-        assert!(landed, "the player must land on the pad");
+        let apex = max_y - launch_y;
         assert!(
-            max_y >= 3.5,
-            "dropping onto the pad must launch the player at least 3.5 u above it, apex {max_y}"
+            apex >= 3.5,
+            "dropping onto the pad must launch the player at least 3.5 u above it, apex {apex}"
         );
     }
 

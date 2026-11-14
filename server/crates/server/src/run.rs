@@ -12,7 +12,7 @@ use crate::content::{Content, RunMods};
 use protocol::{
     Aabb, CARD_CURSE, CARD_ENEMY, CARD_UPGRADE, DraftCard, EVENT_ICE, EnemyView, LEVEL_COLLAPSE_PENDING,
     LEVEL_COLLAPSING, LEVEL_COLLECT, LevelData, PHASE_ENEMY_DRAFT, PHASE_OVER, PHASE_PLAYING, Platform, RunInfo,
-    TILE_GONE, TILE_WARN, TICK_HZ, TileState, Tuning, Vec3,
+    TICK_HZ, TILE_GONE, TILE_WARN, TileState, Tuning, Vec3,
 };
 use sim::hazards::Hazards;
 use sim::levelgen;
@@ -78,7 +78,9 @@ pub(crate) fn escalation_speed_mul(level: u32) -> f32 {
 /// Extra copies of drafted enemies granted by the escalation table (design §5, cumulative rows, from level 4 on).
 fn escalation_extra_copies(level: u32, drafted: &[String], most_voted: Option<&str>) -> Vec<String> {
     let mut extra: Vec<String> = Vec::new();
-    if level >= 4 && let Some(mv) = most_voted {
+    if level >= 4
+        && let Some(mv) = most_voted
+    {
         extra.push(mv.to_string());
     }
     if level >= 6 {
@@ -604,7 +606,12 @@ impl Run {
         self.altars_used.clear();
         self.level_phase = LEVEL_COLLECT;
         self.collapse_elapsed_ticks = 0;
-        self.collapse = build_collapse_plan(&self.level.platforms, &self.level.beacon, &self.level.spawn, self.level_num);
+        self.collapse = build_collapse_plan(
+            &self.level.platforms,
+            &self.level.beacon,
+            &self.level.spawn,
+            self.level_num,
+        );
         self.gift_platform = gift_platform_map(&self.level.platforms, &self.level.gifts);
         // The shop lives in the lobby only; starting a level closes it.
         self.shop = None;
@@ -634,9 +641,9 @@ impl Run {
             let mut params = self.mods.enemy_params(&def.params);
             params.speed_mul *= escalation_speed_mul(self.level_num);
             let mut pos = if spawn_slots == 0 {
-                self.level.spawn.clone()
+                self.level.spawn
             } else {
-                generated.enemy_spawns[index % spawn_slots].clone()
+                generated.enemy_spawns[index % spawn_slots]
             };
             // Mimics pose as gifts: spawn them on the platform below the generated spawn
             // (pos.y = platform top + 0.5). If the spawn is not above any platform, keep the position.
@@ -771,7 +778,7 @@ impl Run {
                 if rules::gift_touched_within(feet, gift, radius) {
                     self.gifts_taken.push(gift.id);
                     self.gifts_collected = self.gifts_collected.saturating_add(1);
-                    picked.push(gift.pos.clone());
+                    picked.push(gift.pos);
                 }
             }
             // The last gift (including the vacuous zero-gift case) starts phase 2.
@@ -795,7 +802,7 @@ impl Run {
             if rules::gift_touched_within(feet, gift, radius) {
                 self.golden_taken.push(gift.id);
                 self.currency = self.currency.saturating_add(GOLDEN_VALUE);
-                picked.push(gift.pos.clone());
+                picked.push(gift.pos);
             }
         }
         picked
@@ -1005,6 +1012,7 @@ mod tests {
         assert!(run.validate_picks(&[200]).is_err());
     }
 
+    #[test]
     fn resolve_applies_votes_and_generates_a_level_with_drafted_enemies() {
         let c = content();
         let mut run = Run::new(&c, 7, 2);
@@ -1087,6 +1095,7 @@ mod tests {
         assert!(run.upgrades.contains(&chosen.id) || run.curses.contains(&chosen.id));
     }
 
+    #[test]
     fn dormant_enemies_are_harmless() {
         use sim::hazards::{HazardEffect, PlayerSense};
         let c = content();
@@ -1097,7 +1106,7 @@ mod tests {
         for e in &mut run.enemies {
             assert!(e.active_in > 0);
         }
-        let e = run.enemies[0].pos.clone();
+        let e = run.enemies[0].pos;
         let touching = Vec3::new(e.x, e.y - 0.9, e.z);
         let senses = vec![PlayerSense {
             id: 1,
@@ -1380,7 +1389,11 @@ mod m3_tests {
         let spawn = Vec3::new(0.0, 0.0, 0.0);
         let plan = build_collapse_plan(&platforms, &beacon, &spawn, 1);
         let ids: Vec<u16> = plan.iter().map(|e| e.id).collect();
-        assert_eq!(ids, vec![4, 2, 3, 1], "farthest first; ties by platform id ascending; hub exempted");
+        assert_eq!(
+            ids,
+            vec![4, 2, 3, 1],
+            "farthest first; ties by platform id ascending; hub exempted"
+        );
         let warns: Vec<u32> = plan.iter().map(|e| e.warn_start_tick).collect();
         for w in warns.windows(2) {
             assert!(w[0] <= w[1], "batch warnings are issued in order");
@@ -1435,7 +1448,11 @@ mod m3_tests {
         assert_eq!(collapse_duration_seconds(1), 52.0);
         assert_eq!(collapse_duration_seconds(6), 42.0);
         assert_eq!(collapse_duration_seconds(11), 32.0);
-        assert_eq!(collapse_duration_seconds(17), 30.0, "Hunger is absorbed by the 30 s floor");
+        assert_eq!(
+            collapse_duration_seconds(17),
+            30.0,
+            "Hunger is absorbed by the 30 s floor"
+        );
         assert_eq!(collapse_duration_seconds(25), 30.0);
         assert_eq!(collapse_duration_seconds(30), 25.0, "level 30: floor 25");
         assert_eq!(collapse_duration_seconds(40), 25.0);
@@ -1460,7 +1477,11 @@ mod m3_tests {
         // Level 21: per-3 capped at 6, plus Second Front (floor(3/2)=1, k=0 -> pallbearer) and Full Chorus.
         let many = escalation_extra_copies(21, &drafted, None);
         let count = |s: &str| many.iter().filter(|e| e.as_str() == s).count();
-        assert_eq!(count("pallbearer"), 9, "per-3 (6) + L6 pallbearer + Second Front + Full Chorus");
+        assert_eq!(
+            count("pallbearer"),
+            9,
+            "per-3 (6) + L6 pallbearer + Second Front + Full Chorus"
+        );
         assert_eq!(count("snapshrike"), 7, "per-3 (6) + Full Chorus");
         // Level 40: per-3 pinned at the +6 cap.
         let endless = escalation_extra_copies(40, &drafted, None);
@@ -1472,7 +1493,10 @@ mod m3_tests {
     fn fog_and_milestone_escalation() {
         assert_eq!(escalation_fog_mul(4), 1.0);
         assert_eq!(escalation_fog_mul(12), 1.25);
-        assert!((escalation_fog_mul(18) - 1.4375).abs() < 1e-6, "Grey Tide and Deep Night stack");
+        assert!(
+            (escalation_fog_mul(18) - 1.4375).abs() < 1e-6,
+            "Grey Tide and Deep Night stack"
+        );
         assert!(escalation_milestone_level(4));
         assert!(escalation_milestone_level(9));
         assert!(escalation_milestone_level(17));

@@ -159,13 +159,7 @@ fn ray_exit_t(p: &Platform, cx: f32, cz: f32, ux: f32, uz: f32) -> f32 {
 /// edges (flat, drops of any depth, and 0.5 u stair steps / 1.0 u treads up or down):
 /// steering there walks the bot off the edge; the bot keeps steering there until it is
 /// grounded on the lower platform (the route only advances once it is).
-fn beyond_edge_point(
-    cur: &Platform,
-    nxt: &Platform,
-    dir: (f32, f32),
-    clearance: f32,
-    inset: f32,
-) -> (f32, f32) {
+fn beyond_edge_point(cur: &Platform, nxt: &Platform, dir: (f32, f32), clearance: f32, inset: f32) -> (f32, f32) {
     let (cx, cz) = centre_xz(cur);
     let (dx, dz) = dir;
     let t = ray_exit_t(cur, cx, cz, dx, dz);
@@ -382,11 +376,7 @@ impl Bot {
                         let nxt = &lvl.platforms[n];
                         // The waypoint after the target on this route (the next platform's
                         // centre, or the final goal); used to prefer the side facing it.
-                        let following = match path
-                            .iter()
-                            .position(|&p| p == on)
-                            .and_then(|i| path.get(i + 2))
-                        {
+                        let following = match path.iter().position(|&p| p == on).and_then(|i| path.get(i + 2)) {
                             Some(&f) => {
                                 let fp = &lvl.platforms[f];
                                 (
@@ -556,7 +546,7 @@ fn play_subset(lvl: &LevelData, only: Option<&[usize]>) -> u32 {
     let lvl = lvl.clone();
     let world = World::from_level(&lvl);
     let mut bot = Bot {
-        state: spawn_state(lvl.spawn.clone()),
+        state: spawn_state(lvl.spawn),
         seq: 0,
         frames: 0,
         holding_jump: false,
@@ -582,7 +572,7 @@ fn play_subset(lvl: &LevelData, only: Option<&[usize]>) -> u32 {
         }
         bot.settle(&world);
     }
-    let b = lvl.beacon.clone();
+    let b = lvl.beacon;
     let goal = platform_under(&lvl, b.x, b.y, b.z);
     bot.travel(&lvl, &world, goal, b.x, b.z, &|feet| beacon_reached(feet, &b));
     bot.frames
@@ -669,10 +659,10 @@ fn generated_levels_are_completable_with_the_real_controller() {
     );
 }
 
-/// ---------------------------------------------------------------------------
-/// Edge feasibility: prove that every KIND of edge `platform_graph` admits is
-/// physically doable with the real controller, instead of routing whole maps.
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Edge feasibility: prove that every KIND of edge `platform_graph` admits is
+// physically doable with the real controller, instead of routing whole maps.
+// ---------------------------------------------------------------------------
 
 /// Quantized bucket of a jump/pad edge: gap rounded UP to 0.25 u, rise rounded
 /// to the nearest 0.25 u, the landing's smaller horizontal extent rounded DOWN
@@ -746,15 +736,7 @@ fn platform_proto() -> Platform {
 }
 
 /// Clone of `proto` with its bounds replaced, kind untouched.
-fn rect_platform(
-    proto: &Platform,
-    min_x: f32,
-    max_x: f32,
-    min_y: f32,
-    max_y: f32,
-    min_z: f32,
-    max_z: f32,
-) -> Platform {
+fn rect_platform(proto: &Platform, min_x: f32, max_x: f32, min_y: f32, max_y: f32, min_z: f32, max_z: f32) -> Platform {
     let mut p = proto.clone();
     p.bounds.min.x = min_x;
     p.bounds.max.x = max_x;
@@ -774,10 +756,7 @@ fn rect_platform(
 /// the donor's own kill_y is arbitrary and may sit above B.
 fn tiny_level(platforms: Vec<Platform>, sx: f32, sy: f32, sz: f32) -> LevelData {
     let mut lvl = levelgen::generate(0, 1).data;
-    let min_top = platforms
-        .iter()
-        .map(|p| p.bounds.max.y)
-        .fold(f32::INFINITY, f32::min);
+    let min_top = platforms.iter().map(|p| p.bounds.max.y).fold(f32::INFINITY, f32::min);
     lvl.platforms = platforms;
     lvl.gifts.clear();
     lvl.spawn.x = sx;
@@ -852,7 +831,7 @@ fn simulate_controller(
     const EDGE_TAKEOFF_X: f32 = A_EDGE_X - 0.3;
     let lvl = tiny_level(platforms, spawn.0, spawn.1, spawn.2);
     let world = World::from_level(&lvl);
-    let mut state = spawn_state(lvl.spawn.clone());
+    let mut state = spawn_state(lvl.spawn);
     let mut seq = 0u32;
     let mut frames = 0u32;
     let mut holding_jump = false;
@@ -922,19 +901,13 @@ fn simulate_controller(
             && state.pos.z >= goal.2 - 0.4
             && state.pos.z <= goal.3 + 0.4;
         if state.grounded && (state.pos.y - goal_top).abs() < 1e-3 && in_goal {
-            return EdgeSim {
-                ok: true,
-                closest: 0.0,
-            };
+            return EdgeSim { ok: true, closest: 0.0 };
         }
         if state.pos.y <= world.kill_y {
             break;
         }
     }
-    EdgeSim {
-        ok: false,
-        closest,
-    }
+    EdgeSim { ok: false, closest }
 }
 
 /// Prints one representative (non-bucket) case and records it as a failure when it fails.
@@ -998,11 +971,8 @@ fn every_graph_edge_kind_is_physically_doable() {
                         }
                         continue;
                     }
-                    let pad = from.kind == PLATFORM_JUMP_PAD
-                        && rise <= 4.0 + 0.001
-                        && gap <= 5.0 + 0.001;
-                    let smaller_extent = (to.bounds.max.x - to.bounds.min.x)
-                        .min(to.bounds.max.z - to.bounds.min.z);
+                    let pad = from.kind == PLATFORM_JUMP_PAD && rise <= 4.0 + 0.001 && gap <= 5.0 + 0.001;
+                    let smaller_extent = (to.bounds.max.x - to.bounds.min.x).min(to.bounds.max.z - to.bounds.min.z);
                     *counts
                         .entry(LandingBucket::quantize(gap, rise, smaller_extent, pad))
                         .or_insert(0) += 1;

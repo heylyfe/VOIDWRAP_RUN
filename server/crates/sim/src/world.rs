@@ -1,7 +1,7 @@
 //! Static collision world built from a [`LevelData`].
 
 use crate::tuning::GRID_CELL;
-use protocol::{Aabb, LevelData, Platform, TILE_FRETTED, TILE_GONE, TILE_WARN, TileState};
+use protocol::{Aabb, LevelData, Platform, TILE_GONE, TileState};
 use std::collections::BTreeMap;
 
 /// Collision geometry the controller moves through.
@@ -37,7 +37,7 @@ impl World {
         let platforms = level.platforms.clone();
         let count = platforms.len();
         World {
-            solids: platforms.iter().map(|p| p.bounds.clone()).collect(),
+            solids: platforms.iter().map(|p| p.bounds).collect(),
             kill_y: level.kill_y,
             gone: Vec::new(),
             grid: SpatialGrid::build(&platforms),
@@ -84,7 +84,7 @@ impl World {
             .iter()
             .zip(&self.solid)
             .filter(|(_, solid)| **solid)
-            .map(|(p, _)| p.bounds.clone())
+            .map(|(p, _)| p.bounds)
             .collect();
     }
 
@@ -175,7 +175,7 @@ pub fn overlaps(a: &Aabb, b: &Aabb) -> bool {
 mod tests {
     use super::*;
     use crate::controller::{spawn_state, step};
-    use protocol::{EVENT_NONE, InputFrame, PLATFORM_NORMAL, Vec3};
+    use protocol::{EVENT_NONE, InputFrame, PLATFORM_NORMAL, TILE_FRETTED, TILE_WARN, Vec3};
 
     fn idle(seq: u32) -> InputFrame {
         InputFrame {

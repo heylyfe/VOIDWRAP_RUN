@@ -7,16 +7,14 @@
 //! 2.5 s = 50 ticks, 4.0 s = 80 ticks.
 
 use protocol::{
-    Aabb, DEATH_ENEMY, DEATH_PROJECTILE, ENEMY_ATTACK, ENEMY_DISGUISED, ENEMY_DORMANT,
-    ENEMY_FLAG_HEAVY, ENEMY_HUNTING, ENEMY_RECOVER, ENEMY_TELEGRAPH, LevelData, Platform,
-    PLATFORM_CRUMBLE, TILE_FRETTED, TILE_GONE, TILE_WARN, Vec3,
+    Aabb, DEATH_ENEMY, DEATH_PROJECTILE, ENEMY_ATTACK, ENEMY_DISGUISED, ENEMY_DORMANT, ENEMY_FLAG_HEAVY, ENEMY_HUNTING,
+    ENEMY_RECOVER, ENEMY_TELEGRAPH, LevelData, PLATFORM_CRUMBLE, Platform, TILE_FRETTED, TILE_GONE, TILE_WARN, Vec3,
 };
 use sim::hazards::{HazardEffect, Hazards, PlayerSense};
 use sim::rules::{
-    spawn_enemy_with, Brain, Enemy, EnemyParams, LanternLeechBrain, LeechPhase, SnapshrikePhase,
-    BEHAVIOR_CORRUPTER, BEHAVIOR_GALE_WIGHT, BEHAVIOR_LANTERN_LEECH, BEHAVIOR_MIMIC,
-    BEHAVIOR_MOTELING, BEHAVIOR_PALLBEARER, BEHAVIOR_RIFT_WARDEN, BEHAVIOR_SNAPSHRIKE,
-    BEHAVIOR_TURRET,
+    BEHAVIOR_CORRUPTER, BEHAVIOR_GALE_WIGHT, BEHAVIOR_LANTERN_LEECH, BEHAVIOR_MIMIC, BEHAVIOR_MOTELING,
+    BEHAVIOR_PALLBEARER, BEHAVIOR_RIFT_WARDEN, BEHAVIOR_SNAPSHRIKE, BEHAVIOR_TURRET, Brain, Enemy, EnemyParams,
+    LanternLeechBrain, LeechPhase, SnapshrikePhase, spawn_enemy_with,
 };
 use sim::world::World;
 
@@ -123,16 +121,11 @@ fn kill_causes(fx: &[HazardEffect]) -> Vec<u8> {
 }
 
 fn shove_count(fx: &[HazardEffect]) -> usize {
-    fx.iter()
-        .filter(|e| matches!(e, HazardEffect::Shove { .. }))
-        .count()
+    fx.iter().filter(|e| matches!(e, HazardEffect::Shove { .. })).count()
 }
 
 fn view_of(hz: &Hazards, enemies: &[Enemy], id: u32) -> protocol::EnemyView {
-    hz.views(enemies)
-        .into_iter()
-        .find(|v| v.id == id)
-        .expect("view exists")
+    hz.views(enemies).into_iter().find(|v| v.id == id).expect("view exists")
 }
 
 fn has_heavy(v: &protocol::EnemyView) -> bool {
@@ -166,7 +159,7 @@ fn dormant_enemy_never_acts() {
     let players = vec![sense(1, 0.0, 0.0, 0.0)];
     // A freshly spawned enemy reports ENEMY_DORMANT (active_in > 0).
     assert_eq!(view_of(&hz, &enemies, 1).state, ENEMY_DORMANT);
-    let start = enemies[0].pos.clone();
+    let start = enemies[0].pos;
     for _ in 0..5 {
         let fx = tick(&mut hz, &mut enemies, &level, &world, &players, &[]);
         assert!(fx.is_empty());
@@ -213,10 +206,7 @@ fn pallbearer_hunt_kneel_lunge_recover_sequence() {
     let kneel = kneel_at.expect("pallbearer rears back before lunging");
     let kill = kill_at.expect("lunge connects with a stationary target");
     assert!(saw_attack);
-    assert!(
-        kill - kneel >= 12,
-        ">= 0.6 s telegraph before the lethal lunge"
-    );
+    assert!(kill - kneel >= 12, ">= 0.6 s telegraph before the lethal lunge");
     assert!(killed_any);
     // After the lunge it drifts harmlessly, then returns to hunting.
     let mut saw_recover = false;
@@ -334,10 +324,7 @@ fn snapshrike_aim_is_frozen_for_final_035s_and_a_perpendicular_step_dodges() {
 
 #[test]
 fn snapshrike_dash_blocked_by_platform_stuns_it() {
-    let level = test_level(
-        vec![platform(3, 0, [4.0, 0.0, -1.0], [6.0, 2.0, 1.0])],
-        33,
-    );
+    let level = test_level(vec![platform(3, 0, [4.0, 0.0, -1.0], [6.0, 2.0, 1.0])], 33);
     let world = World::from_level(&level);
     let mut hz = Hazards::new();
     warm(&mut hz, &level, &world);
@@ -350,10 +337,10 @@ fn snapshrike_dash_blocked_by_platform_stuns_it() {
         if !kills(&fx).is_empty() {
             killed = true;
         }
-        if let Brain::Snapshrike(b) = &enemies[0].brain {
-            if b.phase == SnapshrikePhase::Stunned {
-                stunned = true;
-            }
+        if let Brain::Snapshrike(b) = &enemies[0].brain
+            && b.phase == SnapshrikePhase::Stunned
+        {
+            stunned = true;
         }
     }
     assert!(stunned, "dashing into a platform stuns the shrike");
@@ -399,11 +386,11 @@ fn moteling_moving_marked_player_dies_after_full_telegraph() {
         if v.state == ENEMY_TELEGRAPH && has_heavy(&v) && tele_at.is_none() {
             tele_at = Some(t);
         }
-        if let Some(c) = kill_causes(&fx).first() {
-            if kill_at.is_none() {
-                kill_at = Some(t);
-                cause = Some(*c);
-            }
+        if let Some(c) = kill_causes(&fx).first()
+            && kill_at.is_none()
+        {
+            kill_at = Some(t);
+            cause = Some(*c);
         }
         if kill_at.is_some() {
             break;
@@ -411,10 +398,7 @@ fn moteling_moving_marked_player_dies_after_full_telegraph() {
     }
     let tele = tele_at.expect("the collapsing ring telegraphs");
     let kill = kill_at.expect("a moving marked player is shrieked down");
-    assert!(
-        kill - tele >= 12,
-        ">= 0.6 s telegraph before the shriek lands"
-    );
+    assert!(kill - tele >= 12, ">= 0.6 s telegraph before the shriek lands");
     assert_eq!(cause, Some(DEATH_ENEMY));
 }
 
@@ -464,7 +448,7 @@ fn rift_warden_ignite_then_radial_shove() {
             } = e
             {
                 assert_eq!(*player, 1);
-                shove = Some((t, vel.clone(), *stagger_ticks));
+                shove = Some((t, *vel, *stagger_ticks));
             }
         }
         if shove.is_some() {
@@ -497,17 +481,11 @@ fn rift_warden_pulse_staggers_nearby_enemies() {
     let players = vec![sense(1, 0.0, 0.0, 0.0)];
     for _ in 0..200 {
         let fx = tick(&mut hz, &mut enemies, &level, &world, &players, &[]);
-        if fx
-            .iter()
-            .any(|e| matches!(e, HazardEffect::Shove { player: 1, .. }))
-        {
+        if fx.iter().any(|e| matches!(e, HazardEffect::Shove { player: 1, .. })) {
             break;
         }
     }
-    assert_eq!(
-        enemies[1].knock_ticks, 18,
-        "nearby enemies are staggered too"
-    );
+    assert_eq!(enemies[1].knock_ticks, 18, "nearby enemies are staggered too");
     let away_x = enemies[1].pos.x - enemies[0].pos.x;
     let away_z = enemies[1].pos.z - enemies[0].pos.z;
     let len = (away_x * away_x + away_z * away_z).sqrt();
@@ -530,11 +508,7 @@ fn rift_warden_ward_blocks_player_shove_but_not_enemy_pulse() {
     let players = vec![sense_vel(1, v3(0.0, 0.0, 0.0), v3(0.0, 0.0, 0.0), true)];
     for _ in 0..200 {
         let fx = tick(&mut hz, &mut enemies, &level, &world, &players, &[]);
-        assert_eq!(
-            shove_count(&fx),
-            0,
-            "warded players are immune to the rift shove"
-        );
+        assert_eq!(shove_count(&fx), 0, "warded players are immune to the rift shove");
     }
 }
 
@@ -682,11 +656,11 @@ fn lantern_leech_gorge_rearback_telegraphs_the_sting() {
         if v.state == ENEMY_TELEGRAPH && tele_at.is_none() {
             tele_at = Some(t);
         }
-        if let Some(c) = kill_causes(&fx).first() {
-            if kill_at.is_none() {
-                kill_at = Some(t);
-                cause = Some(*c);
-            }
+        if let Some(c) = kill_causes(&fx).first()
+            && kill_at.is_none()
+        {
+            kill_at = Some(t);
+            cause = Some(*c);
         }
     }
     let tele = tele_at.expect("rear-back telegraph before the sting");
@@ -763,10 +737,7 @@ fn turret_charges_fires_and_kills_with_a_projectile() {
 
 #[test]
 fn turret_needs_line_of_sight_to_the_target() {
-    let level = test_level(
-        vec![platform(4, 0, [2.0, 0.0, -1.0], [3.0, 2.0, 1.0])],
-        82,
-    );
+    let level = test_level(vec![platform(4, 0, [2.0, 0.0, -1.0], [3.0, 2.0, 1.0])], 82);
     let world = World::from_level(&level);
     let mut hz = Hazards::new();
     warm(&mut hz, &level, &world);
@@ -776,10 +747,7 @@ fn turret_needs_line_of_sight_to_the_target() {
         let fx = tick(&mut hz, &mut enemies, &level, &world, &players, &[]);
         assert!(kills(&fx).is_empty());
     }
-    assert!(
-        hz.projectiles().is_empty(),
-        "no bolt is ever fired without sight"
-    );
+    assert!(hz.projectiles().is_empty(), "no bolt is ever fired without sight");
     assert_eq!(
         view_of(&hz, &enemies, 1).state,
         ENEMY_HUNTING,
@@ -822,11 +790,9 @@ fn mimic_disguised_then_hiss_then_lunge() {
     for t in 0..100 {
         let fx = tick(&mut hz, &mut enemies, &level, &world, &players, &[]);
         let v = view_of(&hz, &enemies, 1);
-        if v.state == ENEMY_TELEGRAPH {
-            if tele_at.is_none() {
-                assert_vec3_near(&v.target, &v3(2.5, 0.9, 0.0));
-                tele_at = Some(t);
-            }
+        if v.state == ENEMY_TELEGRAPH && tele_at.is_none() {
+            assert_vec3_near(&v.target, &v3(2.5, 0.9, 0.0));
+            tele_at = Some(t);
         }
         if !kills(&fx).is_empty() {
             kill_at = Some(t);
@@ -891,10 +857,7 @@ fn warded_moteling_inhale_never_kills() {
 
 #[test]
 fn corrupter_frets_the_marked_platform() {
-    let level = test_level(
-        vec![platform(9, 0, [-2.0, -1.0, -2.0], [2.0, 0.0, 2.0])],
-        101,
-    );
+    let level = test_level(vec![platform(9, 0, [-2.0, -1.0, -2.0], [2.0, 0.0, 2.0])], 101);
     let world = World::from_level(&level);
     let mut hz = Hazards::new();
     warm(&mut hz, &level, &world);
@@ -908,26 +871,22 @@ fn corrupter_frets_the_marked_platform() {
         if !kills(&fx).is_empty() {
             killed = true;
         }
-        if hz
-            .tiles()
-            .iter()
-            .any(|s| s.id == 9 && s.state == TILE_FRETTED)
-        {
+        if hz.tiles().iter().any(|s| s.id == 9 && s.state == TILE_FRETTED) {
             fretted_at = Some(t);
             break;
         }
     }
     let t = fretted_at.expect("the aura frets the platform");
-    assert!(t >= 40, "fretting takes strictly more than 2.0 s inside the aura (t={t})");
+    assert!(
+        t >= 40,
+        "fretting takes strictly more than 2.0 s inside the aura (t={t})"
+    );
     assert!(!killed, "the corrupter is never lethal");
 }
 
 #[test]
 fn fretted_tile_clears_after_eight_seconds() {
-    let level = test_level(
-        vec![platform(9, 0, [-2.0, -1.0, -2.0], [2.0, 0.0, 2.0])],
-        102,
-    );
+    let level = test_level(vec![platform(9, 0, [-2.0, -1.0, -2.0], [2.0, 0.0, 2.0])], 102);
     let world = World::from_level(&level);
     let mut hz = Hazards::new();
     warm(&mut hz, &level, &world);
@@ -935,18 +894,11 @@ fn fretted_tile_clears_after_eight_seconds() {
     let players = vec![sense(1, 0.0, 0.0, 0.0)];
     for _ in 0..200 {
         let _ = tick(&mut hz, &mut enemies, &level, &world, &players, &[]);
-        if hz
-            .tiles()
-            .iter()
-            .any(|s| s.id == 9 && s.state == TILE_FRETTED)
-        {
+        if hz.tiles().iter().any(|s| s.id == 9 && s.state == TILE_FRETTED) {
             break;
         }
     }
-    assert!(hz
-        .tiles()
-        .iter()
-        .any(|s| s.id == 9 && s.state == TILE_FRETTED));
+    assert!(hz.tiles().iter().any(|s| s.id == 9 && s.state == TILE_FRETTED));
     // No re-fretting once the wisp is gone.
     enemies.clear();
     for _ in 0..165 {
@@ -1106,8 +1058,7 @@ fn determinism_same_inputs_same_effects() {
             enemy(3, BEHAVIOR_GALE_WIGHT, -4.0, 2.0, 2.0),
             enemy(4, BEHAVIOR_MIMIC, 2.0, 0.0, 2.0),
         ];
-        let mut players: Vec<PlayerSense> =
-            (0..3).map(|i| sense(i + 1, 3.0 + i as f32, 0.0, 1.0)).collect();
+        let mut players: Vec<PlayerSense> = (0..3).map(|i| sense(i + 1, 3.0 + i as f32, 0.0, 1.0)).collect();
         let mut out = Vec::new();
         for t in 0..300u32 {
             let phi = t as f32 * 0.02;
@@ -1136,10 +1087,16 @@ fn turret_standing_on_a_floor_fires_at_a_player_in_the_open() {
     let mut killed = false;
     for _ in 0..400 {
         let fx = hazards.step(&mut enemies, &world, &level, std::slice::from_ref(&player), &[], 1.0);
-        if fx.iter().any(|e| matches!(e, HazardEffect::Kill { player: 9, cause } if *cause == DEATH_PROJECTILE)) {
+        if fx
+            .iter()
+            .any(|e| matches!(e, HazardEffect::Kill { player: 9, cause } if *cause == DEATH_PROJECTILE))
+        {
             killed = true;
             break;
         }
     }
-    assert!(killed, "a turret standing on a floor must be able to shoot a standing player 8 u away");
+    assert!(
+        killed,
+        "a turret standing on a floor must be able to shoot a standing player 8 u away"
+    );
 }

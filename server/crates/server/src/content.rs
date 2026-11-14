@@ -43,8 +43,10 @@ fn one() -> f32 {
 pub struct EnemyStats {
     /// Design main speed; kept in the file for reference. The per-enemy speeds live in the sim (`sim::hazards`),
     /// so this field is not wired into `EnemyParams` (speed comes from the sim plus the `enemy_speed_mul` curse).
+    #[allow(dead_code)]
     pub speed: f32,
     /// Design aggro radius; kept in the file for reference. The sim owns targeting ranges, so this is not wired in either.
+    #[allow(dead_code)]
     pub aggro: f32,
     pub grace_s: f32,
     pub size: f32,

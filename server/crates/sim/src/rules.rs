@@ -6,7 +6,7 @@
 //! `+ - * /`, `sqrt`, `abs`, `min`, `max` and `clamp` are used on floats, so
 //! results are bit-identical on every target.
 
-use protocol::{Aabb, Gift, TICK_HZ, Vec3};
+use protocol::{Aabb, Gift, Vec3};
 
 use crate::controller::player_box;
 
@@ -517,7 +517,7 @@ pub(crate) fn move_toward(pos: &mut Vec3, target: &Vec3, max_step: f32) {
     let dz = target.z - pos.z;
     let d = (dx * dx + dy * dy + dz * dz).sqrt();
     if d <= max_step {
-        *pos = target.clone();
+        *pos = *target;
         return;
     }
     if d <= 1e-9 {
@@ -585,9 +585,7 @@ fn clip_axis(origin: f32, dir: f32, min: f32, max: f32, t_min: &mut f32, t_max: 
     let mut t0 = (min - origin) * inv;
     let mut t1 = (max - origin) * inv;
     if t0 > t1 {
-        let tmp = t0;
-        t0 = t1;
-        t1 = tmp;
+        std::mem::swap(&mut t0, &mut t1);
     }
     if t0 > *t_min {
         *t_min = t0;
@@ -648,7 +646,7 @@ pub fn spawn_enemy_with(id: u32, kind: u8, pos: Vec3, params: EnemyParams) -> En
     Enemy {
         id,
         kind,
-        home: pos.clone(),
+        home: pos,
         pos,
         active_in,
         brain: Brain::for_behavior(params.behavior),
@@ -788,7 +786,10 @@ mod tests {
         assert!(segment_intersects_aabb(&a, &b, &wall));
         let over = Vec3::new(10.0, 5.0, 0.0);
         assert!(!segment_intersects_aabb(&Vec3::new(0.0, 5.0, 0.0), &over, &wall));
-        assert!(segment_intersects_aabb(&Vec3::new(5.0, 0.5, 0.0), &b, &wall), "start inside");
+        assert!(
+            segment_intersects_aabb(&Vec3::new(5.0, 0.5, 0.0), &b, &wall),
+            "start inside"
+        );
         assert!(!segment_intersects_aabb(
             &Vec3::new(0.0, 3.0, 0.0),
             &Vec3::new(3.5, 3.0, 0.0),

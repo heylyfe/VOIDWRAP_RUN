@@ -206,3 +206,16 @@ T-053 got a third round instead of an OVERSEER takeover, to save Opus credits (u
 - T-055 r8a ACCEPTED: plain jumps climb <= 2.0 u (2.25 = apex, impossible); chunks + validator updated (25 valid).
   T-055 r8b ACCEPTED: harness handles deep drops; remaining failures are ONLY jump pads -> lead probe proved a REAL
   controller bug (pads never launch, walked onto or landed on) -> T-052 r3.
+
+## M3 VERIFIED (2026-11-14) - ready for v0.3.0-alpha.1
+- Real bugs found by play-test/probes and fixed: platform shaders did not compile (T-057b r2); jump pads never
+  launched - the variable-jump cut clamped the pad ascent (T-052 r3/r4); +2.25 u plain climbs and +4.0 u pad climbs
+  equal the apex (map rules now <= 2.0 u / <= 3.5 u, pad reach <= 4.5 u); enemies spawned inside the floor (Bolt
+  Sentry never fired); hub spawn over the void; beacon dais trip hazard removed.
+- Physics: `every_graph_edge_kind_is_physically_doable` passes - every walk/step/drop/jump/pad bucket admitted by the
+  map graph over 10 seeds x levels 1..10 is performed by the real controller. (Full-route bot kept as #[ignore].)
+- Two server tests had silently lost `#[test]` in an FN edit (found by clippy dead-code) - restored, both pass.
+- `just verify` green: server 74, sim 98 + hazards 33 + levelgen 18 + physics 3, protocol 5, web 210 vitest, tsc,
+  eslint, clippy (incl. desktop feature), fmt, content/chunk validators, names. Packaged game: capture.mjs and
+  capture-m3.mjs pass with no console errors (class picker, 46 gifts on L1, 76 on L4, stairs, hunter telegraph,
+  draft + shop, Ctrl mouse lock).

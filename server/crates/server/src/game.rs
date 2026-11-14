@@ -565,8 +565,8 @@ impl Game {
             .filter_map(|c| c.player.as_ref())
             .map(|p| PlayerView {
                 id: p.id,
-                pos: p.state.pos.clone(),
-                vel: p.state.vel.clone(),
+                pos: p.state.pos,
+                vel: p.state.vel,
                 mode: p.mode,
                 class: p.state.class,
             })
@@ -634,8 +634,8 @@ impl Game {
             .filter(|p| p.active())
             .map(|p| sim::hazards::PlayerSense {
                 id: p.id,
-                feet: p.state.pos.clone(),
-                vel: p.state.vel.clone(),
+                feet: p.state.pos,
+                vel: p.state.vel,
                 warded: p.state.ward_frames > 0,
             })
             .collect();
@@ -672,7 +672,9 @@ impl Game {
             .map(|p| (p.id, Vec3::new(p.state.pos.x, p.state.pos.y + 0.9, p.state.pos.z)))
             .collect();
         for (caster_id, centre) in pulses {
-            self.run.hazards.pulse(&mut self.run.enemies, &centre, BULWARK_PULSE_RADIUS);
+            self.run
+                .hazards
+                .pulse(&mut self.run.enemies, &centre, BULWARK_PULSE_RADIUS);
             let others: Vec<PulsePlayer> = self
                 .conns
                 .values()
@@ -680,7 +682,7 @@ impl Game {
                 .filter(|p| p.active())
                 .map(|p| PulsePlayer {
                     id: p.id,
-                    feet: p.state.pos.clone(),
+                    feet: p.state.pos,
                     warded: p.state.ward_frames > 0,
                 })
                 .collect();
@@ -965,8 +967,8 @@ mod tests {
             );
         }
         // Players start spread around the spawn, not stacked.
-        let a = g.conns[&1].player.as_ref().unwrap().state.pos.clone();
-        let b = g.conns[&2].player.as_ref().unwrap().state.pos.clone();
+        let a = g.conns[&1].player.as_ref().unwrap().state.pos;
+        let b = g.conns[&2].player.as_ref().unwrap().state.pos;
         assert_ne!(a, b);
     }
 
@@ -1036,7 +1038,7 @@ mod tests {
         }
         assert!(g.run.currency > 0);
         assert_eq!(g.run.golden_taken.len(), gifts.len());
-        let beacon = g.run.level.beacon.clone();
+        let beacon = g.run.level.beacon;
         player(&mut g, 1).state.pos = beacon;
         g.tick();
         assert_eq!(g.run.phase, PHASE_ENEMY_DRAFT);
@@ -1129,7 +1131,7 @@ mod tests {
             g.tick();
             // Keep every outbox under capacity: undrained receivers drop the connection mid-sweep.
             for rx in &mut *rxs {
-                let _ = drain(*rx);
+                let _ = drain(rx);
             }
         }
     }
@@ -1144,7 +1146,7 @@ mod tests {
         vote(&mut g, 1);
         vote(&mut g, 2);
         collect_normal_gifts(&mut g, 1, &mut [&mut rx1, &mut rx2]);
-        let beacon = g.run.level.beacon.clone();
+        let beacon = g.run.level.beacon;
         player(&mut g, 1).state.pos = beacon;
         dormant_enemies(&mut g);
         g.tick();
@@ -1685,7 +1687,7 @@ mod tests {
         'outer: for i in 0..240 {
             {
                 let p = player(&mut g, 1);
-                p.state.pos = pos.clone();
+                p.state.pos = pos;
                 p.state.vel = Vec3::ZERO;
                 p.starved_ticks = 0;
             }
@@ -1854,10 +1856,26 @@ mod m3_tests {
     fn pulse_stagger_targets_are_radius_limited_and_never_the_caster_nor_warded_players() {
         let centre = Vec3::new(0.0, 0.9, 0.0);
         let others = vec![
-            PulsePlayer { id: 7, feet: Vec3::new(0.0, 0.0, 0.0), warded: false },   // the caster (chest at the centre)
-            PulsePlayer { id: 8, feet: Vec3::new(2.9, 0.0, 0.0), warded: false },   // inside the radius
-            PulsePlayer { id: 9, feet: Vec3::new(3.5, 0.0, 0.0), warded: false },   // outside
-            PulsePlayer { id: 10, feet: Vec3::new(1.0, 0.0, 0.0), warded: true },   // warded: immune
+            PulsePlayer {
+                id: 7,
+                feet: Vec3::new(0.0, 0.0, 0.0),
+                warded: false,
+            }, // the caster (chest at the centre)
+            PulsePlayer {
+                id: 8,
+                feet: Vec3::new(2.9, 0.0, 0.0),
+                warded: false,
+            }, // inside the radius
+            PulsePlayer {
+                id: 9,
+                feet: Vec3::new(3.5, 0.0, 0.0),
+                warded: false,
+            }, // outside
+            PulsePlayer {
+                id: 10,
+                feet: Vec3::new(1.0, 0.0, 0.0),
+                warded: true,
+            }, // warded: immune
         ];
         let out = pulse_stagger_targets(7, &centre, &others);
         assert_eq!(out.len(), 1);
@@ -1939,7 +1957,7 @@ mod m3_tests {
         for e in &mut g.run.enemies {
             e.active_in = 1_000; // keep the drafted enemies dormant
         }
-        let pos = player(&mut g, 1).state.pos.clone();
+        let pos = player(&mut g, 1).state.pos;
         g.run.enemies.push(sim::rules::spawn_enemy_with(
             77,
             0,
@@ -1956,7 +1974,7 @@ mod m3_tests {
             // Pin the player next to the warden: a no-input player freefalls out of knockback range.
             {
                 let p = player(&mut g, 1);
-                p.state.pos = pos.clone();
+                p.state.pos = pos;
                 p.state.vel = Vec3::ZERO;
                 p.starved_ticks = 0;
             }
@@ -2004,11 +2022,11 @@ mod m3_tests {
             ServerMsg::Notice { kind: NOTICE_EVENT, ids } if ids == &vec!["collapse".to_string()]
         )));
         // Idle (pinned) so starvation gravity cannot drag the player into the void during the siren.
-        let safe = player(&mut g, 1).state.pos.clone();
+        let safe = player(&mut g, 1).state.pos;
         for i in 0..60 {
             {
                 let p = player(&mut g, 1);
-                p.state.pos = safe.clone();
+                p.state.pos = safe;
                 p.state.vel = Vec3::ZERO;
                 p.starved_ticks = 0;
             }
@@ -2030,7 +2048,10 @@ mod m3_tests {
             _ => None,
         });
         assert_eq!(snap.map(|s| s.1), Some(protocol::LEVEL_COLLAPSING));
-        assert!(snap.is_some_and(|s| s.0 > 0), "collapse_ms counts down until the last batch falls");
+        assert!(
+            snap.is_some_and(|s| s.0 > 0),
+            "collapse_ms counts down until the last batch falls"
+        );
     }
 
     #[test]

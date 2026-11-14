@@ -74,7 +74,11 @@ try {
   const counter = await page.getByTestId("gift-counter").textContent();
   console.log(`capture: gift counter "${counter?.trim()}"`);
   console.log(`capture: HUD level=${level} gifts=${gifts}`);
-  if (level !== (process.env.CAPTURE_LEVEL ?? "1") || gifts !== "5 / 5") errors.push(`unexpected HUD: level=${level} gifts=${gifts}`);
+  // M3: ~46+ small gifts per level, all still to collect at the start ("N / N" with N >= 40).
+  const [left, total] = (gifts ?? "").split("/").map((s) => Number(s.trim()));
+  if (level !== (process.env.CAPTURE_LEVEL ?? "1") || !(total >= 40 && left === total)) {
+    errors.push(`unexpected HUD: level=${level} gifts=${gifts}`);
+  }
   const currency = await page.getByTestId("currency").textContent();
   console.log(`capture: run status currency=${currency?.trim()}`);
   await page.keyboard.down("KeyW");
