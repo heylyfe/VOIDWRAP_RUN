@@ -41,7 +41,7 @@ const INCLUDE_DENY = [/(^|\/)\.env/i, /(^|\/)shots\//, /key/i, /secret/i, /token
  * Lets OVERSEER reference current code instead of pasting it. Only files inside the repository
  * that are tracked-style source (no secrets, no screenshots) can be included.
  */
-export function expandIncludes(text) {
+export function expandIncludes(text, depth = 0) {
   return text.replace(/^@include[ \t]+(\S+)[ \t]*$/gm, (_, rel) => {
     const norm = rel.replace(/\\/g, "/");
     if (norm.startsWith("/") || /^[a-zA-Z]:/.test(norm) || norm.split("/").includes("..")) throw new Error(`@include: unsafe path ${rel}`);
@@ -49,6 +49,12 @@ export function expandIncludes(text) {
     const abs = join(root, norm);
     if (!existsSync(abs)) throw new Error(`@include: not found ${rel}`);
     const ext = norm.split(".").pop() ?? "";
+    // Another ticket (tickets/*.md) is inlined as text with ITS includes expanded too, so a follow-up ticket
+    // that includes the original one still carries all of the original's source files.
+    if (norm.startsWith("tickets/") && ext === "md") {
+      if (depth >= 3) throw new Error(`@include: tickets nested too deeply at ${rel}`);
+      return expandIncludes(readFileSync(abs, "utf8"), depth + 1);
+    }
     return `\`${norm}\` (current contents):\n~~~~${ext}\n${readFileSync(abs, "utf8").replace(/\s+$/, "")}\n~~~~`;
   });
 }
