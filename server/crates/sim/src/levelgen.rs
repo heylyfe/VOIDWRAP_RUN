@@ -62,6 +62,10 @@ const PATTERNS_B_JSON: &str = include_str!("../../../../design/patterns-b.json")
 pub struct GeneratedLevel {
     pub data: LevelData,
     pub enemy_spawns: Vec<Vec3>,
+    /// The T-069 composition plan this level was built from, in placement order.
+    /// Empty when the catalog carries no pattern tags (the walk then picks freely)
+    /// or when the level came from a fallback.
+    pub plan: Vec<String>,
 }
 
 // ---------------------------------------------------------------- PRNG ----
@@ -609,7 +613,7 @@ pub fn merge_catalog_json(sources: &[&str]) -> Result<String, CatalogError> {
 /// The shared catalog, parsed once from the three catalog files merged into one
 /// document. A malformed catalog degrades generation to the built-in fallback map
 /// instead of panicking.
-fn catalog() -> Result<&'static Catalog, String> {
+pub fn catalog() -> Result<&'static Catalog, String> {
     static CATALOG: OnceLock<Result<Catalog, String>> = OnceLock::new();
     CATALOG
         .get_or_init(|| {
@@ -1865,7 +1869,11 @@ fn assemble_level(
         platforms,
         gifts,
     };
-    Some(GeneratedLevel { data, enemy_spawns })
+    Some(GeneratedLevel {
+        data,
+        enemy_spawns,
+        plan: plan.ids().to_vec(),
+    })
 }
 
 /// Builds a level from the catalog with the design 4.3 / amendment A1 budget formulas.
@@ -1999,7 +2007,11 @@ fn catalog_fallback(
         platforms,
         gifts: fill.gifts,
     };
-    Some(GeneratedLevel { data, enemy_spawns })
+    Some(GeneratedLevel {
+        data,
+        enemy_spawns,
+        plan: Vec::new(),
+    })
 }
 
 /// Fallback built from scratch: 12x12 plaza + four straight 30 u arms (always valid).
@@ -2067,7 +2079,11 @@ fn builtin_fallback(run_seed: u32, level: u32, players: u32, spacing_mul: f32) -
         platforms,
         gifts: fill.gifts,
     };
-    GeneratedLevel { data, enemy_spawns }
+    GeneratedLevel {
+        data,
+        enemy_spawns,
+        plan: Vec::new(),
+    }
 }
 
 // ------------------------------------------------------- public API ----
