@@ -20,6 +20,7 @@
 //! candidate fails validation the next attempt seed is tried (<= 40 attempts), after which a
 //! guaranteed-valid fallback map (hub + straight arms) is returned.
 
+use crate::world::{is_ramp, surface_at};
 use protocol::{
     Aabb, Altar, EVENT_CRUMBLE, EVENT_HIGH_RISE, EVENT_ICE, EVENT_NONE, GIFT_GOLDEN, GIFT_NORMAL, Gift, LevelData,
     PLATFORM_CRUMBLE, PLATFORM_JUMP_PAD, PLATFORM_NORMAL, Platform, Vec3,
@@ -769,7 +770,7 @@ impl PointGrid {
 /// Finds a platform whose top is at `top_y` (within EPS) containing `(x, z)` inset by `inset`.
 fn platform_top_under(platforms: &[Platform], x: f32, z: f32, top_y: f32, inset: f32) -> Option<usize> {
     for (i, p) in platforms.iter().enumerate() {
-        if (p.bounds.max.y - top_y).abs() > EPS {
+        if (surface_at(p, x, z) - top_y).abs() > EPS {
             continue;
         }
         if x < p.bounds.min.x + inset - EPS
@@ -2037,6 +2038,85 @@ fn design_max_gap(dy: f32) -> Option<f32> {
     }
 }
 
+/// Surface height of `p` at the point of its footprint nearest `other`'s centre.
+///
+/// Used for edges with a real gap, where there is no shared boundary to sample.
+fn nearest_surface(p: &Platform, other: &Platform) -> f32 {
+    let cx = (other.bounds.min.x + other.bounds.max.x) * 0.5;
+    let cz = (other.bounds.min.z + other.bounds.max.z) * 0.5;
+    let x = cx.clamp(p.bounds.min.x, p.bounds.max.x);
+    let z = cz.clamp(p.bounds.min.z, p.bounds.max.z);
+    surface_at(p, x, z)
+}
+
+/// Footprint area of `b` in the XZ plane.
+fn footprint_area(b: &Aabb) -> f32 {
+    (b.max.x - b.min.x).max(0.0) * (b.max.z - b.min.z).max(0.0)
+}
+
+/// Is `(x, z)` inside `b` (grown by `eps`)?
+fn point_in_xz(b: &Aabb, x: f32, z: f32, eps: f32) -> bool {
+    x >= b.min.x - eps && x <= b.max.x + eps && z >= b.min.z - eps && z <= b.max.z + eps
+}
+
+/// Sample points along the perimeter of `b` (corners included), `per_edge` per side.
+fn perimeter_samples(b: &Aabb, per_edge: usize) -> Vec<(f32, f32)> {
+    let n = per_edge.max(1);
+    let mut out = Vec::with_capacity(4 * (n + 1));
+    for i in 0..=n {
+        let t = i as f32 / n as f32;
+        let x = b.min.x + (b.max.x - b.min.x) * t;
+        let z = b.min.z + (b.max.z - b.min.z) * t;
+        out.push((x, b.min.z));
+        out.push((x, b.max.z));
+        out.push((b.min.x, z));
+        out.push((b.max.x, z));
+    }
+    out
+}
+
+/// Smallest-magnitude surface rise between two platforms that share a boundary.
+///
+/// A ramp's surface varies across its footprint, so a single height cannot describe
+/// the edge: a ramp lying on a big platform touches that platform along its whole
+/// perimeter, and the player walks on at the LOW edge. Sampling the smaller
+/// footprint's perimeter and keeping the best (smallest |rise|) pair where the
+/// sample lies on the other footprint gives the edge the player can actually use.
+/// Flat platforms report the same rise at every sample, so their behaviour is
+/// unchanged. Returns `None` when the footprints do not touch.
+fn contact_rise(from: &Platform, to: &Platform) -> Option<f32> {
+    let (small, other) = if footprint_area(&from.bounds) <= footprint_area(&to.bounds) {
+        (from, to)
+    } else {
+        (to, from)
+    };
+    let mut best: Option<f32> = None;
+    for (x, z) in perimeter_samples(&small.bounds, 8) {
+        if !point_in_xz(&other.bounds, x, z, EPS) {
+            continue;
+        }
+        let d = surface_at(other, x, z) - surface_at(small, x, z);
+        if best.is_none_or(|b: f32| d.abs() < b.abs()) {
+            best = Some(d);
+        }
+    }
+    best
+}
+
+/// The rise the reachability graph uses for the directed edge `from -> to`.
+///
+/// Touching platforms compare their surfaces where they meet (see [`contact_rise`]),
+/// which is what makes ramps walkable from the platform they rest on; platforms with
+/// a real gap compare the surfaces nearest each other. Flat platforms report
+/// `to.bounds.max.y - from.bounds.max.y`, exactly as before ramps existed.
+pub fn edge_rise(from: &Platform, to: &Platform) -> f32 {
+    if rect_gap(&from.bounds, &to.bounds) <= EPS {
+        contact_rise(from, to).unwrap_or_else(|| nearest_surface(to, from) - nearest_surface(from, to))
+    } else {
+        nearest_surface(to, from) - nearest_surface(from, to)
+    }
+}
+
 /// Directed edge: can a player land on `to` from `from`?
 ///
 /// Touching edges (gap <= EPS) are walk/step/drop edges and always fair: a touching step (|rise| <= 0.55 u) is
@@ -2047,12 +2127,13 @@ fn design_max_gap(dy: f32) -> Option<f32> {
 /// <= (design max gap for its rise) - 1.0 u comfort. Jump pads launch to targets up to +3.5 u (apex - 0.5)
 /// within 4.5 u, and their targets still need the >= 2.0 u extent.
 fn can_jump_or_step(from: &Platform, to: &Platform) -> bool {
-    let dt = to.bounds.max.y - from.bounds.max.y;
     let gap = rect_gap(&from.bounds, &to.bounds);
-    if gap <= EPS && dt.abs() <= 0.55 + EPS {
+    let touching = gap <= EPS;
+    let dt = edge_rise(from, to);
+    if touching && dt.abs() <= 0.55 + EPS {
         return true; // touching walk/step
     }
-    if gap <= EPS && dt < -0.55 {
+    if touching && dt < -0.55 {
         return true; // touching drop (gap ~0, rise < -0.55): always fine
     }
     let small = (to.bounds.max.x - to.bounds.min.x).min(to.bounds.max.z - to.bounds.min.z);
@@ -2091,7 +2172,7 @@ pub fn validate(level: &LevelData) -> Result<(), String> {
 
     // Kinds.
     for p in platforms {
-        if p.kind != PLATFORM_NORMAL && p.kind != PLATFORM_CRUMBLE && p.kind != PLATFORM_JUMP_PAD {
+        if p.kind != PLATFORM_NORMAL && p.kind != PLATFORM_CRUMBLE && p.kind != PLATFORM_JUMP_PAD && !is_ramp(p.kind) {
             return Err(format!("platform {} has unknown kind {}", p.id, p.kind));
         }
     }
@@ -2496,6 +2577,7 @@ pub fn platform_graph(level: &LevelData) -> Vec<Vec<usize>> {
 #[allow(dead_code)] // shared fixtures; not every helper is used by every build of the tests
 mod tests {
     use super::*;
+    use protocol::PLATFORM_RAMP_PX;
 
     fn hub_json_variant() -> String {
         r#"{"version":1,"chunks":[
@@ -2634,6 +2716,57 @@ mod tests {
            "sockets":[],"gift_slots":[],"enemy_slots":[[0,1,0],[1,1,0],[2,1,0],[3,1,0],[0,1,2],[1,1,2],[2,1,2],[3,1,2]],"altar_slots":[],"beacon":[1,0,1]}
         ]}"#;
         assert!(parse_catalog(empty_box).is_err());
+    }
+
+    /// A ramp resting on a big platform touches it along its whole perimeter, so the
+    /// edge has to be judged where the surfaces meet (the ramp's LOW edge), not at the
+    /// box tops. Judging by box tops made every ramp-on-platform edge a +4 u jump the
+    /// controller cannot perform, which disconnected whole levels.
+    #[test]
+    fn ramp_resting_on_a_platform_is_walkable_from_it() {
+        let base = Platform {
+            id: 0,
+            kind: PLATFORM_NORMAL,
+            bounds: Aabb {
+                min: Vec3::new(0.0, -0.5, 0.0),
+                max: Vec3::new(20.0, 0.0, 12.0),
+            },
+        };
+        let ramp = Platform {
+            id: 1,
+            kind: PLATFORM_RAMP_PX,
+            bounds: Aabb {
+                min: Vec3::new(0.0, 0.0, 4.5),
+                max: Vec3::new(8.0, 4.0, 7.5),
+            },
+        };
+        assert_eq!(edge_rise(&base, &ramp), 0.0, "walk on at the ramp's low edge");
+        assert_eq!(edge_rise(&ramp, &base), 0.0, "walk off at the ramp's low edge");
+        assert!(can_jump_or_step(&base, &ramp));
+        assert!(can_jump_or_step(&ramp, &base));
+
+        // The ramp's high end meets a slab whose top is 0.5 u above it: a step, not a jump.
+        let slab = Platform {
+            id: 2,
+            kind: PLATFORM_NORMAL,
+            bounds: Aabb {
+                min: Vec3::new(8.0, 4.0, 0.0),
+                max: Vec3::new(14.0, 4.5, 12.0),
+            },
+        };
+        assert!((edge_rise(&ramp, &slab) - 0.5).abs() < 1e-4);
+        assert!(can_jump_or_step(&ramp, &slab));
+
+        // A platform 4.5 u away and 2.5 u above the ramp's surface there is out of reach.
+        let far_high = Platform {
+            id: 3,
+            kind: PLATFORM_NORMAL,
+            bounds: Aabb {
+                min: Vec3::new(0.0, 4.0, 12.0),
+                max: Vec3::new(8.0, 4.5, 14.0),
+            },
+        };
+        assert!(!can_jump_or_step(&ramp, &far_high));
     }
 
     #[test]

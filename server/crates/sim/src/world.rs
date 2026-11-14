@@ -23,7 +23,10 @@ pub fn is_ramp(kind: u8) -> bool {
 }
 
 /// Surface height of `platform` at `(x, z)`, ignoring its x/z bounds.
-fn surface_height(platform: &Platform, x: f32, z: f32) -> f32 {
+///
+/// Flat platforms report `bounds.max.y` everywhere; ramps interpolate linearly
+/// between `bounds.min.y` at the low edge and `bounds.max.y` at the high edge.
+pub fn surface_at(platform: &Platform, x: f32, z: f32) -> f32 {
     let b = &platform.bounds;
     let fraction = match platform.kind {
         PLATFORM_RAMP_PX => ramp_fraction(x, b.min.x, b.max.x),
@@ -176,7 +179,7 @@ impl World {
         if x < b.min.x || x > b.max.x || z < b.min.z || z > b.max.z {
             return None;
         }
-        Some(surface_height(platform, x, z))
+        Some(surface_at(platform, x, z))
     }
 
     /// [`World::surface_top`] with `x`/`z` clamped into the platform's x/z
@@ -188,7 +191,7 @@ impl World {
     pub(crate) fn surface_top_clamped(&self, index: usize, x: f32, z: f32) -> Option<f32> {
         let platform = self.platforms.get(index)?;
         let b = &platform.bounds;
-        Some(surface_height(
+        Some(surface_at(
             platform,
             x.clamp(b.min.x, b.max.x),
             z.clamp(b.min.z, b.max.z),

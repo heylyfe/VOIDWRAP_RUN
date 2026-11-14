@@ -956,7 +956,7 @@ fn every_graph_edge_kind_is_physically_doable() {
                 for &to_i in edges {
                     let from = &lvl.platforms[from_i];
                     let to = &lvl.platforms[to_i];
-                    let rise = to.bounds.max.y - from.bounds.max.y;
+                    let rise = levelgen::edge_rise(from, to);
                     let gap = gap_xz(from, to);
                     // Touching and within step height: a plain step; touching and lower:
                     // a drop; touching and otherwise level: a walk. (Mirrored from

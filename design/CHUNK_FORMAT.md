@@ -7,12 +7,12 @@ One file: `design/chunks.json`:
 CHUNK:
 
     {
-      "id": "ch05_stair_of_embers",          // unique, [a-z0-9_]
-      "name": "Stair of Embers",
+      "id": "ch05_ramp_of_embers",          // unique, [a-z0-9_]
+      "name": "Ramp of Embers",
       "role": "hub" | "path" | "junction" | "dead_end",
       "min_level": 1, "difficulty": 1,      // 1..3
-      "tags": ["stairs", "climb"],
-      "platforms": [ { "kind": "NORMAL" | "CRUMBLE" | "JUMP_PAD", "min": [x, y, z], "max": [x, y, z] } ],
+      "tags": ["ramp", "climb"],
+      "platforms": [ { "kind": "NORMAL" | "CRUMBLE" | "JUMP_PAD" | "RAMP_PX" | "RAMP_NX" | "RAMP_PZ" | "RAMP_NZ", "min": [x, y, z], "max": [x, y, z] } ],
       "sockets": [ { "id": "a", "pos": [x, y, z], "facing": "N" | "E" | "S" | "W", "width": 4 } ],
       "gift_slots": [ { "pos": [x, y, z], "elevated": false } ],
       "enemy_slots": [ [x, y, z] ],          // hub only: exactly 8, around the beacon
@@ -28,10 +28,12 @@ Coordinates (units = metres, player 0.8 x 1.8 x 0.8):
   continuous walkway.
 - Joining: chunk B is rotated by a multiple of 90 degrees about Y (sockets, slots and platforms rotate with it) and
   translated so that B's socket `pos` equals A's socket `pos`, with opposite facings (A faces N, B's socket faces S).
-- Platforms are axis-aligned boxes (after 90 degree rotations they stay axis-aligned). Walk surface = `max.y`.
+- Platforms are axis-aligned boxes (after 90 degree rotations they stay axis-aligned); ramps are axis-aligned wedges
+  (see Ramps). Walk surface = `max.y` for boxes; ramps walk on the sloped line (see Ramps).
   Typical thickness 0.5-1.0 u; pillars are tall thin NORMAL boxes under walkways (decorative support, still solid).
-- Widths: walkways >= 3 u across the direction of travel; hubs/junctions >= 6 u. Stair steps: risers of 0.5 u
-  (walkable thanks to the controller's step-up of 0.55 u) and treads >= 1.0 u deep, >= 3 u wide.
+- Widths: walkways >= 3 u across the direction of travel; hubs/junctions >= 6 u. A ramp's rise over its run must not
+  exceed 0.5 (about 26.6 degrees), its run must be at least 2.0 u, and its width across the direction of travel must be
+  at least 3 u. Stairs no longer exist anywhere in the game.
 - Jumps inside a chunk must stay inside the design hop-envelope table (M3_DESIGN 4.1, "design max gap").
 - JUMP_PAD: a NORMAL-sized box (>= 2 x 2 u) that launches the player to ~4 u above its top.
 - Gift slots: `pos.y = platform top + 0.3`, on NORMAL platforms only (never CRUMBLE/JUMP_PAD), >= 2.0 u apart,
@@ -39,3 +41,14 @@ Coordinates (units = metres, player 0.8 x 1.8 x 0.8):
   (about every 2.0-2.6 u) so the assembler can fill up to the level's gift count.
 - Stacking: any two platforms of different layers that overlap in XZ must have >= 4.0 u vertical clearance between
   the lower one's top and the upper one's bottom (the same rule applies between chunks).
+
+Ramps:
+- Four kinds: `RAMP_PX` low at min.x high at max.x; `RAMP_NX` low at max.x high at min.x;
+  `RAMP_PZ` low at min.z high at max.z; `RAMP_NZ` low at max.z high at min.z.
+- `bounds.min.y` is the surface height at the LOW edge; `bounds.max.y` is the surface height at the HIGH edge.
+- The walk surface is a straight line between them across the slope axis: surface height at (x, z) is linear along
+  that axis from `bounds.min.y` (low edge) to `bounds.max.y` (high edge).
+- The solid volume is everything below that surface. The low end has no thickness; the high end is
+  `max.y - min.y` tall.
+- Ramps use the same socket, stacking-clearance and hop-envelope rules as boxes. Ramp limits (rise/run <= 0.5,
+  run >= 2.0 u, width >= 3 u) are stated under Widths above.

@@ -16,7 +16,7 @@ The project is a pre-release alpha (alpha 3). Working:
 - Desktop game window (no browser needed; `PLAY-IN-BROWSER` falls back to the web browser)
 - A lobby with class choice, enemy, upgrade, and curse voting
 - Classes: Striker, Grappler, Glider and the new Bulwark (replaces the Blinker), each with an ability
-- Huge modular maps built from hand-made pieces: stacked layers on pillars, walkable stairs, towers, two-level bridges, jump pads, loops and junctions
+- Huge modular maps built from hand-made pieces: stacked layers on pillars, walkable ramps, towers, two-level bridges, jump pads, loops and junctions
 - Two-phase levels: collect the gifts, then the map collapses from the outside in while golden gifts mark the spots you emptied
 - A lobby shop for golden-gift money: extra lives, rerolls, small permanent boosts (new prices — you earn far more gold now)
 - Altars: one random upgrade and one random curse each

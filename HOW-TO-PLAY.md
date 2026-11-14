@@ -132,8 +132,8 @@ Good to know:
 
 The maps are much bigger now. They are built from hand-made pieces that the game puts together:
 
-- several walkway layers stacked on pillars, joined by stairs;
-- stairs with SMALL steps — you walk up them, you do not need to jump;
+- several walkway layers stacked on pillars, joined by ramps;
+- ramps you walk up and down at full speed — you never need to jump;
 - tall towers above everything;
 - bridges with a second road on top;
 - glowing jump pads that throw you about 4 metres into the air;

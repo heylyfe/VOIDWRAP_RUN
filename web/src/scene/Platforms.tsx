@@ -5,6 +5,8 @@ import type { JSX } from "react";
 import { useFrame } from "@react-three/fiber";
 import {
   BoxGeometry,
+  BufferAttribute,
+  BufferGeometry,
   DynamicDrawUsage,
   Group,
   InstancedBufferAttribute,
@@ -22,7 +24,7 @@ import {
 } from "@/protocol/generated";
 import type { Platform, TileState } from "@/protocol/generated";
 import { iceTint } from "./iceTint";
-import { isPillar, platformCenter, platformSize } from "./platformUtils";
+import { isPillar, platformCenter, platformSize, rampInfo } from "./platformUtils";
 import type { Vec3Tuple } from "./platformUtils";
 import type { Theme } from "./theme";
 import {
@@ -47,6 +49,7 @@ const GONE_SINK_DEPTH = 14;
 const SHAKE_AMP = 0.055;
 
 const scratchMatrix = new Matrix4();
+const scratchRotation = new Matrix4();
 
 /** Phase offset per platform id so shakes/blinks do not line up. */
 function phaseForId(id: number): number {
@@ -56,7 +59,12 @@ function phaseForId(id: number): number {
 interface InstanceRecord {
   id: number;
   center: Vec3Tuple;
+  /** World-space extents; size[1] drives the gone-sink depth. */
   size: Vec3Tuple;
+  /** Scale applied in the wedge's local axes before rotation (ramps only); equals size for boxes. */
+  localScale: Vec3Tuple;
+  /** Y rotation of the instance; ramps rotate their wedge per kind, boxes use 0. */
+  spin: number;
   phase: number;
   pillar: boolean;
   mesh: InstancedMesh;
@@ -70,6 +78,66 @@ interface BuiltPlatforms {
   holder: Group;
   records: InstanceRecord[];
   timeUniform: { value: number };
+}
+
+/** Compose scale * (optional Y rotation) into scratchMatrix and place it at (x, y, z). */
+function composeInstanceMatrix(localScale: Vec3Tuple, spin: number, x: number, y: number, z: number): void {
+  scratchMatrix.makeScale(localScale[0], localScale[1], localScale[2]);
+  if (spin !== 0) {
+    scratchRotation.makeRotationY(spin);
+    scratchMatrix.premultiply(scratchRotation);
+  }
+  scratchMatrix.setPosition(x, y, z);
+}
+
+/**
+ * Unit wedge: 1x1 footprint, flat bottom at y = -0.5, zero thickness at the low edge
+ * (z = -0.5), 1 u tall at the high edge (z = +0.5). Non-indexed with computed flat
+ * normals; scale per instance by the platform's size and rotate per ramp kind.
+ */
+function createWedgeGeometry(): BufferGeometry {
+  // Corner shorthand: L* = low edge, H* = high edge, B* = bottom at high edge.
+  const L0: Vec3Tuple = [-0.5, -0.5, -0.5];
+  const L1: Vec3Tuple = [0.5, -0.5, -0.5];
+  const B0: Vec3Tuple = [-0.5, -0.5, 0.5];
+  const B1: Vec3Tuple = [0.5, -0.5, 0.5];
+  const H0: Vec3Tuple = [-0.5, 0.5, 0.5];
+  const H1: Vec3Tuple = [0.5, 0.5, 0.5];
+  const triangles: Array<[Vec3Tuple, Vec3Tuple, Vec3Tuple]> = [
+    // Bottom face (normal -Y).
+    [L0, B1, B0],
+    [L0, L1, B1],
+    // Sloped top face (normal 0/1/-1 up toward the low edge).
+    [L0, H1, L1],
+    [H0, H1, L0],
+    // High end (normal +Z). The low end has zero thickness, so no face.
+    [B0, B1, H1],
+    [B0, H1, H0],
+    // Side faces (normals +/-X).
+    [L1, H1, B1],
+    [L0, B0, H0],
+  ];
+  const positions = new Float32Array(triangles.length * 9);
+  const uvs = new Float32Array(triangles.length * 6);
+  let p = 0;
+  let u = 0;
+  for (const [a, b, c] of triangles) {
+    for (const v of [a, b, c]) {
+      positions[p] = v[0];
+      positions[p + 1] = v[1];
+      positions[p + 2] = v[2];
+      p += 3;
+      // Planar UVs sized to the unit wedge; the surface shader checkers in world space.
+      uvs[u] = v[0] + 0.5;
+      uvs[u + 1] = Math.abs(v[1] + 0.5) > Math.abs(v[2] + 0.5) ? v[1] + 0.5 : v[2] + 0.5;
+      u += 2;
+    }
+  }
+  const geometry = new BufferGeometry();
+  geometry.setAttribute("position", new BufferAttribute(positions, 3));
+  geometry.setAttribute("uv", new BufferAttribute(uvs, 2));
+  geometry.computeVertexNormals();
+  return geometry;
 }
 
 /** Resolve the tile palette to concrete colors, applying the ice tint when frozen. */
@@ -161,8 +229,7 @@ function buildGroups(platforms: readonly Platform[], theme: Theme, icy: boolean)
     list.forEach((p, i) => {
       const size = platformSize(p);
       const center = platformCenter(p);
-      scratchMatrix.makeScale(size[0], size[1], size[2]);
-      scratchMatrix.setPosition(center[0], center[1], center[2]);
+      composeInstanceMatrix(size, 0, center[0], center[1], center[2]);
       mesh.setMatrixAt(i, scratchMatrix);
       const pillar = isPillar(size);
       attr.setXYZW(i, 0, 0, 1, pillar ? 1 : 0);
@@ -170,6 +237,8 @@ function buildGroups(platforms: readonly Platform[], theme: Theme, icy: boolean)
         id: p.id,
         center,
         size,
+        localScale: size,
+        spin: 0,
         phase: phaseForId(p.id),
         pillar,
         mesh,
@@ -183,6 +252,53 @@ function buildGroups(platforms: readonly Platform[], theme: Theme, icy: boolean)
     attr.needsUpdate = true;
     holder.add(mesh);
   }
+
+  // Ramps: one shared InstancedMesh with a unit wedge geometry, rotated per ramp kind.
+  // Ramps use the same non-crumble surface material as NORMAL platforms and participate in
+  // the same per-instance tile-state animation (shake / sink), so a ramp with WARN/GONE
+  // tiles shakes and sinks exactly like a box.
+  const rampList = platforms.filter((p) => rampInfo(p.kind).isRamp);
+  const rampGeometry = createWedgeGeometry();
+  const rampMaterial = createSurfaceMaterial(PLATFORM_NORMAL, palette, icy, timeUniform);
+  const rampCount = Math.max(rampList.length, 1);
+  const rampMesh = new InstancedMesh(rampGeometry, rampMaterial, rampCount);
+  rampMesh.count = rampList.length;
+  rampMesh.frustumCulled = false;
+  rampMesh.instanceMatrix.setUsage(DynamicDrawUsage);
+  const rampAttr = new InstancedBufferAttribute(new Float32Array(rampCount * 4), 4);
+  rampAttr.setUsage(DynamicDrawUsage);
+  rampGeometry.setAttribute("aState", rampAttr);
+
+  rampList.forEach((p, i) => {
+    const size = platformSize(p);
+    const center = platformCenter(p);
+    const info = rampInfo(p.kind);
+    const alongX = info.axis === "x";
+    const spin = info.sign >= 0 ? (alongX ? Math.PI / 2 : 0) : alongX ? -Math.PI / 2 : Math.PI;
+    // The wedge's run lies on local z; for X-axis ramps we scale local z by the world x extent.
+    const localScale: Vec3Tuple = alongX ? [size[2], size[1], size[0]] : size;
+    composeInstanceMatrix(localScale, spin, center[0], center[1], center[2]);
+    rampMesh.setMatrixAt(i, scratchMatrix);
+    const pillar = isPillar(size);
+    rampAttr.setXYZW(i, 0, 0, 1, pillar ? 1 : 0);
+    records.push({
+      id: p.id,
+      center,
+      size,
+      localScale,
+      spin,
+      phase: phaseForId(p.id),
+      pillar,
+      mesh: rampMesh,
+      attr: rampAttr,
+      index: i,
+      touched: false,
+      activeFrame: false,
+    });
+  });
+  rampMesh.instanceMatrix.needsUpdate = true;
+  rampAttr.needsUpdate = true;
+  holder.add(rampMesh);
 
   return { holder, records, timeUniform };
 }
@@ -202,8 +318,7 @@ function disposeBuilt(built: BuiltPlatforms): void {
 }
 
 function resetRecord(rec: InstanceRecord): void {
-  scratchMatrix.makeScale(rec.size[0], rec.size[1], rec.size[2]);
-  scratchMatrix.setPosition(rec.center[0], rec.center[1], rec.center[2]);
+  composeInstanceMatrix(rec.localScale, rec.spin, rec.center[0], rec.center[1], rec.center[2]);
   rec.mesh.setMatrixAt(rec.index, scratchMatrix);
   rec.attr.setXYZW(rec.index, 0, 0, 1, rec.pillar ? 1 : 0);
   rec.mesh.instanceMatrix.needsUpdate = true;
@@ -212,10 +327,10 @@ function resetRecord(rec: InstanceRecord): void {
 }
 
 /**
- * Platforms at scale: three InstancedMeshes (one per kind), world-space procedural
- * checkerboard tops, glowing rim on the top face, dark-stone shader path for tall
- * thin platforms (pillars). Tile states animate via per-instance matrix/attribute
- * writes — no geometry rebuilds.
+ * Platforms at scale: four InstancedMeshes (NORMAL, CRUMBLE, JUMP_PAD boxes, plus one
+ * shared wedge mesh for all ramp kinds), world-space procedural checkerboard tops, glowing
+ * rim on the top face, dark-stone shader path for tall thin platforms (pillars). Tile
+ * states animate via per-instance matrix/attribute writes — no geometry rebuilds.
  */
 export function Platforms(props: {
   platforms: readonly Platform[];
@@ -284,11 +399,10 @@ export function Platforms(props: {
       }
 
       if (hide) {
-        scratchMatrix.makeScale(0.0001, 0.0001, 0.0001);
+        composeInstanceMatrix([0.0001, 0.0001, 0.0001], rec.spin, rec.center[0] + ox, rec.center[1] - sink, rec.center[2] + oz);
       } else {
-        scratchMatrix.makeScale(rec.size[0], rec.size[1], rec.size[2]);
+        composeInstanceMatrix(rec.localScale, rec.spin, rec.center[0] + ox, rec.center[1] - sink, rec.center[2] + oz);
       }
-      scratchMatrix.setPosition(rec.center[0] + ox, rec.center[1] - sink, rec.center[2] + oz);
       rec.mesh.setMatrixAt(rec.index, scratchMatrix);
       rec.attr.setXYZW(rec.index, t === TILE_WARN ? 1 : 0, t === TILE_FRETTED ? 1 : 0, fade, rec.pillar ? 1 : 0);
       rec.mesh.instanceMatrix.needsUpdate = true;

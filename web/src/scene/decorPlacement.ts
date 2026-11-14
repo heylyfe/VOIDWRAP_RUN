@@ -2,10 +2,12 @@
 // Deterministic from (platforms, seed). Density capped:
 //   * at most MAX_VINES vines, hung from underside edges of walkable platforms,
 //   * at most one lantern per 40 u of walkway (floor(walkwayUnits / 40)), capped at MAX_LANTERNS,
-//   * lanterns only on NORMAL platforms with min horizontal span >= 2.2 u
-//     (posts need stable footing; CRUMBLE collapses, JUMP_PAD tops are launch surfaces).
+//   * lanterns only on NORMAL platforms and ramps (not CRUMBLE, not JUMP_PAD) with min horizontal
+//     span >= 2.2 u (posts need stable footing); for ramps the post stands on the ramp surface,
+//     so its y is the surface height at (x, z), not bounds.max.y.
 // walkwayUnits estimates path length as the sum of (width + depth) of non-JUMP_PAD platforms.
 import type { Platform } from "@/protocol/generated";
+import { rampInfo, rampSurfaceHeight } from "./platformUtils";
 
 // Mirrors web/src/protocol/generated.ts (redeclared so this module stays runtime-dependency-free for tests).
 const PLATFORM_NORMAL = 0;
@@ -37,7 +39,7 @@ export interface VinePlacement {
 export interface LanternPlacement {
   platformId: number;
   x: number;
-  /** Platform top y (the post stands on the deck). */
+  /** Surface y at (x, z) — the post stands on the deck; for ramps this is the ramp surface height. */
   y: number;
   z: number;
 }
@@ -90,7 +92,8 @@ export function platformFootprint(p: Platform): {
 }
 
 export function isLanternEligible(p: Platform): boolean {
-  if (p.kind !== PLATFORM_NORMAL) return false;
+  // Ramps are stable footing like NORMAL decks; CRUMBLE collapses and JUMP_PAD tops launch.
+  if (p.kind !== PLATFORM_NORMAL && !rampInfo(p.kind).isRamp) return false;
   const { w, d } = platformFootprint(p);
   return Math.min(w, d) >= LANTERN_MIN_SPAN;
 }
@@ -121,6 +124,8 @@ export function computeDecor(platforms: readonly Platform[], seed: number): Deco
 
     // Hanging vines under the four underside edges (JUMP_PAD bottoms are allowed —
     // pads survive collapse, their undersides are still static geometry).
+    // For ramps the underside is the flat plane at bounds.min.y (the wedge bottom),
+    // which is exactly what `bottom` reports.
     const edges: Array<{ axis: "x" | "z"; fixed: number; from: number; to: number }> = [
       { axis: "x", fixed: p.bounds.min.z, from: p.bounds.min.x, to: p.bounds.max.x },
       { axis: "x", fixed: p.bounds.max.z, from: p.bounds.min.x, to: p.bounds.max.x },
@@ -148,7 +153,7 @@ export function computeDecor(platforms: readonly Platform[], seed: number): Deco
       if (vines.length >= MAX_VINES) break;
     }
 
-    // Lantern candidates: stable, spacious, plain platforms.
+    // Lantern candidates: stable, spacious, plain platforms and ramps.
     if (isLanternEligible(p) && rng() < LANTERN_CANDIDATE_PROB) {
       lanternCandidates.push({ p, sort: hash32(seed ^ 0x51ab, p.id + 7) });
     }
@@ -166,11 +171,13 @@ export function computeDecor(platforms: readonly Platform[], seed: number): Deco
     const corner = Math.floor(cornerRng() * 4);
     const sx = corner % 2 === 0 ? -1 : 1;
     const sz = corner < 2 ? -1 : 1;
+    const x = fp.cx + sx * (fp.w / 2 - LANTERN_INSET);
+    const z = fp.cz + sz * (fp.d / 2 - LANTERN_INSET);
     lanterns.push({
       platformId: p.id,
-      x: fp.cx + sx * (fp.w / 2 - LANTERN_INSET),
-      y: fp.top,
-      z: fp.cz + sz * (fp.d / 2 - LANTERN_INSET),
+      x,
+      y: rampSurfaceHeight(p, x, z),
+      z,
     });
   }
 
