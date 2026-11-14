@@ -610,6 +610,246 @@
       "stock": 2,
       "kind": "mods",
       "mods": { "fog_density_mul": 0.88 }
+    },
+    {
+      "id": "perk_striker",
+      "name": "Striker's Rhythm",
+      "flavor": "The dash was never a burst. It was a decision.",
+      "effect": "-12% dash cooldown for the rest of the run",
+      "cost": 45,
+      "stock": 1,
+      "kind": "perk",
+      "mods": { "dash_cooldown_mul": 0.88 }
+    },
+    {
+      "id": "perk_grappler",
+      "name": "Longshore Rhythm",
+      "flavor": "Every pull is a step you did not have to take.",
+      "effect": "+10% run speed for the rest of the run",
+      "cost": 45,
+      "stock": 1,
+      "kind": "perk",
+      "mods": { "run_speed_mul": 1.1 }
+    },
+    {
+      "id": "perk_bulwark",
+      "name": "Still Water",
+      "flavor": "The storm breaks on you, and learns to go quiet.",
+      "effect": "enemies sense you 25% shorter for the rest of the run",
+      "cost": 45,
+      "stock": 1,
+      "kind": "perk",
+      "mods": { "enemy_aggro_mul": 0.75 }
+    },
+    {
+      "id": "perk_glider",
+      "name": "Tailwind Lungs",
+      "flavor": "One breath more than the fall was promised.",
+      "effect": "+1 air jump for the rest of the run",
+      "cost": 45,
+      "stock": 1,
+      "kind": "perk",
+      "mods": { "air_jumps_add": 1 }
+    },
+    {
+      "id": "counter_pallbearer",
+      "name": "Spurred Heels",
+      "flavor": "The hearse cannot toll a runner who never stops.",
+      "effect": "Helps against the Footprint Chaser: +12% dash speed",
+      "cost": 35,
+      "stock": 1,
+      "kind": "counter",
+      "mods": { "dash_speed_mul": 1.12 }
+    },
+    {
+      "id": "counter_snapshrike",
+      "name": "Eyed Parries",
+      "flavor": "You have watched the freeze a hundred times. It always telegraphs.",
+      "effect": "Helps against the Orbit Dasher: -15% dash cooldown",
+      "cost": 35,
+      "stock": 1,
+      "kind": "counter",
+      "mods": { "dash_cooldown_mul": 0.85 }
+    },
+    {
+      "id": "counter_moteling",
+      "name": "Muted Bells",
+      "flavor": "Pad your footfalls; let the hush find nothing.",
+      "effect": "Helps against the Stillness Shrieker: -25% enemy aggro",
+      "cost": 35,
+      "stock": 1,
+      "kind": "counter",
+      "mods": { "enemy_aggro_mul": 0.75 }
+    },
+    {
+      "id": "counter_rift_warden",
+      "name": "Sea Anchor",
+      "flavor": "When the walls push, lean the other way.",
+      "effect": "Helps against the Wall Drifter: +12% run speed",
+      "cost": 35,
+      "stock": 1,
+      "kind": "counter",
+      "mods": { "run_speed_mul": 1.12 }
+    },
+    {
+      "id": "counter_gale_wight",
+      "name": "Farsight Draught",
+      "flavor": "See the circle before it becomes the ground.",
+      "effect": "Helps against the Shell Bomber: -25% fog density",
+      "cost": 35,
+      "stock": 1,
+      "kind": "counter",
+      "mods": { "fog_density_mul": 0.75 }
+    },
+    {
+      "id": "counter_lantern_leech",
+      "name": "Leaden Net",
+      "flavor": "Tangle the light before it reaches the gift.",
+      "effect": "Helps against the Gift Stinger: enemies move 15% slower",
+      "cost": 35,
+      "stock": 1,
+      "kind": "counter",
+      "mods": { "enemy_speed_mul": 0.85 }
+    },
+    {
+      "id": "counter_turret",
+      "name": "Flicker Treads",
+      "flavor": "It predicts where you will be. Be elsewhere.",
+      "effect": "Helps against the Bolt Turret: +20% dash speed",
+      "cost": 35,
+      "stock": 1,
+      "kind": "counter",
+      "mods": { "dash_speed_mul": 1.2 }
+    },
+    {
+      "id": "counter_mimic",
+      "name": "Quickdraw Charm",
+      "flavor": "The gift flinches first. Now so can you.",
+      "effect": "Helps against the False Gift: -15% dash cooldown",
+      "cost": 35,
+      "stock": 1,
+      "kind": "counter",
+      "mods": { "dash_cooldown_mul": 0.85 }
+    },
+    {
+      "id": "counter_corrupter",
+      "name": "Clean Boots",
+      "flavor": "The rot forgets a foot that never slows.",
+      "effect": "Helps against the Floor Rotter: +12% run speed",
+      "cost": 35,
+      "stock": 1,
+      "kind": "counter",
+      "mods": { "run_speed_mul": 1.12 }
+    },
+    {
+      "id": "counter_rewind",
+      "name": "Crosswind Pivot",
+      "flavor": "Walk your own line, but refuse to repeat it.",
+      "effect": "Helps against the Path Replayer: +15% jump velocity",
+      "cost": 35,
+      "stock": 1,
+      "kind": "counter",
+      "mods": { "jump_mul": 1.15 }
+    },
+    {
+      "id": "counter_warden",
+      "name": "Soft Soles",
+      "flavor": "Take the gift; leave no footprint worth striking.",
+      "effect": "Helps against the Gift Guard: enemies sense you 30% shorter",
+      "cost": 35,
+      "stock": 1,
+      "kind": "counter",
+      "mods": { "enemy_aggro_mul": 0.7 }
+    },
+    {
+      "id": "counter_peal",
+      "name": "Soft Bellwax",
+      "flavor": "Muffle the ringing before the third bell.",
+      "effect": "Helps against the Bell Ringer: enemies move 15% slower",
+      "cost": 35,
+      "stock": 1,
+      "kind": "counter",
+      "mods": { "enemy_speed_mul": 0.85 }
+    },
+    {
+      "id": "counter_kite",
+      "name": "Tailwind Sail",
+      "flavor": "The farthest runner catches the kinder wind.",
+      "effect": "Helps against the Tether Tracker: +12% run speed",
+      "cost": 35,
+      "stock": 1,
+      "kind": "counter",
+      "mods": { "run_speed_mul": 1.12 }
+    },
+    {
+      "id": "counter_static",
+      "name": "Clear Draught",
+      "flavor": "Thin its fog; watch it dash before it disappears.",
+      "effect": "Helps against the Fog Dasher: -30% fog density",
+      "cost": 35,
+      "stock": 1,
+      "kind": "counter",
+      "mods": { "fog_density_mul": 0.7 }
+    },
+    {
+      "id": "counter_blight",
+      "name": "Salt and Ash",
+      "flavor": "Scar the ground behind you; let the infection starve.",
+      "effect": "Helps against the Ground Infector: +12% run speed",
+      "cost": 35,
+      "stock": 1,
+      "kind": "counter",
+      "mods": { "run_speed_mul": 1.12 }
+    },
+    {
+      "id": "counter_metronome",
+      "name": "Syncopated Heart",
+      "flavor": "The beacon counts. Your heart refuses the beat.",
+      "effect": "Helps against the Beat Keeper: -15% dash cooldown",
+      "cost": 35,
+      "stock": 1,
+      "kind": "counter",
+      "mods": { "dash_cooldown_mul": 0.85 }
+    },
+    {
+      "id": "counter_overlook",
+      "name": "Grey Veil",
+      "flavor": "Wear the fog it watches through.",
+      "effect": "Helps against the Marking Eye: -25% fog density",
+      "cost": 35,
+      "stock": 1,
+      "kind": "counter",
+      "mods": { "fog_density_mul": 0.75 }
+    },
+    {
+      "id": "counter_chorus",
+      "name": "Quiet Pockets",
+      "flavor": "Applaud softly. Never on the beat.",
+      "effect": "Helps against the Choir Summoner: -25% enemy aggro",
+      "cost": 35,
+      "stock": 1,
+      "kind": "counter",
+      "mods": { "enemy_aggro_mul": 0.75 }
+    },
+    {
+      "id": "counter_coil",
+      "name": "Loose Springs",
+      "flavor": "Unwind it before it unwinds you.",
+      "effect": "Helps against the Spring Leaper: +15% dash speed",
+      "cost": 35,
+      "stock": 1,
+      "kind": "counter",
+      "mods": { "dash_speed_mul": 1.15 }
+    },
+    {
+      "id": "counter_lure",
+      "name": "True Lantern",
+      "flavor": "A light that does not promise. Look closer.",
+      "effect": "Helps against the Fog Decoy: -30% fog density",
+      "cost": 35,
+      "stock": 1,
+      "kind": "counter",
+      "mods": { "fog_density_mul": 0.7 }
     }
   ],
   "events": [

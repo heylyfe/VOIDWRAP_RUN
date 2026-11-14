@@ -1171,7 +1171,9 @@ mod tests {
         assert!(matches!(&msgs[1], ServerMsg::Level { data } if data.gifts.is_empty()));
         assert!(matches!(&msgs[2], ServerMsg::RunState { info } if info.phase == PHASE_ENEMY_DRAFT));
         assert!(matches!(&msgs[3], ServerMsg::Draft { enemy_picks: 2, reward_picks: 1, cards } if cards.len() == 7));
-        assert!(matches!(&msgs[4], ServerMsg::Shop { items } if items.len() == 4));
+        // T-082: the shop is the four static items plus contextual upgrades, perks, counters and
+        // purges, so the offer is at least the static sample.
+        assert!(matches!(&msgs[4], ServerMsg::Shop { items } if items.len() >= 4));
         g.tick();
         assert!(matches!(&drain(&mut rx)[..], [ServerMsg::Snapshot { tick: 1, players, .. }] if players.len() == 1));
         assert_eq!(g.conns[&1].player.as_ref().unwrap().name, "tester");

@@ -151,7 +151,7 @@ pub struct ClassDef {
     pub id: String,
 }
 
-/// An item sold in the lobby shop. `kind`: "life" | "reroll" | "mods".
+/// An item sold in the lobby shop. `kind`: "life" | "reroll" | "mods" | "counter" | "perk".
 #[derive(Debug, Clone, Deserialize)]
 pub struct ShopItemDef {
     pub id: String,
@@ -293,7 +293,9 @@ impl Content {
             }
             match item.kind.as_str() {
                 "life" | "reroll" => {}
-                "mods" => {
+                // T-082: `counter` items help against one registry permanent, `perk` items are the
+                // per-class perks. Both carry mods like a `mods` item.
+                "mods" | "counter" | "perk" => {
                     if item.mods.is_empty() {
                         return Err(format!("design/content.json: shop item {} has no mods", item.id));
                     }

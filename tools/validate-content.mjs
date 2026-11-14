@@ -166,10 +166,14 @@ if (JSON.stringify(c).includes("blinker")) err('content: "blinker" must not appe
 
 // --- shop ------------------------------------------------------------------------------------------------------
 // M3 doubled every price (golden gifts are worth 1 g each), so the cost ceiling moved with them.
-const SHOP_KINDS = ["life", "reroll", "mods"];
+// `counter` items (T-082) are the registry-aware extras: one per permanent an enemy can become, each
+// carrying a mod that helps against that enemy. They are additive, so the base seven keep their
+// exact composition rule and the counters are only checked for shape.
+const SHOP_KINDS = ["life", "reroll", "mods", "counter", "perk"];
 if (!Array.isArray(c.shop)) err("shop: missing");
 else {
-  if (c.shop.length !== 7) err(`shop: need exactly 7 items (have ${c.shop.length})`);
+  const base = c.shop.filter((s) => s.kind !== "counter" && s.kind !== "perk");
+  if (base.length !== 7) err(`shop: need exactly 7 base items (have ${base.length})`);
   const counts = { life: 0, reroll: 0, mods: 0 };
   for (const [i, s] of c.shop.entries()) {
     const w = `shop[${i}]`;
@@ -182,7 +186,7 @@ else {
     if (!Number.isInteger(s.cost) || s.cost < 5 || s.cost > 80) err(`${w}.cost=${s.cost} must be an integer 5..80`);
     if (!Number.isInteger(s.stock) || s.stock < 1 || s.stock > 3) err(`${w}.stock=${s.stock} must be an integer 1..3`);
     if (s.kind === "life" && !(s.cost >= 50 && s.cost <= 70)) err(`${w}.cost=${s.cost} must be 50..70 for a life`);
-    if (s.kind === "mods") {
+    if (s.kind === "mods" || s.kind === "counter" || s.kind === "perk") {
       checkMods(w, s.mods, false);
       for (const key of Object.keys(s.mods ?? {})) {
         if (!usedModKeys.has(key)) err(`${w}.mods.${key}: not a key used by any upgrade or curse`);
@@ -192,6 +196,11 @@ else {
   if (counts.life !== 1) err(`shop: need exactly 1 life item (have ${counts.life})`);
   if (counts.reroll !== 1) err(`shop: need exactly 1 reroll item (have ${counts.reroll})`);
   if (counts.mods !== 5) err(`shop: need exactly 5 mods items (have ${counts.mods})`);
+  const counterIds = new Set();
+  for (const s of c.shop.filter((x) => x.kind === "counter")) {
+    if (counterIds.has(s.id)) err(`shop: duplicate counter id ${JSON.stringify(s.id)}`);
+    counterIds.add(s.id);
+  }
 }
 
 // --- level events ----------------------------------------------------------------------------------------------

@@ -34,6 +34,12 @@ const REWARD_PICKS: u8 = 1;
 const GREATER_EVERY: u32 = 10;
 /// Shop items offered per lobby (first, plain lobby gets none).
 const SHOP_OFFER: usize = 4;
+/// Cost of a contextual upgrade card offered in the shop.
+const SHOP_UPGRADE_COST: u32 = 25;
+/// Cost of a curse-removal (purge) item; stock equals the stacks of that curse held.
+const SHOP_PURGE_COST: u32 = 30;
+/// How many distinct upgrade cards are drawn into the shop per lobby.
+const SHOP_UPGRADE_DRAWS: usize = 2;
 /// Ticks of siren/banner before the collapse proper begins (design §1.4: 3.0 s).
 const COLLAPSE_PENDING_TICKS: u32 = 3 * TICK_HZ;
 /// The countdown of a vote session, in TICK_HZ ticks (20 s at 20 Hz).
@@ -532,7 +538,8 @@ pub struct Offer {
 /// One item on offer in the lobby shop, with the stock left for this lobby.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShopOffer {
-    /// Id of the item in design/content.json.
+    /// Id of the item in design/content.json (or a contextual id: `upgrade::<upgrade id>`,
+    /// `purge::<curse id>`). `perk_<class id>` and `counter_<enemy id>` ids live in content.json.
     pub id: String,
     /// Cost in currency.
     pub cost: u32,
@@ -547,7 +554,7 @@ pub enum ShopPurchase {
     Life,
     /// Rerolled the reward cards of the current draft offer.
     Reroll,
-    /// Applied a mods item like an upgrade (not recorded in RunInfo lists).
+    /// Applied a mods-like item (mods, perk or counter card, or a purchased upgrade card).
     Mods,
 }
 
@@ -588,6 +595,9 @@ pub struct Run {
     pub seed: u32,
     pub upgrades: Vec<String>,
     pub curses: Vec<String>,
+    /// Ids of shop `mods`/`perk`/`counter` items bought this run, so a curse purge can rebuild the
+    /// remaining mods from scratch without silently dropping them.
+    pub purchased_mods: Vec<String>,
     pub mods: RunMods,
     pub offer: Option<Offer>,
     /// Hazards view of the current level: enemies, projectiles, crumbling/fretted tiles.
@@ -635,6 +645,7 @@ impl Run {
             seed,
             upgrades: Vec::new(),
             curses: Vec::new(),
+            purchased_mods: Vec::new(),
             mods: RunMods::default(),
             offer: None,
             hazards: Hazards::new(),
@@ -856,25 +867,78 @@ impl Run {
         }
     }
 
-    /// Pick the lobby shop: up to SHOP_OFFER distinct items from content, stock from content, run RNG.
+    /// Pick the lobby shop. Two layers, both deterministic off the run RNG:
+    /// a static sample of SHOP_OFFER items from the content shop (life/reroll/mods kinds only),
+    /// then contextual offerings derived from the run's state:
+    /// - two distinct upgrade cards (`upgrade::<upgrade id>`),
+    /// - one copy of every class perk defined in content (`perk_<class id>`),
+    /// - one copy of every counter whose enemy is a permanent of this run (`counter_<enemy id>`),
+    /// - one `purge::<curse id>` per distinct curse held, stock = stacks held.
     fn make_shop(&mut self, content: &Content) -> Option<Vec<ShopOffer>> {
-        if self.level_num == 1 || content.shop.is_empty() {
+        if self.level_num == 1 {
             return None;
         }
-        let picks = self.rng.sample(content.shop.len(), SHOP_OFFER.min(content.shop.len()));
-        Some(
-            picks
-                .into_iter()
-                .map(|i| {
-                    let def = &content.shop[i];
-                    ShopOffer {
-                        id: def.id.clone(),
-                        cost: def.cost,
-                        stock: def.stock,
-                    }
-                })
-                .collect(),
-        )
+        let statics: Vec<usize> = content
+            .shop
+            .iter()
+            .enumerate()
+            .filter(|(_, def)| matches!(def.kind.as_str(), "life" | "reroll" | "mods"))
+            .map(|(i, _)| i)
+            .collect();
+        let mut offer: Vec<ShopOffer> = Vec::new();
+        for i in self.rng.sample(statics.len(), SHOP_OFFER.min(statics.len())) {
+            let def = &content.shop[statics[i]];
+            offer.push(ShopOffer {
+                id: def.id.clone(),
+                cost: def.cost,
+                stock: def.stock,
+            });
+        }
+        // Contextual upgrade cards.
+        let draws = SHOP_UPGRADE_DRAWS.min(content.upgrades.len());
+        for i in self.rng.sample(content.upgrades.len(), draws) {
+            offer.push(ShopOffer {
+                id: format!("upgrade::{}", content.upgrades[i].id),
+                cost: SHOP_UPGRADE_COST,
+                stock: 1,
+            });
+        }
+        // Class perks from content (one copy each; the team-wide currency buys them for the run).
+        for def in content.shop.iter().filter(|d| d.kind == "perk") {
+            offer.push(ShopOffer {
+                id: def.id.clone(),
+                cost: def.cost,
+                stock: 1,
+            });
+        }
+        // Counters: only for permanents the run has actually accumulated. An enemy's counter is
+        // sold as the item that helps against it; the id convention is `counter_<enemy id>`.
+        let permanents = self.all_permanents();
+        for def in content.shop.iter().filter(|d| d.kind == "counter") {
+            let Some(enemy) = def.id.strip_prefix("counter_") else {
+                continue;
+            };
+            if permanents.iter().any(|p| p.as_str() == enemy) {
+                offer.push(ShopOffer {
+                    id: def.id.clone(),
+                    cost: def.cost,
+                    stock: 1,
+                });
+            }
+        }
+        // Curse removals: one targeted purge per distinct curse held, stock = stacks held.
+        let mut held: BTreeMap<&str, u8> = BTreeMap::new();
+        for curse in &self.curses {
+            *held.entry(curse.as_str()).or_default() += 1;
+        }
+        for (curse_id, stacks) in held {
+            offer.push(ShopOffer {
+                id: format!("purge::{}", curse_id),
+                cost: SHOP_PURGE_COST,
+                stock: stacks,
+            });
+        }
+        if offer.is_empty() { None } else { Some(offer) }
     }
 
     /// Replace the reward cards of the current offer, keeping enemy cards (and enemy picks) at the same indices.
@@ -891,7 +955,34 @@ impl Run {
         true
     }
 
-    /// Buy an item from the current lobby shop (team-wide currency). Nothing is charged when the purchase fails.
+    /// Rebuild the run's mods from scratch: base + every recorded upgrade, curse and purchased stat-mod
+    /// item. Used when a curse is purged so the removal actually unloads its effect instead of just
+    /// hiding it from the list. Multiplication and addition commute here, the life pool is not re-banked,
+    /// and shop purchases applied via `purchased_mods` are preserved.
+    fn rebuild_mods(&mut self, content: &Content) {
+        let mut fresh = RunMods::default();
+        for id in &self.upgrades {
+            if let Some(def) = content.upgrade(id) {
+                fresh.apply(&def.mods);
+            }
+        }
+        for id in &self.curses {
+            if let Some(def) = content.curse(id) {
+                fresh.apply(&def.mods);
+            }
+        }
+        for id in &self.purchased_mods {
+            if let Some(def) = content.shop_item(id) {
+                fresh.apply(&def.mods);
+            }
+        }
+        self.mods = fresh;
+    }
+
+    /// Buy an item from the current lobby shop (team-wide currency). Nothing is charged when the purchase fails,
+    /// and no stock is taken. The stock check, the currency check, the effect and the charge all happen in one
+    /// `&mut self` call, so a concurrent buyer sees either the pre- or the post-purchase state, never a torn one:
+    /// the loser of a race for the last copy gets `SoldOut` and is charged nothing.
     pub fn buy_shop_item(&mut self, content: &Content, item: &str) -> Result<ShopPurchase, ShopError> {
         if self.phase != PHASE_ENEMY_DRAFT {
             return Err(ShopError::NotInLobby);
@@ -910,28 +1001,53 @@ impl Run {
         if self.currency < cost {
             return Err(ShopError::NotEnoughCurrency);
         }
-        let Some(def) = content.shop_item(item) else {
-            return Err(ShopError::UnknownItem);
-        };
-        // Apply the effect.
-        let purchase = match def.kind.as_str() {
-            "life" => {
-                self.lives = self.lives.saturating_add(1);
-                ShopPurchase::Life
-            }
-            "reroll" => {
-                if !self.reroll_rewards(content) {
-                    return Err(ShopError::UnknownItem);
+        let purchase = if let Some(curse_id) = item.strip_prefix("purge::") {
+            // The curse must actually be held; the offer can only carry purges for held curses, and a stale
+            // purge (bought out in another slot) is refused without charging.
+            match self.curses.iter().rposition(|c| c.as_str() == curse_id) {
+                None => return Err(ShopError::UnknownItem),
+                Some(pos) => {
+                    self.curses.remove(pos);
+                    self.rebuild_mods(content);
+                    ShopPurchase::Mods
                 }
-                ShopPurchase::Reroll
             }
-            "mods" => {
-                let before = self.mods.extra_lives;
-                self.mods.apply(&def.mods);
-                self.lives = self.lives.saturating_add(self.mods.extra_lives.saturating_sub(before));
-                ShopPurchase::Mods
+        } else if let Some(upgrade_id) = item.strip_prefix("upgrade::") {
+            let Some(def) = content.upgrade(upgrade_id) else {
+                return Err(ShopError::UnknownItem);
+            };
+            let lives_before = self.mods.extra_lives;
+            self.mods.apply(&def.mods);
+            self.lives = self
+                .lives
+                .saturating_add(self.mods.extra_lives.saturating_sub(lives_before));
+            self.upgrades.push(upgrade_id.to_string());
+            ShopPurchase::Mods
+        } else {
+            let Some(def) = content.shop_item(item) else {
+                return Err(ShopError::UnknownItem);
+            };
+            // Apply the effect.
+            match def.kind.as_str() {
+                "life" => {
+                    self.lives = self.lives.saturating_add(1);
+                    ShopPurchase::Life
+                }
+                "reroll" => {
+                    if !self.reroll_rewards(content) {
+                        return Err(ShopError::UnknownItem);
+                    }
+                    ShopPurchase::Reroll
+                }
+                "mods" | "perk" | "counter" => {
+                    let before = self.mods.extra_lives;
+                    self.mods.apply(&def.mods);
+                    self.lives = self.lives.saturating_add(self.mods.extra_lives.saturating_sub(before));
+                    self.purchased_mods.push(def.id.clone());
+                    ShopPurchase::Mods
+                }
+                _ => return Err(ShopError::UnknownItem),
             }
-            _ => return Err(ShopError::UnknownItem),
         };
         // Charge only after the effect went through.
         if let Some(entry) = self
@@ -1585,11 +1701,20 @@ mod tests {
         assert!(first.shop.is_none(), "the first, plain lobby has no shop");
         let second = Run::new(&c, 42, 2);
         let shop = second.shop.as_ref().unwrap();
-        assert_eq!(shop.len(), 4);
+        assert!(shop.len() >= SHOP_OFFER, "base offer plus contextual items");
         let ids: Vec<&str> = shop.iter().map(|item| item.id.as_str()).collect();
         let unique: std::collections::BTreeSet<&str> = ids.iter().copied().collect();
         assert_eq!(unique.len(), ids.len(), "offer has distinct items");
         assert!(shop.iter().all(|item| item.stock > 0 && item.cost > 0));
+        assert!(
+            shop.iter().any(|item| item.id.starts_with("upgrade::")),
+            "the shop draws contextual upgrade cards"
+        );
+        assert_eq!(
+            shop.iter().filter(|item| item.id.starts_with("perk_")).count(),
+            4,
+            "one perk per class"
+        );
         // Same seed, same offer.
         let again = Run::new(&c, 42, 2);
         assert_eq!(second.shop, again.shop);
@@ -1621,6 +1746,7 @@ mod tests {
         assert_eq!(run.buy_shop_item(&c, "kept_flame"), Err(ShopError::SoldOut));
         assert_eq!(run.buy_shop_item(&c, "worn_treads"), Ok(ShopPurchase::Mods));
         assert!(run.mods.run_speed_mul > before_speed);
+        assert!(run.purchased_mods.iter().any(|id| id == "worn_treads"));
         assert_eq!(run.currency, 58);
         // Unknown item, and not enough currency.
         assert_eq!(run.buy_shop_item(&c, "nope"), Err(ShopError::UnknownItem));
@@ -1725,6 +1851,305 @@ mod tests {
         assert_eq!(spawn_above, Some(2.0));
         let none_below = platform_top_below(&[], 0.0, 0.0, 10.0);
         assert_eq!(none_below, None);
+    }
+
+    #[test]
+    fn currency_is_earned_from_golden_gifts() {
+        let c = content();
+        let mut run = Run::new(&c, 11, 2);
+        let picks = valid_picks(&run);
+        run.resolve(&c, &[picks]);
+        // Skip straight to phase 2 with every normal gift already gathered.
+        let gift_ids: Vec<u16> = run.level.gifts.iter().map(|g| g.id).collect();
+        let gifts = run.level.gifts.clone();
+        run.gifts_taken = gift_ids;
+        run.level_phase = LEVEL_COLLAPSE_PENDING;
+        let before = run.currency;
+        for g in &gifts {
+            let feet = Vec3::new(g.pos.x, g.pos.y - 0.9, g.pos.z);
+            run.collect_gifts(&feet);
+        }
+        assert_eq!(run.currency, before + gifts.len() as u32 * GOLDEN_VALUE);
+        // Gifts already golden-taken cannot mint again.
+        let spent = run.currency;
+        for g in &gifts {
+            let feet = Vec3::new(g.pos.x, g.pos.y - 0.9, g.pos.z);
+            run.collect_gifts(&feet);
+        }
+        assert_eq!(run.currency, spent);
+    }
+
+    #[test]
+    fn spending_spends_and_insufficient_funds_changes_nothing() {
+        let c = content();
+        let mut run = Run::new(&c, 42, 2);
+        run.currency = 24;
+        run.shop = Some(vec![ShopOffer {
+            id: "worn_treads".to_string(),
+            cost: 24,
+            stock: 1,
+        }]);
+        let before_speed = run.mods.run_speed_mul;
+        assert_eq!(run.buy_shop_item(&c, "worn_treads"), Ok(ShopPurchase::Mods));
+        assert_eq!(run.currency, 0);
+        assert!(run.mods.run_speed_mul > before_speed);
+        // Not enough funds now: currency, stock, mods all untouched.
+        let speed_after = run.mods.run_speed_mul;
+        run.shop = Some(vec![ShopOffer {
+            id: "worn_treads".to_string(),
+            cost: 24,
+            stock: 1,
+        }]);
+        assert_eq!(run.buy_shop_item(&c, "worn_treads"), Err(ShopError::NotEnoughCurrency));
+        assert_eq!(run.currency, 0);
+        assert_eq!(run.shop.as_ref().unwrap()[0].stock, 1);
+        assert_eq!(run.mods.run_speed_mul, speed_after);
+    }
+
+    #[test]
+    fn a_rejected_purchase_is_fully_refunded() {
+        let c = content();
+        let mut run = Run::new(&c, 42, 2);
+        run.currency = 100;
+        let before_speed = run.mods.run_speed_mul;
+        let before_lives = run.lives;
+        // Rejection by sold-out stock.
+        run.shop = Some(vec![ShopOffer {
+            id: "kept_flame".to_string(),
+            cost: 30,
+            stock: 0,
+        }]);
+        assert_eq!(run.buy_shop_item(&c, "kept_flame"), Err(ShopError::SoldOut));
+        assert_eq!(run.currency, 100);
+        // Rejection by insufficient funds.
+        run.shop = Some(vec![ShopOffer {
+            id: "kept_flame".to_string(),
+            cost: 200,
+            stock: 1,
+        }]);
+        assert_eq!(run.buy_shop_item(&c, "kept_flame"), Err(ShopError::NotEnoughCurrency));
+        assert_eq!(run.currency, 100);
+        assert_eq!(run.shop.as_ref().unwrap()[0].stock, 1);
+        // Rejection by unknown item.
+        run.shop = Some(vec![ShopOffer {
+            id: "kept_flame".to_string(),
+            cost: 30,
+            stock: 1,
+        }]);
+        assert_eq!(run.buy_shop_item(&c, "not_a_thing"), Err(ShopError::UnknownItem));
+        assert_eq!(run.currency, 100);
+        // Rejection after validation but before the effect: a purge for a curse the run does not hold
+        // charges nothing and takes no stock.
+        run.shop = Some(vec![ShopOffer {
+            id: "purge::leadened_soles".to_string(),
+            cost: SHOP_PURGE_COST,
+            stock: 1,
+        }]);
+        assert_eq!(
+            run.buy_shop_item(&c, "purge::leadened_soles"),
+            Err(ShopError::UnknownItem)
+        );
+        assert_eq!(run.currency, 100);
+        assert_eq!(run.shop.as_ref().unwrap()[0].stock, 1);
+        // Rejection by effect failure: a reroll whose draft offer is already gone charges nothing.
+        run.offer = None;
+        run.shop = Some(vec![ShopOffer {
+            id: "new_hand".to_string(),
+            cost: 15,
+            stock: 1,
+        }]);
+        assert_eq!(run.buy_shop_item(&c, "new_hand"), Err(ShopError::UnknownItem));
+        assert_eq!(run.currency, 100);
+        assert_eq!(run.shop.as_ref().unwrap()[0].stock, 1);
+        // Nothing leaked into mods or lives.
+        assert_eq!(run.mods.run_speed_mul, before_speed);
+        assert_eq!(run.lives, before_lives);
+    }
+
+    #[test]
+    fn buying_an_upgrade_card_applies_it_and_records_it() {
+        let c = content();
+        let mut run = Run::new(&c, 42, 2);
+        run.currency = SHOP_UPGRADE_COST;
+        run.shop = Some(vec![ShopOffer {
+            id: "upgrade::zephyr_tread".to_string(),
+            cost: SHOP_UPGRADE_COST,
+            stock: 1,
+        }]);
+        let before_speed = run.mods.run_speed_mul;
+        assert_eq!(run.buy_shop_item(&c, "upgrade::zephyr_tread"), Ok(ShopPurchase::Mods));
+        assert_eq!(run.currency, 0);
+        assert!(run.mods.run_speed_mul > before_speed);
+        assert!(run.upgrades.iter().any(|id| id == "zephyr_tread"));
+        assert_eq!(run.buy_shop_item(&c, "upgrade::zephyr_tread"), Err(ShopError::SoldOut));
+        // An upgrade id that is not in content is refused without charging.
+        run.currency = 100;
+        run.shop = Some(vec![ShopOffer {
+            id: "upgrade::not_a_real_upgrade".to_string(),
+            cost: SHOP_UPGRADE_COST,
+            stock: 1,
+        }]);
+        assert_eq!(
+            run.buy_shop_item(&c, "upgrade::not_a_real_upgrade"),
+            Err(ShopError::UnknownItem)
+        );
+        assert_eq!(run.currency, 100);
+    }
+
+    #[test]
+    fn buying_a_perk_applies_its_mods_and_records_the_purchase() {
+        let c = content();
+        let mut run = Run::new(&c, 42, 2);
+        run.currency = 100;
+        run.shop = Some(vec![ShopOffer {
+            id: "perk_striker".to_string(),
+            cost: 45,
+            stock: 1,
+        }]);
+        let before_cd = run.mods.dash_cooldown_mul;
+        assert_eq!(run.buy_shop_item(&c, "perk_striker"), Ok(ShopPurchase::Mods));
+        assert!(run.mods.dash_cooldown_mul < before_cd);
+        assert!(run.purchased_mods.iter().any(|id| id == "perk_striker"));
+        assert_eq!(run.currency, 55);
+    }
+
+    #[test]
+    fn counters_are_offered_only_for_accumulated_permanents() {
+        let c = content();
+        let mut run = Run::new(&c, 42, 2);
+        assert!(run.all_permanents().is_empty());
+        run.permanents = vec!["pallbearer".to_string(), "mimic".to_string()];
+        run.shop = run.make_shop(&c);
+        let shop = run.shop.as_ref().expect("level 2+ lobby has a shop");
+        assert!(shop.iter().any(|item| item.id == "counter_pallbearer"));
+        assert!(shop.iter().any(|item| item.id == "counter_mimic"));
+        assert!(
+            !shop.iter().any(|item| item.id == "counter_turret"),
+            "a counter is only sold against a permanent the run has"
+        );
+        // Buying a counter applies its mods and records the purchase for rebuilds.
+        run.currency = 100;
+        let before_dash = run.mods.dash_speed_mul;
+        assert_eq!(run.buy_shop_item(&c, "counter_pallbearer"), Ok(ShopPurchase::Mods));
+        assert!(run.mods.dash_speed_mul > before_dash);
+        assert!(run.purchased_mods.iter().any(|id| id == "counter_pallbearer"));
+        assert_eq!(run.currency, 100 - 35);
+    }
+
+    #[test]
+    fn a_curse_purge_drops_one_stack_and_unloads_the_effect() {
+        let c = content();
+        let mut run = Run::new(&c, 42, 2);
+        let leadened = c.curse("leadened_soles").expect("curse exists").mods.clone();
+        // Apply it twice by hand, as two draft/curse sources would.
+        run.mods.apply(&leadened);
+        run.mods.apply(&leadened);
+        run.curses = vec!["leadened_soles".to_string(), "leadened_soles".to_string()];
+        // Two stacks multiply to 0.7744, which the run-speed clamp floors at 0.8.
+        assert!(
+            (run.mods.run_speed_mul - 0.8).abs() < 1e-6,
+            "two stacks clamp at the floor"
+        );
+        run.currency = 100;
+        run.shop = Some(vec![ShopOffer {
+            id: "purge::leadened_soles".to_string(),
+            cost: SHOP_PURGE_COST,
+            stock: 2,
+        }]);
+        assert_eq!(run.buy_shop_item(&c, "purge::leadened_soles"), Ok(ShopPurchase::Mods));
+        assert_eq!(run.currency, 100 - SHOP_PURGE_COST);
+        assert_eq!(run.curses, vec!["leadened_soles".to_string()]);
+        assert!((run.mods.run_speed_mul - 0.88).abs() < 1e-6, "one stack remains");
+        assert_eq!(run.buy_shop_item(&c, "purge::leadened_soles"), Ok(ShopPurchase::Mods));
+        assert!(run.curses.is_empty());
+        assert!((run.mods.run_speed_mul - 1.0).abs() < 1e-6, "no stacks remain");
+        assert_eq!(run.buy_shop_item(&c, "purge::leadened_soles"), Err(ShopError::SoldOut));
+    }
+
+    #[test]
+    fn a_purge_preserves_purchased_shop_mods() {
+        let c = content();
+        let mut run = Run::new(&c, 42, 2);
+        let leadened = c.curse("leadened_soles").expect("curse exists").mods.clone();
+        run.mods.apply(&leadened);
+        run.curses = vec!["leadened_soles".to_string()];
+        run.currency = 200;
+        run.shop = Some(vec![
+            ShopOffer {
+                id: "worn_treads".to_string(),
+                cost: 24,
+                stock: 1,
+            },
+            ShopOffer {
+                id: "purge::leadened_soles".to_string(),
+                cost: SHOP_PURGE_COST,
+                stock: 1,
+            },
+        ]);
+        assert_eq!(run.buy_shop_item(&c, "worn_treads"), Ok(ShopPurchase::Mods));
+        let speed_with_treads = run.mods.run_speed_mul;
+        assert_eq!(run.buy_shop_item(&c, "purge::leadened_soles"), Ok(ShopPurchase::Mods));
+        assert!(
+            (run.mods.run_speed_mul - speed_with_treads / 0.88).abs() < 1e-5,
+            "the shop-purchased mods survive the rebuild"
+        );
+    }
+
+    #[test]
+    fn purges_are_offered_for_held_curses_only() {
+        let c = content();
+        let mut run = Run::new(&c, 42, 2);
+        run.curses = vec![
+            "heavy_air".to_string(),
+            "heavy_air".to_string(),
+            "numb_fingers".to_string(),
+        ];
+        run.shop = run.make_shop(&c);
+        let shop = run.shop.as_ref().expect("level 2+ lobby has a shop");
+        let heavy = shop
+            .iter()
+            .find(|item| item.id == "purge::heavy_air")
+            .expect("purge offered for the held curse");
+        assert_eq!(heavy.stock, 2, "stock equals the stacks held");
+        assert!(shop.iter().any(|item| item.id == "purge::numb_fingers"));
+        assert!(
+            !shop.iter().any(|item| item.id == "purge::leadened_soles"),
+            "unheld curses are not offered a purge"
+        );
+    }
+
+    #[test]
+    fn two_clients_racing_for_the_last_copy_exactly_one_wins() {
+        let c = content();
+        let mut run = Run::new(&c, 42, 2);
+        run.currency = 100;
+        let lives_before = run.lives;
+        run.shop = Some(vec![ShopOffer {
+            id: "kept_flame".to_string(),
+            cost: 60,
+            stock: 1,
+        }]);
+        let shared = std::sync::Mutex::new(run);
+        let results: Vec<Result<ShopPurchase, ShopError>> = std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for _ in 0..8 {
+                let shared = &shared;
+                let c = &c;
+                handles.push(scope.spawn(move || {
+                    let mut guard = shared.lock().unwrap();
+                    guard.buy_shop_item(c, "kept_flame")
+                }));
+            }
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        let wins = results.iter().filter(|r| matches!(r, Ok(ShopPurchase::Life))).count();
+        let sold_out = results.iter().filter(|r| matches!(r, Err(ShopError::SoldOut))).count();
+        assert_eq!(wins, 1, "exactly one client wins the last copy");
+        assert_eq!(sold_out, results.len() - 1, "everyone else is told it sold out");
+        let run = shared.into_inner().unwrap();
+        assert_eq!(run.currency, 40, "the currency is charged exactly once");
+        assert_eq!(run.shop.as_ref().unwrap()[0].stock, 0);
+        assert_eq!(run.lives, lives_before + 1, "the life is granted exactly once");
     }
 }
 
