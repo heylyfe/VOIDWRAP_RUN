@@ -227,3 +227,26 @@ T-053 got a third round instead of an OVERSEER takeover, to save Opus credits (u
   uninstaller; HKCU entry "VOIDWRAP RUN / v0.3.0-alpha.1"); installed game opens the "VOIDWRAP RUN" window, /health
   ok, capture-m3 level-1 checks pass (46 gifts, Ctrl lock); graceful close; uninstall exit 0 leaves nothing.
   (The level-4 draft/shop/hunter shots were taken on the identical build before tagging.)
+
+## Wave 1 (bug fixes) — T-062 + T-063, verified 2026-11-14
+- Dispatch note: the plan's tickets carried no source and subordinates have no tools, so the first
+  dispatch of both parked everything. Re-sent once as `T-062.r1.md` / `T-063.r1.md` with the relevant
+  files inlined (`@include`); both then produced real edits.
+- T-062 ACCEPTED (lead fixes on top): gift spawn safety (body box vs non-NORMAL platforms; probe over
+  60 levels / 4,260 gifts: 0 overlaps); Clustered Gifts curse — the subordinate threaded it through a
+  process-wide atomic knob, replaced by an explicit `generate_for_with_spacing` parameter (parallel
+  tests would have raced), and the spacing floor alone changed 1/5 seeds, so cursed levels now fill
+  remaining slots nearest-first around placed gifts (mean nearest-gift distance 3.47 -> 2.65 u);
+  enemy scaling +1/level capped at 6 (test updated); enemy names simplified (ids/protocol unchanged,
+  ENEMIES.md updated). `validate-content.mjs` gained `gift_spacing_mul`; the curse effect text was
+  shortened to the 60-char limit.
+- T-063 ACCEPTED (lead fixes on top): gift emissive 0.6 -> 1.35; new pickup burst (pure logic +
+  vitest); fog divisor guarded (0/NaN -> far-out 0.02); RunStatus files chips by the content manifest
+  (modChips.ts + vitest); procedural glider. Lead fixes: `GiftPickup.tsx` vs `giftPickup.ts` collided
+  on Windows (component renamed `GiftPickupFx.tsx`) and one react-hooks/immutability error (burst
+  start no longer mutated in place).
+- `just verify` green after each merge: server 75, sim 102 + hazards 33 + levelgen 18 + physics 3,
+  protocol 5, web 224 vitest, tsc, eslint, clippy, fmt, content/chunk validators, names.
+- Smoke: real client run (tools/capture.mjs) — gifts glow on the spawn platform and sit clear of the
+  walls; headless software rendering caps the client at ~10 fps, so the tool's tick-rate assertion
+  fails in this environment (not a game error).
