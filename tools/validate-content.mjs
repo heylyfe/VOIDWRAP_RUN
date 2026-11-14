@@ -251,16 +251,19 @@ else {
 }
 
 // --- altars ----------------------------------------------------------------------------------------------------
-if (!Array.isArray(c.altars) || c.altars.length !== 1) {
-  err(`altars: need exactly 1 (have ${Array.isArray(c.altars) ? c.altars.length : 0})`);
+// T-083: four risk/reward designs, one per `AltarKind` (the server maps `id % 4` onto them, so the
+// order here is the contract). The old single `bargain_altar` is gone.
+const ALTAR_IDS = ["shortcut_altar", "gift_sight_altar", "clear_sky_altar", "debt_altar"];
+if (!Array.isArray(c.altars) || c.altars.length !== ALTAR_IDS.length) {
+  err(`altars: need exactly ${ALTAR_IDS.length} (have ${Array.isArray(c.altars) ? c.altars.length : 0})`);
 }
 for (const [i, a] of (c.altars ?? []).entries()) {
   const w = `altars[${i}]`;
   checkId(w, a.id);
-  if (a.id !== "bargain_altar") err(`${w}.id=${JSON.stringify(a.id)} must be bargain_altar`);
+  if (a.id !== ALTAR_IDS[i]) err(`${w}.id=${JSON.stringify(a.id)} must be ${ALTAR_IDS[i]}`);
   checkText(w, "name", a.name, 28);
   checkText(w, "flavor", a.flavor, 70);
-  checkText(w, "effect", a.effect, 90);
+  checkText(w, "effect", a.effect, 140);
 }
 
 // --- screen grades ---------------------------------------------------------------------------------------------

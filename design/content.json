@@ -967,10 +967,28 @@
   ],
   "altars": [
     {
-      "id": "bargain_altar",
-      "name": "Bargain Altar",
-      "flavor": "It asks for nothing you will miss until later.",
-      "effect": "Press E: gain a random upgrade and a random curse. One use per altar."
+      "id": "shortcut_altar",
+      "name": "Shortcut Altar",
+      "flavor": "A door that skips the argument, and sends the bill ahead.",
+      "effect": "Benefit: skip the next draft and go straight to the shop. Cost: two temporary curses and two extra enemies next level."
+    },
+    {
+      "id": "gift_sight_altar",
+      "name": "Gift Sight Altar",
+      "flavor": "For one level, every gift burns through the dark.",
+      "effect": "Benefit: every gift is highlighted this level. Cost: the next draft's reward cards come from the hardest pool."
+    },
+    {
+      "id": "clear_sky_altar",
+      "name": "Clear Sky Altar",
+      "flavor": "The mist parts. Something was waiting in it.",
+      "effect": "Benefit: this level's fog is cleared. Cost: Lure and Static spawn at the altar immediately."
+    },
+    {
+      "id": "debt_altar",
+      "name": "Debt Altar",
+      "flavor": "It lends generously, and it remembers.",
+      "effect": "Benefit: gain 30 currency now. Cost: the next two levels' golden-gift income repays the debt; any remainder is taken from your purse."
     }
   ],
   "grades": {

@@ -676,7 +676,7 @@ impl Game {
                 if self.run.phase == PHASE_PLAYING
                     && f.buttons & BTN_INTERACT != 0
                     && p.state.prev_buttons & BTN_INTERACT == 0
-                    && let Some(pair) = self.run.try_use_altar(&self.content, &p.state.pos)
+                    && let Some(pair) = self.run.try_use_altar(&self.content, p.state.pos)
                 {
                     altar_notices.push(pair);
                 }
@@ -1790,8 +1790,6 @@ mod tests {
             },
         ];
         g.run.altars_used.clear();
-        let upgrades_before = g.run.upgrades.len();
-        let curses_before = g.run.curses.len();
         player(&mut g, 1).state.pos = Vec3::new(0.25, 0.0, 0.25);
         // Rising edge: press E (BTN_INTERACT).
         g.handle(GameEvent::Message {
@@ -1807,15 +1805,15 @@ mod tests {
         });
         g.tick();
         assert_eq!(g.run.altars_used, vec![9], "first unused altar in range is used");
-        assert_eq!(g.run.upgrades.len(), upgrades_before + 1);
-        assert_eq!(g.run.curses.len(), curses_before + 1);
+        // Altar 9 is the gift-sight design (9 % 4 == 1): it lights every gift this level and pushes
+        // the next draft's reward cards into the hardest pool.
+        assert!(g.run.altar_ledger.gift_sight, "the benefit is recorded");
+        assert!(g.run.altar_ledger.hardest_pool_next, "the cost is recorded");
         let msgs = drain(&mut rx);
         assert!(msgs.iter().any(|m| matches!(
             m,
             ServerMsg::Notice { kind: NOTICE_ALTAR, ids }
-                if ids.len() == 2
-                    && ids[0] == *g.run.upgrades.last().unwrap()
-                    && ids[1] == *g.run.curses.last().unwrap()
+                if ids.len() == 2 && ids[0] == "gift_sight" && ids[1] == "hardest_pool"
         )));
         assert!(msgs.iter().any(|m| matches!(
             m,

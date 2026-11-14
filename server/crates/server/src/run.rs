@@ -9,6 +9,9 @@
 //! During the collapse/exit window every connected player votes on one permanent addition for the rest of the run
 //! (T-078); the automatic one-enemy-per-level scaling is gone.
 //! Death with no lives left ends that player's run; when everyone is down the run is Over and Restart begins a new one.
+//!
+//! Altars are single-use risk/reward deals: Shortcut, Gift Sight, Clear Sky and Debt. Their effects live in
+//! `AltarLedger`, survive level transitions and are serialized by `Run::altar_state` for a server restart.
 
 use crate::content::{Content, RunMods};
 use protocol::{
@@ -50,6 +53,17 @@ pub const VOTE_POOL_OFFER: usize = 3;
 const VOTE_COIN_SALT: u32 = 0xA5A5_5A5A;
 /// Salt separating the curse-injection draw from the tie-break coin.
 const VOTE_CURSE_SALT: u32 = 0x3A6F_1D2B;
+
+/// Currency advanced by the Debt altar.
+pub const DEBT_ADVANCE: u32 = 30;
+/// Levels of golden-gift income that repay a Debt altar advance.
+pub const DEBT_REPAY_LEVELS: u8 = 2;
+/// Temporary curses applied by the Shortcut altar.
+pub const SHORTCUT_CURSES: usize = 2;
+/// Extra enemy copies added to the next level by the Shortcut altar.
+pub const SHORTCUT_EXTRA_ENEMIES: u32 = 2;
+/// Number of altar designs; the altar id selects one with `id % ALTAR_KINDS`.
+pub const ALTAR_KINDS: u16 = 4;
 
 /// One option offered by a vote session. The wire copy is `protocol::VoteOption`; this carries the
 /// server-side `temporary` flag the client does not need.
@@ -528,6 +542,244 @@ impl Rng {
     }
 }
 
+/// The four risk/reward altar designs. The wire `protocol::Altar` carries only an id and a position,
+/// so the design is derived from the id: `id % ALTAR_KINDS` selects the entry in this order, which is
+/// also the order of the `altars` array in `design/content.json`. The client can therefore show the
+/// name, benefit and cost before the player commits without a protocol change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AltarKind {
+    /// Skip the next draft and go straight to the shop; pay with two temporary curses and two extra enemies.
+    Shortcut,
+    /// Highlight every gift this level; the next draft's reward cards come from the hardest pool.
+    GiftSight,
+    /// Clear this level's fog; Lure and Static spawn at the altar immediately.
+    ClearSky,
+    /// Take a currency advance; the next two levels' golden-gift income repays it.
+    Debt,
+}
+
+impl AltarKind {
+    /// The design selected by an altar id (`id % ALTAR_KINDS`).
+    pub fn from_id(id: u16) -> Self {
+        match id % ALTAR_KINDS {
+            0 => AltarKind::Shortcut,
+            1 => AltarKind::GiftSight,
+            2 => AltarKind::ClearSky,
+            _ => AltarKind::Debt,
+        }
+    }
+
+    /// Stable token for the benefit, returned by `try_use_altar`.
+    pub fn benefit_id(self) -> &'static str {
+        match self {
+            AltarKind::Shortcut => "shortcut",
+            AltarKind::GiftSight => "gift_sight",
+            AltarKind::ClearSky => "clear_sky",
+            AltarKind::Debt => "debt",
+        }
+    }
+
+    /// Stable token for the cost, returned by `try_use_altar`.
+    pub fn cost_id(self) -> &'static str {
+        match self {
+            AltarKind::Shortcut => "two_temporary_curses",
+            AltarKind::GiftSight => "hardest_pool",
+            AltarKind::ClearSky => "lure_and_static",
+            AltarKind::Debt => "repay_from_income",
+        }
+    }
+
+    /// Display name.
+    #[allow(dead_code)]
+    pub fn name(self) -> &'static str {
+        match self {
+            AltarKind::Shortcut => "Shortcut Altar",
+            AltarKind::GiftSight => "Gift Sight Altar",
+            AltarKind::ClearSky => "Clear Sky Altar",
+            AltarKind::Debt => "Debt Altar",
+        }
+    }
+
+    /// What the player gains, in one sentence.
+    #[allow(dead_code)]
+    pub fn benefit_text(self) -> String {
+        match self {
+            AltarKind::Shortcut => "Skip the next draft and go straight to the shop.".to_string(),
+            AltarKind::GiftSight => "Every gift is highlighted for this level.".to_string(),
+            AltarKind::ClearSky => "This level's fog is cleared.".to_string(),
+            AltarKind::Debt => format!("Gain {DEBT_ADVANCE} currency now."),
+        }
+    }
+
+    /// What the player pays, in one sentence.
+    #[allow(dead_code)]
+    pub fn cost_text(self) -> String {
+        match self {
+            AltarKind::Shortcut => {
+                format!("Two temporary curses and {SHORTCUT_EXTRA_ENEMIES} extra enemies next level.")
+            }
+            AltarKind::GiftSight => "The next draft's reward cards come from the hardest pool.".to_string(),
+            AltarKind::ClearSky => "Lure and Static spawn at the altar immediately.".to_string(),
+            AltarKind::Debt => {
+                "The next two levels' golden-gift income repays the debt; any remainder is taken from your purse."
+                    .to_string()
+            }
+        }
+    }
+
+    /// A client-renderable preview of the benefit and the cost.
+    #[allow(dead_code)]
+    pub fn preview(self) -> AltarPreview {
+        AltarPreview {
+            kind: self,
+            name: self.name(),
+            benefit: self.benefit_text(),
+            cost: self.cost_text(),
+        }
+    }
+}
+
+/// A client-renderable description of an altar's benefit and cost.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+pub struct AltarPreview {
+    /// The design.
+    pub kind: AltarKind,
+    /// Display name.
+    pub name: &'static str,
+    /// What the player gains.
+    pub benefit: String,
+    /// What the player pays.
+    pub cost: String,
+}
+
+/// Persistent altar effects. Every field is part of the run state: it survives level transitions and
+/// is written by `Run::altar_state` / read by `Run::restore_altar_state` so a server restart keeps
+/// the effects applied.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AltarLedger {
+    /// Shortcut: the next level completion skips the draft and opens the shop directly.
+    pub shortcut_pending: bool,
+    /// Shortcut: curses waiting to be applied at the start of the next level.
+    pub pending_temporary_curses: Vec<String>,
+    /// Shortcut: curses currently applied for this level (cleared at level end).
+    pub temporary_curses: Vec<String>,
+    /// Shortcut: extra enemy copies added to the next level's roster.
+    pub extra_enemies_next_level: u32,
+    /// Gift sight: every gift is highlighted for this level.
+    pub gift_sight: bool,
+    /// Gift sight: the next draft's reward cards come from the hardest pool.
+    pub hardest_pool_next: bool,
+    /// Clear sky: this level's fog is cleared.
+    pub fog_cleared: bool,
+    /// Debt: currency still owed.
+    pub debt_owed: u32,
+    /// Debt: levels of income still garnished (0..=DEBT_REPAY_LEVELS).
+    pub debt_levels_left: u8,
+    /// Debt: true when the current level's income is being garnished.
+    pub debt_garnished_this_level: bool,
+    /// Next enemy id for altar-spawned enemies; kept with the altar state so a restart cannot reuse an id.
+    pub next_enemy_id: u32,
+}
+
+impl AltarLedger {
+    /// Serialize the ledger to the stable, line-based restart format.
+    #[allow(dead_code)]
+    pub fn encode(&self) -> String {
+        let mut out = String::from("altar-ledger v1\n");
+        out.push_str(&format!("shortcut_pending={}\n", u8::from(self.shortcut_pending)));
+        out.push_str(&format!(
+            "pending_temporary_curses={}\n",
+            self.pending_temporary_curses.join(",")
+        ));
+        out.push_str(&format!("temporary_curses={}\n", self.temporary_curses.join(",")));
+        out.push_str(&format!("extra_enemies_next_level={}\n", self.extra_enemies_next_level));
+        out.push_str(&format!("gift_sight={}\n", u8::from(self.gift_sight)));
+        out.push_str(&format!("hardest_pool_next={}\n", u8::from(self.hardest_pool_next)));
+        out.push_str(&format!("fog_cleared={}\n", u8::from(self.fog_cleared)));
+        out.push_str(&format!("debt_owed={}\n", self.debt_owed));
+        out.push_str(&format!("debt_levels_left={}\n", self.debt_levels_left));
+        out.push_str(&format!(
+            "debt_garnished_this_level={}\n",
+            u8::from(self.debt_garnished_this_level)
+        ));
+        out.push_str(&format!("next_enemy_id={}\n", self.next_enemy_id));
+        out
+    }
+
+    /// Parse the restart format. Unknown keys are ignored so an older server can read a newer ledger;
+    /// a missing key keeps its default. Returns `None` when the header or a known value is malformed.
+    #[allow(dead_code)]
+    pub fn decode(state: &str) -> Option<Self> {
+        let mut lines = state.lines();
+        if lines.next()? != "altar-ledger v1" {
+            return None;
+        }
+        let mut ledger = AltarLedger::default();
+        for line in lines {
+            if line.is_empty() {
+                continue;
+            }
+            let (key, value) = line.split_once('=')?;
+            match key {
+                "shortcut_pending" => ledger.shortcut_pending = parse_flag(value)?,
+                "pending_temporary_curses" => ledger.pending_temporary_curses = parse_list(value)?,
+                "temporary_curses" => ledger.temporary_curses = parse_list(value)?,
+                "extra_enemies_next_level" => ledger.extra_enemies_next_level = value.parse().ok()?,
+                "gift_sight" => ledger.gift_sight = parse_flag(value)?,
+                "hardest_pool_next" => ledger.hardest_pool_next = parse_flag(value)?,
+                "fog_cleared" => ledger.fog_cleared = parse_flag(value)?,
+                "debt_owed" => ledger.debt_owed = value.parse().ok()?,
+                "debt_levels_left" => ledger.debt_levels_left = value.parse().ok()?,
+                "debt_garnished_this_level" => ledger.debt_garnished_this_level = parse_flag(value)?,
+                "next_enemy_id" => ledger.next_enemy_id = value.parse().ok()?,
+                _ => {}
+            }
+        }
+        Some(ledger)
+    }
+}
+
+/// Parse `1`/`0` into a bool.
+#[allow(dead_code)]
+fn parse_flag(value: &str) -> Option<bool> {
+    match value {
+        "1" => Some(true),
+        "0" => Some(false),
+        _ => None,
+    }
+}
+
+/// Parse a comma-separated id list; an empty value is an empty list.
+#[allow(dead_code)]
+fn parse_list(value: &str) -> Option<Vec<String>> {
+    if value.is_empty() {
+        return Some(Vec::new());
+    }
+    let mut out = Vec::new();
+    for part in value.split(',') {
+        if part.is_empty() {
+            return None;
+        }
+        out.push(part.to_string());
+    }
+    Some(out)
+}
+
+/// What a successful altar use did. `benefit` and `cost` are the stable tokens returned by
+/// `try_use_altar`; `kind` and `altar_id` identify the design and the altar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AltarOutcome {
+    /// The altar that was used.
+    pub altar_id: u16,
+    /// The design selected by the altar id.
+    pub kind: AltarKind,
+    /// Stable benefit token (`AltarKind::benefit_id`).
+    pub benefit: &'static str,
+    /// Stable cost token (`AltarKind::cost_id`).
+    pub cost: &'static str,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Offer {
     pub enemy_picks: u8,
@@ -604,6 +856,10 @@ pub struct Run {
     pub hazards: Hazards,
     /// Levelgen altar ids already used this level.
     pub altars_used: Vec<u16>,
+    /// Persistent altar effects (shortcut, gift sight, clear sky, debt); serialized by `altar_state`.
+    pub altar_ledger: AltarLedger,
+    /// Ids of enemies spawned by altar use this level (for UI feedback and tests).
+    pub altar_spawns: Vec<String>,
     /// Friction multiplier from the level's event (EVENT_ICE pulls it from content; else 1.0).
     pub event_friction_mul: f32,
     /// The lobby shop offer (from level 2 on); `None` outside the shop lobby and while playing.
@@ -650,6 +906,8 @@ impl Run {
             offer: None,
             hazards: Hazards::new(),
             altars_used: Vec::new(),
+            altar_ledger: AltarLedger::default(),
+            altar_spawns: Vec::new(),
             event_friction_mul: 1.0,
             shop: None,
             level_phase: LEVEL_COLLECT,
@@ -803,13 +1061,17 @@ impl Run {
 
     /// The reward cards for the current lobby (greater-curse level or mixed upgrade/curse), drawn from the run RNG.
     fn reward_cards(&mut self, content: &Content) -> Vec<DraftCard> {
-        if self.level_num.is_multiple_of(GREATER_EVERY) {
-            let greater: Vec<_> = content.curses.iter().filter(|c| c.greater).collect();
+        let hardest = std::mem::take(&mut self.altar_ledger.hardest_pool_next);
+        if hardest || self.level_num.is_multiple_of(GREATER_EVERY) {
+            let mut pool: Vec<&crate::content::ModCard> = content.curses.iter().filter(|c| c.greater).collect();
+            if pool.len() < 3 {
+                pool.extend(content.curses.iter().filter(|c| !c.greater));
+            }
             let mut cards = Vec::with_capacity(3);
-            for i in self.rng.sample(greater.len(), 3) {
+            for i in self.rng.sample(pool.len(), 3) {
                 cards.push(DraftCard {
                     kind: CARD_CURSE,
-                    id: greater[i].id.clone(),
+                    id: pool[i].id.clone(),
                 });
             }
             return cards;
@@ -956,9 +1218,10 @@ impl Run {
     }
 
     /// Rebuild the run's mods from scratch: base + every recorded upgrade, curse and purchased stat-mod
-    /// item. Used when a curse is purged so the removal actually unloads its effect instead of just
-    /// hiding it from the list. Multiplication and addition commute here, the life pool is not re-banked,
-    /// and shop purchases applied via `purchased_mods` are preserved.
+    /// item, plus the Shortcut altar's temporary curses. Used when a curse is purged so the removal
+    /// actually unloads its effect instead of just hiding it from the list. Multiplication and addition
+    /// commute here, the life pool is not re-banked, and shop purchases applied via `purchased_mods` are
+    /// preserved.
     fn rebuild_mods(&mut self, content: &Content) {
         let mut fresh = RunMods::default();
         for id in &self.upgrades {
@@ -973,6 +1236,11 @@ impl Run {
         }
         for id in &self.purchased_mods {
             if let Some(def) = content.shop_item(id) {
+                fresh.apply(&def.mods);
+            }
+        }
+        for id in &self.altar_ledger.temporary_curses {
+            if let Some(def) = content.curse(id) {
                 fresh.apply(&def.mods);
             }
         }
@@ -1151,6 +1419,11 @@ impl Run {
         self.enemies.clear();
         self.hazards.reset();
         self.altars_used.clear();
+        self.altar_spawns.clear();
+        self.altar_ledger.fog_cleared = false;
+        self.altar_ledger.gift_sight = false;
+        self.altar_ledger.debt_garnished_this_level = self.altar_ledger.debt_levels_left > 0;
+        self.apply_pending_curses(content);
         self.level_phase = LEVEL_COLLECT;
         self.collapse_elapsed_ticks = 0;
         self.collapse = build_collapse_plan(
@@ -1184,6 +1457,13 @@ impl Run {
         } else {
             // One-level temporary summons from the last vote's overflow (registry §9).
             roster.append(&mut self.pending_temporary);
+        }
+        // Shortcut: extra copies promised by the altar join the next level.
+        let extra = std::mem::take(&mut self.altar_ledger.extra_enemies_next_level);
+        if self.level_num != 1 && !base.is_empty() {
+            for k in 0..extra as usize {
+                roster.push(base[k % base.len()].clone());
+            }
         }
         // The hub has 8 fixed spawn slots; extra copies cycle onto the slots.
         for (index, id) in roster.iter().enumerate() {
@@ -1219,11 +1499,13 @@ impl Run {
                 params,
             ));
         }
+        self.altar_ledger.next_enemy_id = u32::try_from(roster.len()).unwrap_or(u32::MAX - 1).saturating_add(1);
         self.phase = PHASE_PLAYING;
     }
 
     /// The beacon was reached: back to the lobby to draft for the next level.
     pub fn finish_level(&mut self, content: &Content) {
+        let shortcut = std::mem::take(&mut self.altar_ledger.shortcut_pending);
         self.level_num = self.level_num.saturating_add(1);
         self.level = levelgen::hub();
         self.world = World::from_level(&self.level);
@@ -1232,13 +1514,27 @@ impl Run {
         self.enemies.clear();
         self.hazards.reset();
         self.altars_used.clear();
+        self.altar_spawns.clear();
+        self.altar_ledger.fog_cleared = false;
+        self.altar_ledger.gift_sight = false;
+        self.clear_temporary_curses(content);
+        self.tick_debt();
         self.level_phase = LEVEL_COLLECT;
         self.collapse_elapsed_ticks = 0;
         self.collapse.clear();
         self.gift_platform.clear();
         self.event_friction_mul = 1.0;
         self.phase = PHASE_ENEMY_DRAFT;
-        self.offer = Some(self.make_offer(content));
+        if shortcut {
+            // Shortcut: no draft, straight to the shop.
+            self.offer = Some(Offer {
+                enemy_picks: 0,
+                reward_picks: 0,
+                cards: Vec::new(),
+            });
+        } else {
+            self.offer = Some(self.make_offer(content));
+        }
         self.shop = self.make_shop(content);
     }
 
@@ -1248,10 +1544,29 @@ impl Run {
         self.shop = None;
     }
 
-    /// Use the first unused altar within 2.0 units horizontally and 1.5 vertically of `feet`:
-    /// apply one random upgrade and one random non-greater curse (run RNG) and record both in the
-    /// RunInfo lists. Returns the applied (upgrade id, curse id), or None when nothing was used.
-    pub fn try_use_altar(&mut self, content: &Content, feet: &Vec3) -> Option<(String, String)> {
+    /// The design of the altar with `id` (`id % ALTAR_KINDS`).
+    #[allow(dead_code)]
+    pub fn altar_kind(id: u16) -> AltarKind {
+        AltarKind::from_id(id)
+    }
+
+    /// A client-renderable preview of the altar with `id`, including its benefit and cost.
+    #[allow(dead_code)]
+    pub fn altar_preview(id: u16) -> AltarPreview {
+        AltarKind::from_id(id).preview()
+    }
+
+    /// True while the Gift Sight altar's highlight is active for this level.
+    #[allow(dead_code)]
+    pub fn gift_sight(&self) -> bool {
+        self.altar_ledger.gift_sight
+    }
+
+    /// Use the first unused altar within 2.0 units horizontally and 1.5 vertically of `feet`.
+    /// Applies the design's benefit and cost exactly once and records the altar in `altars_used`.
+    /// Returns `None` when no altar is in range, the altar was already used, or the design's
+    /// benefit is already active (so a second altar of the same design cannot stack its cost).
+    pub fn use_altar(&mut self, content: &Content, feet: Vec3) -> Option<AltarOutcome> {
         if self.phase != PHASE_PLAYING {
             return None;
         }
@@ -1264,40 +1579,187 @@ impl Run {
             let dz = feet.z - altar.pos.z;
             let dy = (feet.y - altar.pos.y).abs();
             if dx * dx + dz * dz <= 4.0 && dy <= 1.5 {
-                hit = Some(altar.id);
+                hit = Some((altar.id, altar.pos));
                 break;
             }
         }
-        let altar_id = hit?;
-        if content.upgrades.is_empty() {
+        let (altar_id, altar_pos) = hit?;
+        let kind = AltarKind::from_id(altar_id);
+        if self.altar_kind_active(kind) {
             return None;
         }
-        // One random upgrade...
-        let up_i = self.rng.below(content.upgrades.len());
-        let upgrade_id = content.upgrades[up_i].id.clone();
-        let upgrade_mods = content.upgrades[up_i].mods.clone();
-        // ...and one random non-greater curse.
-        let normal_curses: Vec<&crate::content::ModCard> = content.curses.iter().filter(|c| !c.greater).collect();
-        if normal_curses.is_empty() {
+        let applied = match kind {
+            AltarKind::Shortcut => self.apply_shortcut(content),
+            AltarKind::GiftSight => {
+                self.altar_ledger.gift_sight = true;
+                self.altar_ledger.hardest_pool_next = true;
+                true
+            }
+            AltarKind::ClearSky => {
+                self.altar_ledger.fog_cleared = true;
+                let offset = 1.5;
+                self.spawn_altar_enemy(
+                    content,
+                    "lure",
+                    Vec3::new(altar_pos.x + offset, altar_pos.y + 1.0, altar_pos.z),
+                );
+                self.spawn_altar_enemy(
+                    content,
+                    "static",
+                    Vec3::new(altar_pos.x - offset, altar_pos.y + 1.0, altar_pos.z),
+                );
+                true
+            }
+            AltarKind::Debt => {
+                self.currency = self.currency.saturating_add(DEBT_ADVANCE);
+                self.altar_ledger.debt_owed = self.altar_ledger.debt_owed.saturating_add(DEBT_ADVANCE);
+                self.altar_ledger.debt_levels_left = DEBT_REPAY_LEVELS;
+                true
+            }
+        };
+        if !applied {
             return None;
         }
-        let cur_i = self.rng.below(normal_curses.len());
-        let curse_id = normal_curses[cur_i].id.clone();
-        let curse_mods = normal_curses[cur_i].mods.clone();
-        let lives_before = self.mods.extra_lives;
-        self.mods.apply(&upgrade_mods);
-        self.lives = self
-            .lives
-            .saturating_add(self.mods.extra_lives.saturating_sub(lives_before));
-        let lives_before = self.mods.extra_lives;
-        self.mods.apply(&curse_mods);
-        self.lives = self
-            .lives
-            .saturating_add(self.mods.extra_lives.saturating_sub(lives_before));
-        self.upgrades.push(upgrade_id.clone());
-        self.curses.push(curse_id.clone());
         self.altars_used.push(altar_id);
-        Some((upgrade_id, curse_id))
+        Some(AltarOutcome {
+            altar_id,
+            kind,
+            benefit: kind.benefit_id(),
+            cost: kind.cost_id(),
+        })
+    }
+
+    /// Compatibility wrapper for the controller: returns `(benefit token, cost token)`.
+    /// Prefer `use_altar` when the caller needs the altar id and design.
+    pub fn try_use_altar(&mut self, content: &Content, feet: Vec3) -> Option<(String, String)> {
+        self.use_altar(content, feet)
+            .map(|outcome| (outcome.benefit.to_string(), outcome.cost.to_string()))
+    }
+
+    /// True when the design's benefit is already active, so a second altar of the same design
+    /// would only duplicate the cost.
+    fn altar_kind_active(&self, kind: AltarKind) -> bool {
+        match kind {
+            AltarKind::Shortcut => self.altar_ledger.shortcut_pending,
+            AltarKind::GiftSight => self.altar_ledger.gift_sight,
+            AltarKind::ClearSky => self.altar_ledger.fog_cleared,
+            AltarKind::Debt => self.altar_ledger.debt_levels_left > 0,
+        }
+    }
+
+    /// Apply the Shortcut altar: two temporary curses land next level, two extra enemies join,
+    /// and the next level completion skips the draft.
+    fn apply_shortcut(&mut self, content: &Content) -> bool {
+        let normal: Vec<&crate::content::ModCard> = content.curses.iter().filter(|c| !c.greater).collect();
+        if normal.is_empty() {
+            return false;
+        }
+        let mut picked = Vec::with_capacity(SHORTCUT_CURSES);
+        for _ in 0..SHORTCUT_CURSES {
+            let i = self.rng.below(normal.len());
+            picked.push(normal[i].id.clone());
+        }
+        self.altar_ledger.pending_temporary_curses = picked;
+        self.altar_ledger.shortcut_pending = true;
+        self.altar_ledger.extra_enemies_next_level = self
+            .altar_ledger
+            .extra_enemies_next_level
+            .saturating_add(SHORTCUT_EXTRA_ENEMIES);
+        true
+    }
+
+    /// Spawn one enemy by content id at `pos`, active immediately, and record the id in `altar_spawns`.
+    /// Returns false when the content has no such enemy.
+    fn spawn_altar_enemy(&mut self, content: &Content, id: &str, pos: Vec3) -> bool {
+        let Some((content_index, def)) = content.enemy(id) else {
+            return false;
+        };
+        let mut params = self.mods.enemy_params(&def.params);
+        params.speed_mul *= escalation_speed_mul(self.level_num);
+        let enemy_id = self.altar_ledger.next_enemy_id.max(1);
+        self.altar_ledger.next_enemy_id = enemy_id.saturating_add(1);
+        let mut enemy = rules::spawn_enemy_with(enemy_id, u8::try_from(content_index).unwrap_or(u8::MAX), pos, params);
+        enemy.active_in = Default::default();
+        self.enemies.push(enemy);
+        self.altar_spawns.push(id.to_string());
+        true
+    }
+
+    /// Apply the Shortcut altar's promised curses at the start of the next level.
+    fn apply_pending_curses(&mut self, content: &Content) {
+        let pending = std::mem::take(&mut self.altar_ledger.pending_temporary_curses);
+        for id in pending {
+            if let Some(def) = content.curse(&id) {
+                let lives_before = self.mods.extra_lives;
+                self.mods.apply(&def.mods);
+                self.lives = self
+                    .lives
+                    .saturating_add(self.mods.extra_lives.saturating_sub(lives_before));
+                self.altar_ledger.temporary_curses.push(id);
+            }
+        }
+    }
+
+    /// Drop the Shortcut altar's temporary curses and rebuild the run's mods without them.
+    fn clear_temporary_curses(&mut self, content: &Content) {
+        if self.altar_ledger.temporary_curses.is_empty() {
+            return;
+        }
+        let extra_before = self.mods.extra_lives;
+        self.altar_ledger.temporary_curses.clear();
+        self.rebuild_mods(content);
+        let extra_after = self.mods.extra_lives;
+        self.lives = self.lives.saturating_sub(extra_before.saturating_sub(extra_after));
+    }
+
+    /// Advance the Debt altar's repayment window at level end.
+    fn tick_debt(&mut self) {
+        if !self.altar_ledger.debt_garnished_this_level {
+            return;
+        }
+        self.altar_ledger.debt_levels_left = self.altar_ledger.debt_levels_left.saturating_sub(1);
+        if self.altar_ledger.debt_levels_left == 0 && self.altar_ledger.debt_owed > 0 {
+            let paid = self.currency.min(self.altar_ledger.debt_owed);
+            self.currency -= paid;
+            self.altar_ledger.debt_owed = 0;
+        }
+        self.altar_ledger.debt_garnished_this_level = false;
+    }
+
+    /// Credit golden-gift income, paying down an active Debt altar first.
+    fn credit_income(&mut self, amount: u32) {
+        let mut remaining = amount;
+        if self.altar_ledger.debt_levels_left > 0 && self.altar_ledger.debt_owed > 0 {
+            let pay = remaining.min(self.altar_ledger.debt_owed);
+            self.altar_ledger.debt_owed -= pay;
+            remaining -= pay;
+        }
+        self.currency = self.currency.saturating_add(remaining);
+    }
+
+    /// Serialize the persistent altar effects for a server restart.
+    #[allow(dead_code)]
+    pub fn altar_state(&self) -> String {
+        self.altar_ledger.encode()
+    }
+
+    /// Restore persistent altar effects from `altar_state`. Rebuilds the run's mods so the restored
+    /// temporary curses are applied exactly once. Returns false when `state` is malformed.
+    #[allow(dead_code)]
+    pub fn restore_altar_state(&mut self, content: &Content, state: &str) -> bool {
+        let Some(ledger) = AltarLedger::decode(state) else {
+            return false;
+        };
+        let extra_before = self.mods.extra_lives;
+        self.altar_ledger = ledger;
+        self.rebuild_mods(content);
+        let extra_after = self.mods.extra_lives;
+        if extra_after > extra_before {
+            self.lives = self.lives.saturating_add(extra_after - extra_before);
+        } else {
+            self.lives = self.lives.saturating_sub(extra_before - extra_after);
+        }
+        true
     }
 
     fn normal_left(&self) -> usize {
@@ -1339,7 +1801,9 @@ impl Run {
             }
             return picked;
         }
-        // Phase 2: one golden gift per collected normal gift, at its exact position.
+        // Phase 2: one golden gift per collected normal gift, at its exact position. The ids are
+        // gathered first so the loop only holds an immutable borrow of `self.level.gifts`.
+        let mut golden: Vec<u16> = Vec::new();
         for gift in &self.level.gifts {
             if !self.gifts_taken.contains(&gift.id) {
                 continue;
@@ -1352,10 +1816,13 @@ impl Run {
                 continue;
             }
             if rules::gift_touched_within(feet, gift, radius) {
-                self.golden_taken.push(gift.id);
-                self.currency = self.currency.saturating_add(GOLDEN_VALUE);
+                golden.push(gift.id);
                 picked.push(gift.pos);
             }
+        }
+        for id in golden {
+            self.golden_taken.push(id);
+            self.credit_income(GOLDEN_VALUE);
         }
         picked
     }
@@ -1455,7 +1922,11 @@ impl Run {
             lives: self.lives,
             currency: self.currency,
             tuning: self.tuning(),
-            fog_density_mul: self.mods.fog_density_mul * escalation_fog_mul(self.level_num),
+            fog_density_mul: if self.altar_ledger.fog_cleared {
+                0.0
+            } else {
+                self.mods.fog_density_mul * escalation_fog_mul(self.level_num)
+            },
             enemies: self.all_permanents(),
             upgrades: self.upgrades.clone(),
             curses: self.curses.clone(),
@@ -1521,6 +1992,22 @@ mod tests {
 
     fn content() -> Content {
         Content::load().unwrap()
+    }
+
+    fn playing_run(seed: u32, level: u32) -> (Content, Run) {
+        let c = content();
+        let mut run = Run::new(&c, seed, level);
+        let picks = valid_picks(&run);
+        run.resolve(&c, &[picks]);
+        (c, run)
+    }
+
+    fn place_altar(run: &mut Run, id: u16) {
+        run.level.altars = vec![protocol::Altar {
+            id,
+            pos: run.level.spawn,
+        }];
+        run.altars_used.clear();
     }
 
     #[test]
@@ -1792,45 +2279,222 @@ mod tests {
     }
 
     #[test]
-    fn altar_applies_upgrade_and_curse_and_is_one_shot() {
-        let c = content();
-        let mut run = Run::new(&c, 42, 2);
-        let picks = valid_picks(&run);
-        run.resolve(&c, &[picks]);
-        assert_eq!(run.phase, PHASE_PLAYING);
-        run.level.altars = vec![
-            protocol::Altar {
-                id: 9,
-                pos: Vec3::new(1.0, 0.0, 1.0),
-            },
-            protocol::Altar {
-                id: 10,
-                pos: Vec3::new(0.0, 0.0, 0.0),
-            },
-        ];
-        run.altars_used.clear();
-        let upgrades_before = run.upgrades.len();
-        let curses_before = run.curses.len();
-        // Too far away: no use.
-        let far = Vec3::new(50.0, 0.0, 50.0);
-        assert_eq!(run.try_use_altar(&c, &far), None);
-        // Within range (horizontal and vertical): first unused altar in level order is used.
-        let near = Vec3::new(0.5, 0.5, 0.5);
-        let (upgrade_id, curse_id) = run.try_use_altar(&c, &near).expect("altar should be usable");
-        assert_eq!(run.altars_used, vec![9]);
-        assert_eq!(run.upgrades.len(), upgrades_before + 1);
-        assert_eq!(run.curses.len(), curses_before + 1);
-        assert_eq!(run.upgrades.last().unwrap(), &upgrade_id);
-        assert_eq!(run.curses.last().unwrap(), &curse_id);
-        // Too high above the altar: no use.
-        let high = Vec3::new(0.0, 1.6, 0.0);
-        assert_eq!(run.try_use_altar(&c, &high), None);
-        // The unused altar 10 is within range: used now.
-        let low = Vec3::new(0.0, 1.4, 0.0);
-        assert!(run.try_use_altar(&c, &low).is_some());
-        assert_eq!(run.altars_used, vec![9, 10]);
-        // Both used: no more altar uses this level.
-        assert_eq!(run.try_use_altar(&c, &low), None);
+    fn altar_ids_select_the_four_designs_in_content_order() {
+        assert_eq!(AltarKind::from_id(0), AltarKind::Shortcut);
+        assert_eq!(AltarKind::from_id(1), AltarKind::GiftSight);
+        assert_eq!(AltarKind::from_id(2), AltarKind::ClearSky);
+        assert_eq!(AltarKind::from_id(3), AltarKind::Debt);
+        assert_eq!(AltarKind::from_id(4), AltarKind::Shortcut);
+        let preview = AltarKind::Debt.preview();
+        assert!(preview.benefit.contains(DEBT_ADVANCE.to_string().as_str()));
+        assert!(!preview.cost.is_empty());
+    }
+
+    #[test]
+    fn altar_ledger_round_trips_and_rejects_garbage() {
+        let ledger = AltarLedger {
+            shortcut_pending: true,
+            pending_temporary_curses: vec!["leadened_soles".to_string()],
+            temporary_curses: vec!["heavy_air".to_string(), "numb_fingers".to_string()],
+            extra_enemies_next_level: 2,
+            gift_sight: true,
+            hardest_pool_next: true,
+            fog_cleared: true,
+            debt_owed: 30,
+            debt_levels_left: 2,
+            debt_garnished_this_level: true,
+            next_enemy_id: 7,
+        };
+        let encoded = ledger.encode();
+        assert_eq!(AltarLedger::decode(&encoded), Some(ledger));
+        assert_eq!(AltarLedger::decode("not a ledger"), None);
+        assert_eq!(AltarLedger::decode("altar-ledger v1\nshortcut_pending=maybe\n"), None);
+    }
+
+    #[test]
+    fn shortcut_altar_skips_the_draft_and_costs_curses_and_enemies() {
+        let (c, mut run) = playing_run(42, 2);
+        place_altar(&mut run, 0);
+        let drafted = run.drafted_enemies.len();
+        let outcome = run.use_altar(&c, run.level.spawn).expect("shortcut altar");
+        assert_eq!(outcome.kind, AltarKind::Shortcut);
+        assert!(run.altar_ledger.shortcut_pending);
+        assert_eq!(run.altar_ledger.pending_temporary_curses.len(), SHORTCUT_CURSES);
+        assert_eq!(run.altar_ledger.extra_enemies_next_level, SHORTCUT_EXTRA_ENEMIES);
+        // Second use of the same altar does nothing.
+        let used = run.altars_used.clone();
+        assert!(run.use_altar(&c, run.level.spawn).is_none());
+        assert_eq!(run.altars_used, used);
+        assert_eq!(run.altar_ledger.pending_temporary_curses.len(), SHORTCUT_CURSES);
+        // Level completion skips the draft and opens the shop.
+        run.finish_level(&c);
+        let offer = run.offer.clone().expect("lobby offer");
+        assert_eq!((offer.enemy_picks, offer.reward_picks), (0, 0));
+        assert!(offer.cards.is_empty());
+        assert!(run.shop.is_some());
+        // The next level applies the curses and the extra enemies.
+        run.resolve(&c, &[vec![]]);
+        assert_eq!(run.altar_ledger.temporary_curses.len(), SHORTCUT_CURSES);
+        assert!(run.altar_ledger.pending_temporary_curses.is_empty());
+        assert_eq!(run.altar_ledger.extra_enemies_next_level, 0);
+        let expected = drafted + run.mods.extra_enemies as usize + SHORTCUT_EXTRA_ENEMIES as usize;
+        assert_eq!(run.enemies.len(), expected);
+        // The temporary curses are gone at the end of the level.
+        run.finish_level(&c);
+        assert!(run.altar_ledger.temporary_curses.is_empty());
+    }
+
+    #[test]
+    fn gift_sight_altar_highlights_gifts_and_hardens_the_next_offer() {
+        let (c, mut run) = playing_run(42, 2);
+        place_altar(&mut run, 1);
+        let outcome = run.use_altar(&c, run.level.spawn).expect("gift sight altar");
+        assert_eq!(outcome.kind, AltarKind::GiftSight);
+        assert!(run.gift_sight());
+        assert!(run.altar_ledger.hardest_pool_next);
+        // Second use does nothing.
+        assert!(run.use_altar(&c, run.level.spawn).is_none());
+        assert!(run.gift_sight());
+        // The next offer is drawn from the greater curses.
+        run.finish_level(&c);
+        assert!(!run.gift_sight(), "the highlight lasts one level");
+        assert!(!run.altar_ledger.hardest_pool_next, "the flag is consumed by the offer");
+        let offer = run.offer.clone().expect("lobby offer");
+        assert!(!offer.cards.is_empty());
+        for card in &offer.cards {
+            assert_eq!(card.kind, CARD_CURSE);
+            assert!(
+                c.curse(&card.id).is_some_and(|def| def.greater),
+                "{} is not a greater curse",
+                card.id
+            );
+        }
+    }
+
+    #[test]
+    fn clear_sky_altar_clears_fog_and_spawns_lure_and_static() {
+        let (c, mut run) = playing_run(42, 2);
+        place_altar(&mut run, 2);
+        let before = run.enemies.len();
+        let outcome = run.use_altar(&c, run.level.spawn).expect("clear sky altar");
+        assert_eq!(outcome.kind, AltarKind::ClearSky);
+        assert!(run.altar_ledger.fog_cleared);
+        assert_eq!(run.info().fog_density_mul, 0.0);
+        assert_eq!(run.enemies.len(), before + 2);
+        assert_eq!(run.altar_spawns, vec!["lure".to_string(), "static".to_string()]);
+        assert!(run.enemies[before..].iter().all(|e| e.active_in == 0));
+        // Second use does nothing.
+        assert!(run.use_altar(&c, run.level.spawn).is_none());
+        assert_eq!(run.enemies.len(), before + 2);
+        // The fog returns next level.
+        run.finish_level(&c);
+        assert!(!run.altar_ledger.fog_cleared);
+        assert!(run.info().fog_density_mul > 0.0);
+    }
+
+    #[test]
+    fn debt_altar_advances_currency_and_garnishes_two_levels_of_income() {
+        let (c, mut run) = playing_run(42, 2);
+        place_altar(&mut run, 3);
+        let before = run.currency;
+        let outcome = run.use_altar(&c, run.level.spawn).expect("debt altar");
+        assert_eq!(outcome.kind, AltarKind::Debt);
+        assert_eq!(run.currency, before + DEBT_ADVANCE);
+        assert_eq!(run.altar_ledger.debt_owed, DEBT_ADVANCE);
+        assert_eq!(run.altar_ledger.debt_levels_left, DEBT_REPAY_LEVELS);
+        // Second use does nothing.
+        assert!(run.use_altar(&c, run.level.spawn).is_none());
+        assert_eq!(run.currency, before + DEBT_ADVANCE);
+        // The level the debt was taken does not count against the repayment window.
+        run.finish_level(&c);
+        assert_eq!(run.altar_ledger.debt_levels_left, DEBT_REPAY_LEVELS);
+        // First repayment level: income pays the debt first.
+        run.resolve(&c, &[vec![]]);
+        assert!(run.altar_ledger.debt_garnished_this_level);
+        let gifts = run.level.gifts.clone();
+        run.gifts_taken = gifts.iter().map(|g| g.id).collect();
+        run.level_phase = LEVEL_COLLAPSE_PENDING;
+        let currency_before = run.currency;
+        let debt_before = run.altar_ledger.debt_owed;
+        let feet = Vec3::new(gifts[0].pos.x, gifts[0].pos.y - 0.9, gifts[0].pos.z);
+        let collected = run.collect_gifts(&feet).len() as u32;
+        assert!(collected > 0);
+        assert_eq!(run.currency, currency_before, "income goes to the debt");
+        assert_eq!(run.altar_ledger.debt_owed, debt_before - collected * GOLDEN_VALUE);
+        run.finish_level(&c);
+        assert_eq!(run.altar_ledger.debt_levels_left, DEBT_REPAY_LEVELS - 1);
+        // Second repayment level: the rest is garnished, then any remainder is taken from the purse.
+        run.resolve(&c, &[vec![]]);
+        assert!(run.altar_ledger.debt_garnished_this_level);
+        let gifts = run.level.gifts.clone();
+        run.gifts_taken = gifts.iter().map(|g| g.id).collect();
+        run.level_phase = LEVEL_COLLAPSE_PENDING;
+        for g in &gifts {
+            let feet = Vec3::new(g.pos.x, g.pos.y - 0.9, g.pos.z);
+            run.collect_gifts(&feet);
+        }
+        let owed = run.altar_ledger.debt_owed;
+        let purse = run.currency;
+        run.finish_level(&c);
+        assert_eq!(run.altar_ledger.debt_levels_left, 0);
+        assert_eq!(run.altar_ledger.debt_owed, 0);
+        assert_eq!(run.currency, purse.saturating_sub(owed));
+    }
+
+    #[test]
+    fn shortcut_effect_survives_a_restart_and_applies_after_the_transition() {
+        let (c, mut run) = playing_run(42, 2);
+        place_altar(&mut run, 0);
+        run.use_altar(&c, run.level.spawn).expect("shortcut altar");
+        let state = run.altar_state();
+        let mut restarted = Run::new(&c, 42, 2);
+        assert!(restarted.restore_altar_state(&c, &state));
+        assert!(restarted.altar_ledger.shortcut_pending);
+        restarted.finish_level(&c);
+        let offer = restarted.offer.clone().expect("lobby offer");
+        assert!(offer.cards.is_empty(), "the restored shortcut skips the draft");
+        assert!(restarted.shop.is_some());
+    }
+
+    #[test]
+    fn debt_effect_survives_a_level_transition_and_a_restart() {
+        let (c, mut run) = playing_run(42, 2);
+        place_altar(&mut run, 3);
+        run.use_altar(&c, run.level.spawn).expect("debt altar");
+        let owed = run.altar_ledger.debt_owed;
+        assert_eq!(owed, DEBT_ADVANCE);
+        // The debt survives the level transition.
+        run.finish_level(&c);
+        assert_eq!(run.altar_ledger.debt_owed, owed);
+        assert_eq!(run.altar_ledger.debt_levels_left, DEBT_REPAY_LEVELS);
+        // Serialize, restart into a fresh run, restore.
+        let state = run.altar_state();
+        let mut restarted = Run::new(&c, 42, 3);
+        assert!(restarted.restore_altar_state(&c, &state));
+        assert_eq!(restarted.altar_ledger.debt_owed, owed);
+        assert_eq!(restarted.altar_ledger.debt_levels_left, DEBT_REPAY_LEVELS);
+        // The restored debt still garnishes income.
+        restarted.resolve(&c, &[vec![]]);
+        assert!(restarted.altar_ledger.debt_garnished_this_level);
+        let gifts = restarted.level.gifts.clone();
+        restarted.gifts_taken = gifts.iter().map(|g| g.id).collect();
+        restarted.level_phase = LEVEL_COLLAPSE_PENDING;
+        let before = restarted.currency;
+        let feet = Vec3::new(gifts[0].pos.x, gifts[0].pos.y - 0.9, gifts[0].pos.z);
+        let collected = restarted.collect_gifts(&feet).len() as u32;
+        assert!(collected > 0);
+        assert_eq!(restarted.currency, before);
+        assert_eq!(restarted.altar_ledger.debt_owed, owed - collected * GOLDEN_VALUE);
+    }
+
+    #[test]
+    fn try_use_altar_returns_the_benefit_and_cost_tokens() {
+        let (c, mut run) = playing_run(42, 2);
+        place_altar(&mut run, 1);
+        let (benefit, cost) = run.try_use_altar(&c, run.level.spawn).expect("altar");
+        assert_eq!(benefit.as_str(), AltarKind::GiftSight.benefit_id());
+        assert_eq!(cost.as_str(), AltarKind::GiftSight.cost_id());
+        assert!(run.try_use_altar(&c, run.level.spawn).is_none());
     }
 
     #[test]
