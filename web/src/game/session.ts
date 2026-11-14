@@ -43,7 +43,10 @@ export class GameSession {
   /** Body radius per enemy id, from the latest snapshot (draw size = server body size). */
   readonly enemyRadius = new Map<number, number>();
   /** Enemy state (ENEMY_DORMANT / HUNTING / DISGUISED) and content kind per enemy id, latest snapshot. */
-  readonly enemyInfo = new Map<number, { kind: number; state: number }>();
+  readonly enemyInfo = new Map<
+    number,
+    { kind: number; state: number; target: Vec3; prog: number; flags: number }
+  >();
   private readonly projectiles = new SnapshotBuffer();
   private noticeSeq = 0;
   private needsReset = true;
@@ -102,6 +105,9 @@ export class GameSession {
           runOver: null,
           tiles: [],
           altarsUsed: [],
+          levelPhase: 0,
+          goldenTaken: [],
+          collapseMs: 0,
         });
         return;
       case "Snapshot": {
@@ -122,7 +128,7 @@ export class GameSession {
         this.enemyInfo.clear();
         for (const en of msg.enemies) {
           this.enemyRadius.set(en.id, en.radius);
-          this.enemyInfo.set(en.id, { kind: en.kind, state: en.state });
+          this.enemyInfo.set(en.id, { kind: en.kind, state: en.state, target: en.target, prog: en.prog, flags: en.flags });
         }
         this.projectiles.push(now, msg.projectiles);
         if (!sameTiles(msg.tiles, store.tiles)) {
@@ -131,6 +137,11 @@ export class GameSession {
           store.set({ tiles: msg.tiles });
         }
         if (msg.altarsUsed.length !== store.altarsUsed.length) store.set({ altarsUsed: msg.altarsUsed });
+        if (msg.levelPhase !== store.levelPhase) store.set({ levelPhase: msg.levelPhase });
+        if (msg.goldenTaken.length !== store.goldenTaken.length) store.set({ goldenTaken: msg.goldenTaken });
+        // Coarse (0.5 s) so the HUD re-renders twice a second, not 20 times.
+        const collapseHalfSecs = Math.ceil(msg.collapseMs / 500);
+        if (collapseHalfSecs !== Math.ceil(store.collapseMs / 500)) store.set({ collapseMs: msg.collapseMs });
         if (msg.you.class !== store.myClass) store.set({ myClass: msg.you.class });
         const me = msg.players.find((p) => p.id === this.playerId);
         const activeIds = msg.players.filter((p) => p.mode === PLAYER_ACTIVE).map((p) => p.id);

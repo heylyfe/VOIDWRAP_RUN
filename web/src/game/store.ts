@@ -59,6 +59,12 @@ export interface GameStore {
   tiles: TileState[];
   /** Altar ids already used on this level. */
   altarsUsed: number[];
+  /** LEVEL_COLLECT / LEVEL_COLLAPSE_PENDING / LEVEL_COLLAPSING (phase 2: golden gifts, tiles fall). */
+  levelPhase: number;
+  /** Golden gift ids collected in phase 2 (golden gifts sit at the positions of collected normal gifts). */
+  goldenTaken: number[];
+  /** Milliseconds until the collapse ends (0 outside phase 2); updated about twice a second. */
+  collapseMs: number;
   set(patch: Partial<Omit<GameStore, "set">>): void;
 }
 
@@ -84,5 +90,8 @@ export const useGameStore = create<GameStore>((set) => ({
   myClass: 0,
   tiles: [],
   altarsUsed: [],
+  levelPhase: 0,
+  goldenTaken: [],
+  collapseMs: 0,
   set: (patch) => set(patch),
 }));
