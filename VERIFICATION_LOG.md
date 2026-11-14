@@ -174,3 +174,19 @@ Paid route usage: 0 tickets (0%).
 - Verified with the CI-built setup exe (workflow_dispatch run 43565853908): silent install exit 0 -> files, Start
   menu + desktop shortcuts, HKCU uninstall entry; installed game opens the "VOIDWRAP RUN" window, /health ok, closes
   cleanly; uninstaller exit 0 removes files, shortcuts and registry key.
+
+## M3 STATUS / HANDOFF (2026-11-14) - read this first when resuming
+State of `main` (local, NOT pushed - CI would fail until the items below are green):
+- Accepted and tested: T-052 controller (95 sim lib tests), T-053 enemies (32 tests in sim/tests/hazards.rs),
+  T-054 catalog (validate-chunks OK), T-055 assembler (18 tests in sim/tests/levelgen.rs), T-057a/b client
+  (tsc/eslint/179 vitest), T-058 content + ENEMIES.md. Lead fixes: resting-contact stacking, lenient catalog,
+  Vec3/Aabb Copy, beacon dais removed (players/bot were stepped onto it by the 0.55 u step-up).
+- Open, dispatched in parallel (responses in tickets/*.response.md):
+  - T-056 r2: 7 failing server tests after the M3 server integration (`cargo test -p server`).
+  - T-055 r5a: fair jump rules (landing >= 2 u wide, gap <= envelope - 1 u) in levelgen + chunks + validator.
+  - T-055 r5b: physics bot technique (`cargo test --release -p sim --test playthrough`, target 0 failures).
+- Then: `just verify`, package, capture/play-test (big maps, collapse, golden gifts, enemies), push, CI, tag
+  v0.3.0-alpha.1 (release now also builds the NSIS installer).
+Process notes: large files -> FN/APPEND edits via `node tools/apply-fns.mjs` (format: tickets/FN-FORMAT.md); tickets
+reference code with `@include path`; subordinate answers over ~100 KB get cut off - split tickets. Exception logged:
+T-053 got a third round instead of an OVERSEER takeover, to save Opus credits (user preference).
