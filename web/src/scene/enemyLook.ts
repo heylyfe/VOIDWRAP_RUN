@@ -1,4 +1,4 @@
-// Pure lookup + curve helpers for the reworked enemy roster (ticket T-057a).
+// Pure lookup + curve helpers for the reworked enemy roster (ticket T-057a, extended in T-076).
 // No three.js / React runtime imports — unit-testable in isolation.
 import type { MutableRefObject } from "react";
 import {
@@ -16,7 +16,18 @@ export type EnemyBehaviorId =
   | "lantern_leech"
   | "turret"
   | "mimic"
-  | "corrupter";
+  | "corrupter"
+  | "rewind"
+  | "warden"
+  | "peal"
+  | "kite"
+  | "static"
+  | "blight"
+  | "metronome"
+  | "overlook"
+  | "chorus"
+  | "coil"
+  | "lure";
 
 export interface EnemyLook {
   /** Behaviour id; also the roster order used for the wire `kind` index. */
@@ -27,7 +38,7 @@ export interface EnemyLook {
   readonly glow: string;
 }
 
-/** Order matches the wire `kind` index: pallbearer 0 … corrupter 8. */
+/** Order matches the wire `kind` index: pallbearer 0 … corrupter 8, rewind 9 … lure 19. */
 export const ENEMY_LOOKS: readonly EnemyLook[] = [
   { behavior: "pallbearer", accent: "#ff3355", glow: "#ffdf9e" },
   { behavior: "snapshrike", accent: "#ff4436", glow: "#ffb36b" },
@@ -38,6 +49,17 @@ export const ENEMY_LOOKS: readonly EnemyLook[] = [
   { behavior: "turret", accent: "#ff8a3c", glow: "#ffd07a" },
   { behavior: "mimic", accent: "#ff3df0", glow: "#b46bff" },
   { behavior: "corrupter", accent: "#39ffb0", glow: "#7dffb9" },
+  { behavior: "rewind", accent: "#46e0ff", glow: "#cdf6ff" },
+  { behavior: "warden", accent: "#f4d35e", glow: "#fdf3b8" },
+  { behavior: "peal", accent: "#e63946", glow: "#ffb0a8" },
+  { behavior: "kite", accent: "#35a7ff", glow: "#bdd9ff" },
+  { behavior: "static", accent: "#9aa3ad", glow: "#dde3ea" },
+  { behavior: "blight", accent: "#a3c34a", glow: "#dcea9a" },
+  { behavior: "metronome", accent: "#c98f3d", glow: "#ffe08a" },
+  { behavior: "overlook", accent: "#ecebe4", glow: "#ffffff" },
+  { behavior: "chorus", accent: "#2ec4b6", glow: "#a2eee3" },
+  { behavior: "coil", accent: "#e07a5f", glow: "#ffc7a8" },
+  { behavior: "lure", accent: "#a55eea", glow: "#d8b0ff" },
 ];
 
 export const ENEMY_KIND_COUNT = ENEMY_LOOKS.length;
@@ -103,6 +125,39 @@ export const TURRET_AIM_WIDTH = 0.1;
 export const LEECH_FLARE_RADIUS = 0.9;
 export const MIMIC_HISS_RADIUS = 0.95;
 export const CORRUPTER_AURA_RADIUS = 2.0;
+
+/* ---------- telegraph radii for the eleven new entries (T-076) ---------- */
+
+/** Rewind (SNAP): the return mark shrinks onto the remembered point as prog fills. */
+export const REWIND_MARK_START = 1.7;
+export const REWIND_MARK_END = 0.35;
+export function rewindMarkRadius(t01: number): number {
+  return lerp(REWIND_MARK_START, REWIND_MARK_END, t01);
+}
+
+/** Warden (GUARD): fixed ring around the guarded gift. */
+export const WARDEN_GUARD_RADIUS = 2.1;
+
+/** Peal (PEAL): each ring widens the zone out to this radius. */
+export const PEAL_ZONE_MAX = 3.2;
+
+/** Kite (TETHER): thin tether line; the strike marker at the anchor. */
+export const KITE_TETHER_WIDTH = 0.12;
+export const KITE_STRIKE_RADIUS = 0.85;
+
+/** Overlook (MARK): sight line width to the victim. */
+export const OVERLOOK_SIGHT_WIDTH = 0.14;
+
+/** Coil (WIND): the ring tightens while winding; the release is a shockwave. */
+export const COIL_WIND_START = 1.6;
+export const COIL_WIND_END = 0.55;
+export function coilWindRadius(t01: number): number {
+  return lerp(COIL_WIND_START, COIL_WIND_END, t01);
+}
+export const COIL_SHOCKWAVE_RADIUS = 2.6;
+
+/** Metronome (BEAT): the swing lane across the floor. */
+export const METRONOME_LANE_WIDTH = 2.3;
 
 /** Orbit Dasher (snapshrike) freezes its line for the last 0.35 s of the 0.75 s LOCK window. */
 export const SNAPSHRIKE_LOCK_PROG = 0.4 / 0.75; // ≈ 0.533

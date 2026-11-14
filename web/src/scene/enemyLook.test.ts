@@ -23,19 +23,38 @@ import {
   MIMIC_GIFT_SCALE,
   MIMIC_SHIMMER_PERIOD,
 } from "./enemyLook";
+import { MODEL_COMPONENTS } from "./EnemyField";
+
+const EXPECTED_BEHAVIORS = [
+  "pallbearer", "snapshrike", "moteling", "rift_warden", "gale_wight",
+  "lantern_leech", "turret", "mimic", "corrupter",
+  "rewind", "warden", "peal", "kite", "static",
+  "blight", "metronome", "overlook", "chorus", "coil", "lure",
+] as const;
 
 describe("ENEMY_LOOKS", () => {
-  it("has exactly nine looks in wire kind order", () => {
-    expect(ENEMY_LOOKS.map((l) => l.behavior)).toEqual([
-      "pallbearer", "snapshrike", "moteling", "rift_warden", "gale_wight",
-      "lantern_leech", "turret", "mimic", "corrupter",
-    ]);
-    expect(ENEMY_KIND_COUNT).toBe(9);
+  it("has exactly twenty looks in wire kind order", () => {
+    expect(ENEMY_LOOKS.map((l) => l.behavior)).toEqual([...EXPECTED_BEHAVIORS]);
+    expect(ENEMY_KIND_COUNT).toBe(20);
+  });
+
+  it("gives every enemy a unique behaviour id", () => {
+    const behaviours = new Set(ENEMY_LOOKS.map((l) => l.behavior));
+    expect(behaviours.size).toBe(ENEMY_LOOKS.length);
   });
 
   it("gives every enemy a unique accent colour", () => {
     const accents = new Set(ENEMY_LOOKS.map((l) => l.accent));
     expect(accents.size).toBe(ENEMY_LOOKS.length);
+  });
+
+  it("gives every enemy a unique glow colour", () => {
+    const glows = new Set(ENEMY_LOOKS.map((l) => l.glow));
+    expect(glows.size).toBe(ENEMY_LOOKS.length);
+  });
+
+  it("registers exactly one model component per kind", () => {
+    expect(MODEL_COMPONENTS.length).toBe(ENEMY_KIND_COUNT);
   });
 });
 
@@ -44,10 +63,21 @@ describe("enemyLookFor / isEnemyKind", () => {
     expect(enemyLookFor(0).behavior).toBe("pallbearer");
     expect(enemyLookFor(4).behavior).toBe("gale_wight");
     expect(enemyLookFor(8).behavior).toBe("corrupter");
+    expect(enemyLookFor(9).behavior).toBe("rewind");
+    expect(enemyLookFor(10).behavior).toBe("warden");
+    expect(enemyLookFor(18).behavior).toBe("coil");
+    expect(enemyLookFor(19).behavior).toBe("lure");
+  });
+
+  it("enemyLookFor(19) is the lure and not the pallbearer", () => {
+    const look = enemyLookFor(19);
+    expect(look.behavior).toBe("lure");
+    expect(look.behavior).not.toBe("pallbearer");
   });
 
   it("falls back to pallbearer for unknown or missing kinds", () => {
     expect(enemyLookFor(undefined).behavior).toBe("pallbearer");
+    expect(enemyLookFor(20).behavior).toBe("pallbearer");
     expect(enemyLookFor(99).behavior).toBe("pallbearer");
     expect(enemyLookFor(-1).behavior).toBe("pallbearer");
     expect(enemyLookFor(2.5).behavior).toBe("pallbearer");
@@ -56,7 +86,8 @@ describe("enemyLookFor / isEnemyKind", () => {
   it("isEnemyKind validates the index range", () => {
     expect(isEnemyKind(0)).toBe(true);
     expect(isEnemyKind(8)).toBe(true);
-    expect(isEnemyKind(9)).toBe(false);
+    expect(isEnemyKind(19)).toBe(true);
+    expect(isEnemyKind(20)).toBe(false);
     expect(isEnemyKind(-1)).toBe(false);
   });
 });

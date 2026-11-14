@@ -17,11 +17,20 @@ import {
   RIFT_WARDEN_SHOVE_RADIUS,
   SNAPSHRIKE_DASH_HALF_WIDTH,
   TURRET_AIM_WIDTH,
+  KITE_STRIKE_RADIUS,
+  KITE_TETHER_WIDTH,
+  METRONOME_LANE_WIDTH,
+  OVERLOOK_SIGHT_WIDTH,
+  PEAL_ZONE_MAX,
+  WARDEN_GUARD_RADIUS,
+  COIL_SHOCKWAVE_RADIUS,
+  coilWindRadius,
   enemyLookFor,
   expandingRingRadius,
   isTelegraphState,
   motelingRingRadius,
   prog01,
+  rewindMarkRadius,
   snapshrikeAlpha,
   telegraphAlpha,
 } from "./enemyLook";
@@ -63,6 +72,7 @@ function createSlot(): TelegraphSlot {
  * bright, and tinted with the enemy's accent colour; alpha and radius are driven by
  * the wire `prog` (0..255). Slots exist only while the enemy is TELEGRAPH/ATTACK —
  * otherwise hidden. `target` is the telegraph anchor from the server payload.
+ * The switch covers all twenty roster ids.
  */
 export function Telegraphs({ session }: { session: GameSession }): JSX.Element {
   const slots = useRef<TelegraphSlot[]>([]);
@@ -244,6 +254,90 @@ export function Telegraphs({ session }: { session: GameSession }): JSX.Element {
           discVisible = true;
           discRadius = ringRadius;
           discAlpha = ringAlpha * 0.2;
+          break;
+        case "rewind":
+          // SNAP: the return mark shrinks onto the remembered point
+          ringVisible = true;
+          if (attack) {
+            ringRadius = expandingRingRadius(p, 1.4);
+            ringAlpha = 0.85 * (1 - p);
+          } else {
+            ringRadius = rewindMarkRadius(p);
+            ringAlpha = telegraphAlpha(p);
+          }
+          discVisible = true;
+          discRadius = ringRadius;
+          discAlpha = ringAlpha * 0.22;
+          break;
+        case "warden":
+          // GUARD: ring around the guarded gift (anchor = the gift)
+          ringVisible = true;
+          ringRadius = WARDEN_GUARD_RADIUS;
+          ringAlpha = attack ? 0.9 * (1 - p) : 0.3 + 0.7 * p;
+          discVisible = true;
+          discRadius = WARDEN_GUARD_RADIUS;
+          discAlpha = attack ? 0.12 * (1 - p) : 0.1 + 0.12 * p;
+          break;
+        case "peal":
+          // PEAL: the bell's ring, expanding from the bell itself
+          ringVisible = true;
+          ringX = o.x;
+          ringY = o.y + 0.06;
+          ringZ = o.z;
+          ringRadius = expandingRingRadius(p, PEAL_ZONE_MAX);
+          ringAlpha = attack ? 0.9 * (1 - p) : telegraphAlpha(p);
+          discVisible = true;
+          discRadius = ringRadius;
+          discAlpha = ringAlpha * 0.18;
+          break;
+        case "kite":
+          // TETHER: line to the tethered player + strike marker at the anchor
+          lineVisible = true;
+          lineWidth = KITE_TETHER_WIDTH;
+          lineAlpha = attack ? 0.1 + 0.9 * (1 - p) : 0.25 + 0.75 * p;
+          ringVisible = true;
+          ringRadius = KITE_STRIKE_RADIUS;
+          ringAlpha = attack ? 0.85 * (1 - p) : telegraphAlpha(p);
+          break;
+        case "overlook":
+          // MARK: the sight line to the victim + a marker on the marked player
+          lineVisible = true;
+          lineWidth = OVERLOOK_SIGHT_WIDTH;
+          lineAlpha = attack ? 0.5 * (1 - p) : telegraphAlpha(p);
+          ringVisible = true;
+          ringRadius = 0.7;
+          ringAlpha = attack ? 0.8 * (1 - p) : telegraphAlpha(p);
+          break;
+        case "coil":
+          // WIND: ring tightens while winding; RELEASE: expanding shockwave
+          ringVisible = true;
+          ringX = o.x;
+          ringY = o.y + 0.06;
+          ringZ = o.z;
+          if (attack) {
+            ringRadius = expandingRingRadius(p, COIL_SHOCKWAVE_RADIUS);
+            ringAlpha = 0.95 * (1 - p);
+          } else {
+            ringRadius = coilWindRadius(p);
+            ringAlpha = telegraphAlpha(p);
+          }
+          discVisible = true;
+          discRadius = ringRadius;
+          discAlpha = ringAlpha * 0.16;
+          break;
+        case "metronome":
+          // BEAT: the swing lane across the floor
+          lineVisible = true;
+          lineWidth = METRONOME_LANE_WIDTH;
+          lineAlpha = attack ? 0.7 * (1 - p) : 0.3 + 0.6 * p;
+          break;
+        // Static, Blight, Chorus and Lure are cue_tier 3 (ambient, ENEMY_REGISTRY §2):
+        // their cue is a persistent body/aura/fog tell on the model itself, never a
+        // floor decal — no ring, disc or line by design. They deliberately draw nothing.
+        case "static":
+        case "blight":
+        case "chorus":
+        case "lure":
           break;
       }
 

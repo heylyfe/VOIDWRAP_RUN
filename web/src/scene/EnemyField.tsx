@@ -16,6 +16,17 @@ import { LanternLeech } from "./enemies/LanternLeech";
 import { BoltSentry } from "./enemies/BoltSentry";
 import { FalseGift } from "./enemies/FalseGift";
 import { CrumbleWisp } from "./enemies/CrumbleWisp";
+import { Rewind } from "./enemies/Rewind";
+import { Warden } from "./enemies/Warden";
+import { Peal } from "./enemies/Peal";
+import { Kite } from "./enemies/Kite";
+import { Static } from "./enemies/Static";
+import { Blight } from "./enemies/Blight";
+import { Metronome } from "./enemies/Metronome";
+import { Overlook } from "./enemies/Overlook";
+import { Chorus } from "./enemies/Chorus";
+import { Coil } from "./enemies/Coil";
+import { Lure } from "./enemies/Lure";
 import { Telegraphs } from "./Telegraphs";
 import { enemyBehaviorFor } from "./enemyBehavior";
 import type { EnemyAnim, EnemyAnimRef, EnemyModelProps } from "./enemyLook";
@@ -23,7 +34,8 @@ import { ENEMY_KIND_COUNT } from "./enemyLook";
 
 export const MAX_ENEMIES = 24;
 
-const MODEL_COMPONENTS: readonly ComponentType<EnemyModelProps>[] = [
+/** One model per wire `kind` index, in design/content.json roster order. */
+export const MODEL_COMPONENTS: readonly ComponentType<EnemyModelProps>[] = [
   Pallbearer,
   Snapshrike,
   Moteling,
@@ -33,6 +45,17 @@ const MODEL_COMPONENTS: readonly ComponentType<EnemyModelProps>[] = [
   BoltSentry,
   FalseGift,
   CrumbleWisp,
+  Rewind,
+  Warden,
+  Peal,
+  Kite,
+  Static,
+  Blight,
+  Metronome,
+  Overlook,
+  Chorus,
+  Coil,
+  Lure,
 ];
 
 interface SlotRefs {
@@ -46,7 +69,7 @@ function emptySlot(): SlotRefs {
 
 /**
  * Pooled enemy slots (fixed size, visibility toggled — never re-created).
- * Each slot pre-builds all nine roster models and shows the one matching the
+ * Each slot pre-builds all twenty roster models and shows the one matching the
  * server's `kind`. The slot is scaled by the server's hit-sphere radius; a
  * disguised False Gift is left unscaled so it is indistinguishable from a gift.
  * Telegraph drawings live in <Telegraphs /> (own pool, same size).
