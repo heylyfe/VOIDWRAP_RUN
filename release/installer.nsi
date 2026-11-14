@@ -31,9 +31,14 @@ OutFile "${OUTFILE}"
 InstallDir "$LOCALAPPDATA\Programs\${APP_NAME}"
 InstallDirRegKey HKCU "${APP_KEY}" "InstallLocation"
 RequestExecutionLevel user
-SetShellVarContext current
 SetCompressor /SOLID lzma
 
+; Windows needs a purely numeric x.x.x.x file version; the readable tag goes in the version strings.
+!ifndef VERSION_NUM
+  !define VERSION_NUM "0.0.0.0"
+!endif
+VIProductVersion "${VERSION_NUM}"
+VIFileVersion "${VERSION_NUM}"
 VIAddVersionKey "ProductName" "${APP_NAME}"
 VIAddVersionKey "FileDescription" "${APP_NAME}"
 VIAddVersionKey "CompanyName" "${APP_PUBLISHER}"
