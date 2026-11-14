@@ -12,6 +12,8 @@ use tokio::sync::Mutex;
 pub const DEFAULT_HOST_PORT: u16 = 7879;
 /// How long the router is asked to keep the UPnP port mapping.
 const UPNP_LEASE_SECS: u64 = 2 * 60 * 60;
+/// How often an open UPnP mapping is renewed (well inside the 2 hour lease).
+const UPNP_RENEW_INTERVAL: Duration = Duration::from_secs(90 * 60);
 /// How long to wait for the UPnP gateway to answer the gateway search.
 const UPNP_SEARCH_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long to wait for the router to remove the UPnP mapping when hosting stops or the program exits.
@@ -142,6 +144,8 @@ struct HostInner {
     listener: Option<tokio::task::JoinHandle<()>>,
     /// UPnP gateway connection, kept so the mapping can be removed on stop/exit.
     gateway: Option<igd_next::aio::Gateway<igd_next::aio::tokio::Tokio>>,
+    /// Background task that renews the UPnP lease while the mapping is open.
+    renewal: Option<tokio::task::JoinHandle<()>>,
     /// Current UPnP state.
     upnp: UpnpStatus,
     /// Public IP as reported by the router, if any.
@@ -160,6 +164,7 @@ impl HostManager {
                 shutdown: None,
                 listener: None,
                 gateway: None,
+                renewal: None,
                 upnp: UpnpStatus::Off,
                 public: None,
             }),
@@ -272,6 +277,9 @@ impl HostManager {
         }
         let (shutdown, task, gateway) = {
             let mut inner = self.inner.lock().await;
+            if let Some(renewal) = inner.renewal.take() {
+                renewal.abort();
+            }
             inner.upnp = UpnpStatus::Off;
             inner.public = None;
             (inner.shutdown.take(), inner.listener.take(), inner.gateway.take())
@@ -311,11 +319,50 @@ impl HostManager {
                 inner.upnp = UpnpStatus::Open;
                 inner.public = Some(external);
                 inner.gateway = Some(gateway);
+                if let Some(old) = inner.renewal.take() {
+                    old.abort();
+                }
+                let manager = Arc::clone(&self);
+                inner.renewal = Some(tokio::spawn(async move {
+                    manager.upnp_renew_loop().await;
+                }));
             }
             Err(e) => {
                 tracing::warn!("UPnP setup failed: {e}");
                 inner.upnp = UpnpStatus::Failed;
                 inner.public = None;
+            }
+        }
+    }
+
+    /// The router only keeps the mapping for the lease (2 hours): re-open it every
+    /// [`UPNP_RENEW_INTERVAL`] while it is open. A failed renewal marks UPnP as failed
+    /// (the status message then tells the player); LAN friends keep working.
+    async fn upnp_renew_loop(self: Arc<Self>) {
+        loop {
+            tokio::time::sleep(UPNP_RENEW_INTERVAL).await;
+            if self.inner.lock().await.listener.is_none() {
+                return;
+            }
+            let result = upnp_open(self.host_port).await;
+            let mut inner = self.inner.lock().await;
+            if inner.listener.is_none() {
+                return;
+            }
+            match result {
+                Ok((external, gateway)) => {
+                    tracing::info!("UPnP mapping renewed");
+                    inner.upnp = UpnpStatus::Open;
+                    inner.public = Some(external);
+                    inner.gateway = Some(gateway);
+                }
+                Err(e) => {
+                    tracing::warn!("UPnP renewal failed: {e}");
+                    inner.upnp = UpnpStatus::Failed;
+                    inner.public = None;
+                    inner.renewal = None;
+                    return;
+                }
             }
         }
     }

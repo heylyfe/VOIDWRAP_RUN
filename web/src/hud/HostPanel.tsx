@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { JSX } from 'react';
 import Link from 'next/link';
+import { httpBaseUrl } from '../game/net';
 import { hostUrl, parseHostResponse } from './host';
 import type { HostStatus } from './host';
 
@@ -19,7 +20,7 @@ type LoadState =
 // never throws, so callers can attach .then handlers and set state there.
 async function fetchHostStatus(): Promise<LoadState> {
   try {
-    const res = await fetch('/api/host', { headers: { accept: 'application/json' } });
+    const res = await fetch(`${httpBaseUrl()}/api/host`, { headers: { accept: 'application/json' } });
     if (!res.ok) {
       // 403 (this page was opened from another computer) or any failure:
       // hosting is only for the computer running the game.

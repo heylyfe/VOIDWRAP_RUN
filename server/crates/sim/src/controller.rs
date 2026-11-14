@@ -5,15 +5,14 @@
 //! dash class ability. Collision is axis-separated AABB against [`World`].
 //!
 //! M2 classes (`ControllerState.class`, CLASS_*): CLASS_STRIKER dashes (the M1
-//! ability), CLASS_GLIDER glides, CLASS_BULWARK blinks and CLASS_GRAPPLER
+//! ability), CLASS_GLIDER glides, CLASS_BULWARK plants Aegis Bloom and CLASS_GRAPPLER
 //! grapples. Unknown values behave like CLASS_STRIKER. Glide: holding
 //! BTN_ABILITY while airborne and falling caps the fall speed at
 //! `GLIDE_FALL_SPEED`, multiplies the horizontal air-speed limit by
 //! `GLIDE_AIR_SPEED_MUL`, and grants one extra air jump (total still capped at
-//! `TUNING_AIR_JUMPS_MAX + GLIDER_BONUS_AIR_JUMPS`). Blink: a BTN_ABILITY press
-//! teleports horizontally up to `BLINK_DISTANCE` (never through a solid); the
-//! blink frame applies no gravity and performs no normal horizontal movement,
-//! so the teleported distance is exact. Grapple: a BTN_ABILITY press pulls the
+//! `TUNING_AIR_JUMPS_MAX + GLIDER_BONUS_AIR_JUMPS`). Aegis Bloom: a grounded BTN_ABILITY press starts a
+//! short immobile wind-up, then the ward (rooted, knockback-immune, nearly invulnerable)
+//! begins and the server fires the pulse that pushes nearby things away. Grapple: a BTN_ABILITY press pulls the
 //! player toward an automatically picked target point.
 //!
 //! [`step_with`] applies a [`Tuning`] on top of that (upgrades and curses): run,
@@ -29,11 +28,11 @@
 //!
 //! Step order (identical on server and client):
 //!   1. timers & edge detection (+ grapple cancel on a BTN_JUMP rising edge)
-//!   2. class ability start (dash / blink / grapple)
+//!   2. class ability start (dash / Aegis Bloom / grapple)
 //!   3. jump (buffer + coyote, then air jumps)
-//!   4. vertical velocity (grapple pull / dash / gravity / jump cut / glide cap; skipped on the blink frame)
-//!   5. horizontal velocity (grapple pull / dash / ground friction / glider boost; skipped on the blink frame)
-//!   6. collide Y, then X, then Z (the blink frame moves on Y only)
+//!   4. vertical velocity (grapple pull / dash / gravity / jump cut / glide cap; held at zero while Bulwark is rooted)
+//!   5. horizontal velocity (grapple pull / dash / ground friction / glider boost; held at zero while Bulwark is rooted)
+//!   6. collide Y, then X, then Z
 //!   7. grounded & coyote refresh, air jump reset, ability timer tick
 //!   8. `prev_buttons = input.buttons`
 //!
@@ -457,7 +456,7 @@ fn dash_dir(wx: f32, wz: f32, vel: &Vec3) -> Vec3 {
 
 /// Unit horizontal aim direction: wish input, else horizontal velocity, else None.
 ///
-/// Used by the blink and grapple classes; unlike [`dash_dir`] there is no
+/// Used by the grapple class; unlike [`dash_dir`] there is no
 /// fallback direction, because those abilities do nothing without an aim.
 fn aim_dir(wx: f32, wz: f32, vel: &Vec3) -> Option<Vec3> {
     let wish_len_sq = wx * wx + wz * wz;

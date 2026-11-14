@@ -177,6 +177,9 @@ impl Game {
             tracing::warn!(conn = id, "dropping slow or closed connection");
             self.conns.remove(&id);
             self.votes.remove(&id);
+            // A leaver may have been the only missing vote. Recursion is bounded: `conns`
+            // shrinks with every removal, and resolving the draft leaves the draft phase.
+            self.maybe_resolve_draft();
         }
     }
 
@@ -198,6 +201,8 @@ impl Game {
         );
         self.conns.remove(&id);
         self.votes.remove(&id);
+        // Same as in `send`: recursion is bounded because `conns` shrinks.
+        self.maybe_resolve_draft();
     }
 
     fn draft_msg(&self) -> Option<ServerMsg> {
@@ -231,6 +236,7 @@ impl Game {
             let at = self.spawn_point(slot);
             if let Some(p) = self.conns.get_mut(id).and_then(|c| c.player.as_mut()) {
                 p.state = player_spawn_state(at, p.class);
+                p.inputs.clear();
                 p.mode = PLAYER_ACTIVE;
                 p.starved_ticks = 0;
             }
@@ -554,6 +560,7 @@ impl Game {
                     && p.state.pos.y < kill_y
                 {
                     p.state = player_spawn_state(at, p.class);
+                    p.inputs.clear();
                 }
             }
         }
@@ -740,6 +747,7 @@ impl Game {
             if self.run.lives > 0 {
                 self.run.lives -= 1;
                 p.state = player_spawn_state(at, p.class);
+                p.inputs.clear();
                 tracing::info!(conn = id, cause, lives = self.run.lives, "life lost");
             } else {
                 p.mode = PLAYER_DEAD;
@@ -996,6 +1004,23 @@ mod tests {
         hello(&mut g, 2);
         vote(&mut g, 1);
         g.handle(GameEvent::Disconnected { id: 2 });
+        assert_eq!(g.run.phase, PHASE_PLAYING);
+    }
+
+    #[test]
+    fn a_rejected_holdout_does_not_block_the_draft() {
+        let mut g = game();
+        let _rx1 = connect(&mut g, 1);
+        hello(&mut g, 1);
+        let _rx2 = connect(&mut g, 2);
+        hello(&mut g, 2);
+        vote(&mut g, 1);
+        assert_eq!(g.run.phase, PHASE_ENEMY_DRAFT);
+        g.handle(GameEvent::Message {
+            id: 2,
+            msg: inputs(0..MAX_INPUTS_PER_MSG + 1, 0),
+        });
+        assert_eq!(g.conns.len(), 1);
         assert_eq!(g.run.phase, PHASE_PLAYING);
     }
 

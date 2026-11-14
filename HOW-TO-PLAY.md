@@ -50,7 +50,7 @@ The download is a zip file [a packed folder, like a sealed envelope]. You must u
 3. RIGHT-click the zip file (press the right-hand mouse button once). A menu opens.
 4. Click "Extract All..." in the menu.
 5. A window opens. Click the button "Extract".
-6. A normal folder opens. It is named `VOIDWRAP_RUN-...` (for example `VOIDWRAP_RUN-v0.3.0-alpha.1`). Open it.
+6. A normal folder opens. It is named `VOIDWRAP_RUN-...` (for example `VOIDWRAP_RUN-v0.3.1-alpha.1`). Open it.
 
 Inside you should see: `VOIDWRAP RUN.exe` (the game), `PLAY-IN-BROWSER.cmd` (a backup way to start), a folder named `web`, and the guides (`HOW-TO-PLAY.md` and `ENEMIES.md`).
 

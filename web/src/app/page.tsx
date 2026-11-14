@@ -4,10 +4,18 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import type { JSX } from 'react';
 import { HostPanel } from '../hud/HostPanel';
+import { loadPlayerName, savePlayerName } from '../game/playerName';
 import { JoinPanel } from '../hud/JoinPanel';
 
 export default function Title(): JSX.Element {
   const [panel, setPanel] = useState<'none' | 'host' | 'join'>('none');
+  const [name, setName] = useState('');
+
+  useEffect(() => {
+    // Read after mount (localStorage is browser-only); deferred so the page renders first.
+    const t = window.setTimeout(() => setName(loadPlayerName()), 0);
+    return () => window.clearTimeout(t);
+  }, []);
 
   useEffect(() => {
     if (panel === 'none') {
@@ -28,6 +36,21 @@ export default function Title(): JSX.Element {
     <main className="flex min-h-screen flex-col items-center justify-center gap-6 px-4 py-8 text-center">
       <h1 className="font-mono text-5xl font-black tracking-[0.2em] text-[#ff3db8] sm:text-7xl">VOIDWRAP RUN</h1>
       <p className="font-mono text-lg text-[#38e8ff]">Collect every gift. Outrun what you voted for.</p>
+
+      <label className="flex items-center gap-2 font-mono text-sm text-white/70">
+        Name
+        <input
+          type="text"
+          data-testid="player-name"
+          value={name}
+          maxLength={16}
+          onChange={(e) => {
+            setName(e.target.value);
+            savePlayerName(e.target.value);
+          }}
+          className="w-40 rounded border border-white/30 bg-black/40 px-2 py-1 text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[#38e8ff]/60"
+        />
+      </label>
 
       <div className="flex w-full max-w-md flex-col items-stretch gap-3 sm:w-auto sm:max-w-none sm:flex-row sm:items-center sm:justify-center sm:gap-4">
         <Link

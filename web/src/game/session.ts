@@ -38,6 +38,8 @@ export class GameSession {
   onLevel: (level: LevelData) => void = () => {};
 
   private readonly predictor: Predictor;
+  private lastTick: number | null = null;
+  private minTick: number | null = null;
   private readonly remote = new SnapshotBuffer();
   private readonly enemies = new SnapshotBuffer();
   /** Body radius per enemy id, from the latest snapshot (draw size = server body size). */
@@ -96,6 +98,9 @@ export class GameSession {
         this.level = msg.data;
         this.needsReset = true;
         this.accumulator = 0;
+        // Server ticks only grow: any snapshot not newer than the last one seen before this
+        // Level is a leftover of the previous run (same level number on a restart) - drop it.
+        this.minTick = this.lastTick;
         this.onLevel(msg.data);
         this.sim.setTiles([]);
         store.set({
@@ -112,6 +117,12 @@ export class GameSession {
         return;
       case "Snapshot": {
         if (!this.level || msg.level !== this.level.level) return; // stale: from before a level change
+        if (this.lastTick !== null && ((msg.tick - this.lastTick) >>> 0) > 0x7fffffff) return; // out of order
+        if (this.minTick !== null) {
+          if (((msg.tick - this.minTick) >>> 0) === 0 || ((msg.tick - this.minTick) >>> 0) > 0x7fffffff) return; // previous run
+          this.minTick = null;
+        }
+        this.lastTick = msg.tick;
         if (this.needsReset || this.predictor.state === null) {
           this.predictor.reset(msg.you);
           this.needsReset = false;
@@ -148,7 +159,10 @@ export class GameSession {
         if (me && me.mode !== store.myMode) store.set({ myMode: me.mode });
         if (activeIds.join(",") !== store.activeIds.join(",")) store.set({ activeIds });
         if (msg.giftsTaken.length !== store.giftsTaken.length) store.set({ giftsTaken: msg.giftsTaken });
-        store.set({ serverTick: msg.tick, playerCount: msg.players.length });
+        // Debug-panel numbers: only written when they change visibly (1 Hz), not every snapshot.
+        if (msg.tick % 20 === 0 || msg.players.length !== store.playerCount) {
+          store.set({ serverTick: msg.tick, playerCount: msg.players.length });
+        }
         return;
       }
       case "Pong": {

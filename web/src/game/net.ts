@@ -8,6 +8,14 @@ import { decodeServerMsg, encodeClientMsg, type ClientMsg, type ServerMsg } from
  * 3. the web dev server (port 3000) -> the game server on port 7878 of the same machine,
  * 4. otherwise the page was served BY the game server: connect back to the same address.
  */
+/** HTTP origin of the game server for API calls: the dev server (port 3000) talks to port 7878,
+ *  otherwise the page itself was served by the game server (empty string = same origin). */
+export function httpBaseUrl(): string {
+  if (typeof window === "undefined") return "";
+  const { protocol, hostname, port } = window.location;
+  return port === "3000" ? `${protocol}//${hostname}:7878` : "";
+}
+
 export function defaultServerUrl(): string {
   if (typeof window === "undefined") return "ws://localhost:7878/ws";
   const fromQuery = new URLSearchParams(window.location.search).get("server");

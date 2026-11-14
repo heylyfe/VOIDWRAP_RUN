@@ -81,7 +81,7 @@ pub struct InputFrame {
     pub buttons: u8,
 }
 
-/// Complete kinematic character state. Must contain everything the step function reads so client reconciliation is exact. class: CLASS_* - which ability BTN_ABILITY triggers (striker dash, grappler grapple, blinker blink, glider glide). ward_frames: Bulwark ward countdown (rooted, knockback-immune). stagger_frames: after a shove, no jump/ability/dash input is honoured.
+/// Complete kinematic character state. Must contain everything the step function reads so client reconciliation is exact. class: CLASS_* - which ability BTN_ABILITY triggers (striker dash, grappler grapple, bulwark Aegis Bloom, glider glide). ward_frames: Bulwark Aegis Bloom ward countdown (wind-up, then rooted and knockback-immune ward, pulse as it begins). stagger_frames: after a shove, no jump/ability/dash input is honoured.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ControllerState {
     pub pos: Vec3,

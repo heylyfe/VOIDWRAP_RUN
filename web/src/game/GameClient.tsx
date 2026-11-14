@@ -53,6 +53,7 @@ import { defaultServerUrl } from "./net";
 import { GameSession } from "./session";
 import { WasmStepper } from "./sim";
 import { useGameStore } from "./store";
+import { loadPlayerName } from "./playerName";
 
 const MAX_REMOTE = 8;
 const MOUSE_SENSITIVITY = 0.0025;
@@ -117,6 +118,8 @@ function World({ session, level, themeLevel }: { session: GameSession; level: Le
     const p = session.playerPosition(dt);
     const g = player.current;
     if (g) g.visible = !spectating; // spectators are invisible, to everyone and to themselves
+    const now = performance.now();
+    const remoteNow = session.remotePlayers(now);
     if (spectating) {
       if (!flyPos.current) {
         const from = p ?? level.spawn;
@@ -124,8 +127,7 @@ function World({ session, level, themeLevel }: { session: GameSession; level: Le
       }
       const k = session.keys;
       const keys = { forward: k.forward, back: k.back, left: k.left, right: k.right, up: k.jump, down: k.down, fast: k.ability || session.rightMouse };
-      const now = performance.now();
-      const targets = [...session.remotePlayers(now).entries()];
+      const targets = [...remoteNow.entries()];
       const followed = session.followIndex === null ? undefined : targets[session.followIndex % Math.max(targets.length, 1)];
       if (followed) {
         const cam = followCamera(followed[1], session.yaw, session.pitch, CAMERA_DISTANCE);
@@ -169,9 +171,8 @@ function World({ session, level, themeLevel }: { session: GameSession; level: Le
       );
       camera.lookAt(p.x, p.y + CAMERA_HEIGHT, p.z);
     }
-    const now = performance.now();
     let i = 0;
-    for (const o of session.remotePlayers(now).values()) {
+    for (const o of remoteNow.values()) {
       const r = remotes.current[i];
       const last = remoteLast.current[i];
       const rm = remoteMotion[i];
@@ -253,7 +254,12 @@ function FpsProbe() {
 }
 
 function DebugPanel() {
-  const { status, error, serverTick, pingMs, playerCount, fps } = useGameStore();
+  const status = useGameStore((s) => s.status);
+  const error = useGameStore((s) => s.error);
+  const serverTick = useGameStore((s) => s.serverTick);
+  const pingMs = useGameStore((s) => s.pingMs);
+  const playerCount = useGameStore((s) => s.playerCount);
+  const fps = useGameStore((s) => s.fps);
   return (
     <div className="pointer-events-none absolute bottom-3 left-3 font-mono text-xs text-white/60">
       <div>
@@ -283,8 +289,17 @@ export default function GameClient() {
   const [level, setLevel] = useState<LevelData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const container = useRef<HTMLDivElement>(null);
-  const { status, pointerLocked, runOver, giftsTaken, runInfo, draft, myMode, activeIds, shop, notices, myClass } =
-    useGameStore();
+  const status = useGameStore((s) => s.status);
+  const pointerLocked = useGameStore((s) => s.pointerLocked);
+  const runOver = useGameStore((s) => s.runOver);
+  const giftsTaken = useGameStore((s) => s.giftsTaken);
+  const runInfo = useGameStore((s) => s.runInfo);
+  const draft = useGameStore((s) => s.draft);
+  const myMode = useGameStore((s) => s.myMode);
+  const activeIds = useGameStore((s) => s.activeIds);
+  const shop = useGameStore((s) => s.shop);
+  const notices = useGameStore((s) => s.notices);
+  const myClass = useGameStore((s) => s.myClass);
   const levelPhase = useGameStore((s) => s.levelPhase);
   const goldenTaken = useGameStore((s) => s.goldenTaken);
   const collapseMs = useGameStore((s) => s.collapseMs);
@@ -304,7 +319,7 @@ export default function GameClient() {
     WasmStepper.load()
       .then((stepper) => {
         if (disposed) return;
-        s = new GameSession(stepper, defaultServerUrl(), "blocky");
+        s = new GameSession(stepper, defaultServerUrl(), loadPlayerName());
         s.onLevel = setLevel;
         setSession(s);
       })

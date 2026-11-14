@@ -66,7 +66,7 @@ if (win && desktop) {
     const setup = join(root, "dist", `VOIDWRAP_RUN-${version}-windows-setup.exe`);
     console.log(`package: building the Windows installer -> ${setup}`);
     // cwd = release\ so the icon path (..\design\icon\icon.ico) inside installer.nsi resolves.
-    // "v0.3.0-alpha.1" -> "0.3.0.0" (the numeric file version Windows requires).
+    // "v0.3.1-alpha.1" -> "0.3.1.0" (the numeric file version Windows requires).
     const nums = (version.match(/\d+/g) ?? []).slice(0, 3);
     while (nums.length < 3) nums.push("0");
     const versionNum = `${nums.join(".")}.0`;
