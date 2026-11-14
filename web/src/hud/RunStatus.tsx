@@ -3,8 +3,12 @@
 // Compact run-status panel pinned top-right above the WebGL canvas:
 // currency, lives, and one chip per drafted enemy/curse/upgrade. Only the
 // chips take pointer events; tooltips are CSS-only (hover + keyboard focus).
+// Drafted upgrade/curse ids are classified against the content manifest (not
+// trusted from the wire's two separate arrays) so a swapped array can never
+// render a curse as an upgrade.
 import type { JSX } from 'react';
 import { CARD_CURSE, CARD_ENEMY, CARD_UPGRADE, lookupCard } from '../content';
+import { categorizeMods } from './modChips';
 
 const GOLD = '#ffd23d';
 const DANGER = '#ff4d4d';
@@ -76,11 +80,10 @@ export function RunStatus(props: {
     ...enemies.map((id) =>
       buildChip(CARD_ENEMY, id, DANGER, 'rgba(255,77,77,0.12)', 'rgba(255,77,77,0.45)'),
     ),
-    ...curses.map((id) =>
-      buildChip(CARD_CURSE, id, CURSE, 'rgba(140,30,40,0.25)', 'rgba(140,30,40,0.6)'),
-    ),
-    ...upgrades.map((id) =>
-      buildChip(CARD_UPGRADE, id, CYAN, 'rgba(56,232,255,0.12)', 'rgba(56,232,255,0.45)'),
+    ...categorizeMods(upgrades, curses).map(({ id, group }) =>
+      group === 'upgrade'
+        ? buildChip(CARD_UPGRADE, id, CYAN, 'rgba(56,232,255,0.12)', 'rgba(56,232,255,0.45)')
+        : buildChip(CARD_CURSE, id, CURSE, 'rgba(140,30,40,0.25)', 'rgba(140,30,40,0.6)'),
     ),
   ];
 

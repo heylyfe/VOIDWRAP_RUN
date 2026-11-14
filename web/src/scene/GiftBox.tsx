@@ -42,7 +42,13 @@ const GOLD_RIBBON = "#8f6a10";
 const GOLD_BOW = "#fff6c8";
 const GOLD_EMISSIVE = "#ffc63f";
 const GOLD_EMISSIVE_INTENSITY = 1.5;
-const NORMAL_EMISSIVE_INTENSITY = 0.6;
+/**
+ * Normal gifts now glow like golden ones (DO 1): pushed above 1.0 so the
+ * toneMapped:false emissive clears typical bloom thresholds instead of the
+ * previous 0.6, which never glowed. Golden gifts stay brighter and keep their
+ * sparkle so they remain distinct.
+ */
+const NORMAL_EMISSIVE_INTENSITY = 1.35;
 const SPARKLE_COLOR = "#fff3b0";
 
 interface GiftAssets {

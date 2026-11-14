@@ -41,6 +41,7 @@ import { Decor } from "@/scene/Decor";
 import { Effects } from "@/scene/Effects";
 import { EnemyField } from "@/scene/EnemyField";
 import { Gifts } from "@/scene/GiftBox";
+import { GiftPickup } from "@/scene/GiftPickupFx";
 import { GliderWings } from "@/scene/GliderWings";
 import { GrappleLine } from "@/scene/GrappleLine";
 import { PALETTE } from "@/scene/palette";
@@ -93,7 +94,12 @@ function World({ session, level, themeLevel }: { session: GameSession; level: Le
   const remoteLast = useRef<{ x: number; y: number; z: number; ok: boolean }[]>(
     Array.from({ length: MAX_REMOTE }, () => ({ x: 0, y: 0, z: 0, ok: false })),
   );
-  const fogMul = useGameStore((s) => s.runInfo?.fogDensityMul ?? 1);
+  const fogDensityMul = useGameStore((s) => s.runInfo?.fogDensityMul ?? 1);
+  // fogDensityMul is server-controlled and used as a divisor below. A
+  // non-positive or non-finite multiplier sends near/far to Infinity/NaN and
+  // breaks the smoothstep in three.js linear fog; treat it as "fog pushed
+  // beyond the camera far plane" (effectively clear).
+  const fogMul = Number.isFinite(fogDensityMul) && fogDensityMul > 0 ? fogDensityMul : 0.02;
   const tiles = useGameStore((s) => s.tiles);
   const altarsUsed = useGameStore((s) => s.altarsUsed);
   const levelPhase = useGameStore((s) => s.levelPhase);
@@ -215,6 +221,7 @@ function World({ session, level, themeLevel }: { session: GameSession; level: Le
       <Decor platforms={level.platforms} seed={level.seed} tiles={tiles} />
       <Crystals platforms={level.platforms} theme={theme} seed={level.seed + 7} />
       <Gifts level={level} tiles={tiles} />
+      <GiftPickup level={level} />
       <Beacon position={level.beacon} open={beaconOpen} />
       <Altars altars={level.altars} used={altarsUsed} session={session} />
       <group ref={player}>
