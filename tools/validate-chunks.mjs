@@ -2,7 +2,8 @@
 /* tools/validate-chunks.mjs
    Validates design/chunks.json against design/CHUNK_FORMAT.md (+ binding M3 amendments:
    walkable 0.5 u risers, >= 3 u walkways, 4 u stacking clearance, design hop envelope with
-   a 1.0 u comfort margin and a 2.0 u minimum landing extent, internal reachability).
+   a 1.0 u comfort margin and a 2.0 u minimum landing extent, internal reachability;
+   plain jumps climb at most +2.0 u, the +2.25 u apex being unreachable in practice).
    Node 24+, ESM, no packages.
    Exit 0 = ok; exit 1 = errors (printed, one per line). Always prints a per-chunk summary. */
 import { readFile } from "node:fs/promises";
@@ -16,13 +17,15 @@ const ROLES = new Set(["hub", "path", "junction", "dead_end"]);
 const FACINGS = new Set(["N", "E", "S", "W"]);
 // Design hop envelope, design max gap (u), rows ascending in deltaY. Conservative:
 // next-higher row wins => gap never exceeds the published value for the true deltaY.
-// Jump edges additionally require a >= 2.0 u smaller landing extent and a 1.0 u comfort
-// margin (gap <= row value - 1.0). Touching drops (gap ~0, rise < -0.55) are always fine.
-const ENV = [[-4, 8], [-3, 7.5], [-2, 7], [-1, 6.5], [0, 6], [0.5, 5.5], [1, 5], [1.5, 4.5], [2, 4], [2.25, 3]];
+// Plain (non-pad) jumps climb at most +2.0 u: the jump apex is exactly +2.25 u
+// (12^2 / (2*32)), so a +2.25 u rise can never be cleared in practice. Touching drops
+// (gap ~0, rise < -0.55) are always fine. Jump edges additionally require a >= 2.0 u
+// smaller landing extent and a 1.0 u comfort margin (gap <= row value - 1.0).
+const ENV = [[-4, 8], [-3, 7.5], [-2, 7], [-1, 6.5], [0, 6], [0.5, 5.5], [1, 5], [1.5, 4.5], [2, 4]];
 function envelopeGap(dy) {
   if (dy < -4.0 - EPS) return 8;        // deeper drop: same fall budget as the Δ-4.0 row
   for (const [row, gap] of ENV) if (row + EPS >= dy) return gap;
-  return null;                           // Δ > +2.25: not jumpable (needs pads/stairs)
+  return null;                           // Δ > +2.0: not jumpable (needs pads/stairs)
 }
 const isNum = v => typeof v === "number" && Number.isFinite(v);
 const v3 = v => Array.isArray(v) && v.length === 3 && v.every(isNum);

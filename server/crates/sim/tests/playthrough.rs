@@ -768,21 +768,31 @@ fn rect_platform(
 /// Builds a LevelData containing exactly `platforms`, gifts emptied, with the player
 /// spawn moved onto platform A at (sx, sy, sz). The level is a donor clone of a
 /// generated level: platforms and gifts are overwritten, the spawn fields are moved —
-/// every other field is copied, never constructed.
+/// every other field is copied, never constructed. `kill_y` is set to the lowest
+/// platform top in the world minus 15 u, so a player falling toward a deep-drop
+/// landing (or riding out a high pad arc) is never killed before the height of B;
+/// the donor's own kill_y is arbitrary and may sit above B.
 fn tiny_level(platforms: Vec<Platform>, sx: f32, sy: f32, sz: f32) -> LevelData {
     let mut lvl = levelgen::generate(0, 1).data;
+    let min_top = platforms
+        .iter()
+        .map(|p| p.bounds.max.y)
+        .fold(f32::INFINITY, f32::min);
     lvl.platforms = platforms;
     lvl.gifts.clear();
     lvl.spawn.x = sx;
     lvl.spawn.y = sy;
     lvl.spawn.z = sz;
+    lvl.kill_y = min_top - 15.0;
     lvl
 }
 
 /// Builds the two-platform world for one bucket: A is a 12 u long, 4 u wide run-up
-/// along +x with its top at y = 0 (a 3x3 PLATFORM_JUMP_PAD for pad buckets), B sits
-/// edge-to-edge `bucket.gap` beyond A's edge, its top at `bucket.rise`, its depth
-/// 3 u along the jump direction and its width `bucket.width` across it.
+/// along +x with its top at y = 0 (a 3x3 PLATFORM_JUMP_PAD for pad buckets, i.e. A is
+/// the pad itself), B sits edge-to-edge `bucket.gap` beyond A's (the pad's) edge, its
+/// top at `bucket.rise`, its depth 3 u along the jump direction and its width
+/// `bucket.width` across it. The bucket geometry is therefore measured from the pad's
+/// edge for pad buckets.
 fn bucket_platforms(bucket: LandingBucket) -> Vec<Platform> {
     let proto = platform_proto();
     let (gap, rise, width) = (bucket.gap(), bucket.rise(), bucket.width());
@@ -815,10 +825,14 @@ fn bucket_platforms(bucket: LandingBucket) -> Vec<Platform> {
 /// left the ground and `vel.y <= 0.0`, so the variable-jump rule never cuts the
 /// ascent. `jump_launched` exists so the release check can never swallow the
 /// press frame itself (where `vel.y` is still 0 before the step runs).
-/// `Pad` mode never presses BTN_JUMP: standing on the pad launches the player
-/// on contact (vel.y = PAD_LAUNCH_VEL) and the bot then steers to B's centre.
+/// `Pad` mode never presses BTN_JUMP: the player is spawned standing on the pad's
+/// centre, the pad launches on contact/landing (vel.y = PAD_LAUNCH_VEL, horizontal
+/// velocity x0.6, once per contact), and the player then steers at B's centre while
+/// airborne with full input — never a jump press.
 /// `goal_top` / `goal` describe the landing platform for the success check
-/// (grounded on its top) and the closest-approach metric. 180 frames = 3 s.
+/// (grounded on its top) and the closest-approach metric. The tiny world's kill_y
+/// sits below every platform (see `tiny_level`), so a falling player reaches B
+/// before hitting the kill plane. 180 frames = 3 s.
 fn simulate_controller(
     platforms: Vec<Platform>,
     spawn: (f32, f32, f32),
@@ -939,20 +953,21 @@ fn report_case(label: &str, out: &EdgeSim, failures: &mut Vec<String>) {
 /// `levelgen::platform_graph`, classifies it as walk / step-up / drop / jump / pad,
 /// buckets the jump and pad edges by (gap rounded up to 0.25 u, rise rounded to 0.25 u,
 /// landing smaller extent rounded down to 0.5 u, launcher is pad) and simulates each
-/// bucket in a two-platform world (run at full input from the far end of A straight at
-/// B's centre — steering is always toward B's centre; BTN_JUMP is sent as a fresh
-/// rising-edge press, held through the full rise and released on the way down, timed
-/// so the player is grounded or within coyote frames at A's edge — ~1.4 u before the
-/// edge for a flush B above step height, else the last ~0.3 u; pad buckets never press
-/// BTN_JUMP and ride the contact launch; success = grounded on B's top within 3 s).
-/// Representative 0.5 u step-up, 4-step (0.5 u rise, 1 u tread) stair and touching
-/// -6.0 u drop cases are simulated the same way, plus three hand cases that fix the
-/// physics by construction: rise +1.0 gap 0.0 (jump ~1.4 u before the face and keep
-/// running), rise +2.0 gap 2.0 (held running jump at the edge; ride up B's face once
-/// the feet clear its top) and rise -4.0 gap 7.0 (a running jump lands ~1.0 s later,
-/// ~9 u out). Prints a per-bucket table (count, gap, rise, width, pad, ok); on failure
-/// prints the failing buckets with the closest landing distance. Fails if any bucket
-/// or representative case cannot be performed.
+/// bucket in a two-platform world (full input straight at B's centre — steering is
+/// always toward B's centre; for pad buckets the player starts standing on the pad's
+/// centre and rides the contact launch, for jump buckets it starts at the far end of A;
+/// BTN_JUMP is sent as a fresh rising-edge press, held through the full rise and
+/// released on the way down, timed so the player is grounded or within coyote frames
+/// at A's edge — ~1.4 u before the edge for a flush B above step height, else the
+/// last ~0.3 u; pad buckets never press BTN_JUMP; success = grounded on B's top
+/// within 3 s). Representative 0.5 u step-up, 4-step (0.5 u rise, 1 u tread) stair and
+/// touching -6.0 u drop cases are simulated the same way, plus three hand cases that
+/// fix the physics by construction: rise +1.0 gap 0.0 (jump ~1.4 u before the face and
+/// keep running), rise +2.0 gap 2.0 (held running jump at the edge; ride up B's face
+/// once the feet clear its top) and rise -4.0 gap 7.0 (a running jump lands ~1.0 s
+/// later, ~9 u out). Prints a per-bucket table (count, gap, rise, width, pad, ok); on
+/// failure prints the failing buckets with the closest landing distance. Fails if any
+/// bucket or representative case cannot be performed.
 #[test]
 fn every_graph_edge_kind_is_physically_doable() {
     let mut counts: BTreeMap<LandingBucket, u32> = BTreeMap::new();
@@ -1010,8 +1025,14 @@ fn every_graph_edge_kind_is_physically_doable() {
         let gap = bucket.gap();
         let rise = bucket.rise();
         let width = bucket.width();
+        // Pad buckets: spawn standing on the pad's centre (A = the 3 u pad, its
+        // centre at x = -1.5, top at y = 0) and let the contact launch do the
+        // work — the pad launches on landing/contact with vel.y = PAD_LAUNCH_VEL
+        // (horizontal velocity x0.6, once per contact). Do not jump; while
+        // airborne the player steers at B's centre with full input, exactly like
+        // a jump bucket but without ever pressing BTN_JUMP.
         let (spawn, mode) = if bucket.pad {
-            ((-2.5, 1.0, 0.0), SimMode::Pad)
+            ((-1.5, 0.0, 0.0), SimMode::Pad)
         } else {
             ((-11.0, 1.0, 0.0), SimMode::Jump)
         };

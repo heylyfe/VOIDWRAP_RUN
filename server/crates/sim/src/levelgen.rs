@@ -1825,6 +1825,8 @@ pub fn generate_for(seed: u32, level: u32, players: u32) -> GeneratedLevel {
 // ------------------------------------------------------ validation ----
 
 /// Design hop envelope (edge-to-edge), by landing rise; `None` = not jumpable.
+/// Plain (non-pad) jumps may climb at most +2.0 u: the apex of the jump is exactly
+/// +2.25 u (12^2 / (2*32)), so a +2.25 u rise can never be cleared with room to spare.
 fn design_max_gap(dy: f32) -> Option<f32> {
     if dy <= -4.0 {
         Some(8.0)
@@ -1844,8 +1846,6 @@ fn design_max_gap(dy: f32) -> Option<f32> {
         Some(4.5)
     } else if dy <= 2.0 {
         Some(4.0)
-    } else if dy <= 2.25 {
-        Some(3.0)
     } else {
         None
     }
@@ -1859,6 +1859,8 @@ fn design_max_gap(dy: f32) -> Option<f32> {
 ///     landing-width requirement).
 /// Every other edge is a JUMP edge (including a touching upward rise above the step
 /// limit) and must be fair for humans too:
+///   * a plain (non-pad) jump may climb at most +2.0 u (apex - 0.25); a higher rise
+///     is only jumpable with a jump pad,
 ///   * the landing platform's smaller horizontal extent must be >= 2.0 u (this applies
 ///     to jump pads used as landing targets as well, no exception), and
 ///   * the edge-to-edge gap must be <= (design max gap for its rise) - 1.0 u comfort.

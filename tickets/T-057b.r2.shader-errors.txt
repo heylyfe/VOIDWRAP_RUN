@@ -1,0 +1,31 @@
+  console: THREE.WebGLProgram: Shader Error 0 - VALIDATE_STATUS false
+  console: THREE.WebGLProgram: Shader Error 1282 - VALIDATE_STATUS false
+ERROR: 0:1592: '=' : cannot convert from 'const highp float' to 'highp 3-component vector of float'
+ERROR: 0:1592: '=' : dimension mismatch
+ERROR: 0:1592: 'uPadBase' : undeclared identifier
+ERROR: 0:1599: '=' : dimension mismatch
+ERROR: 0:1599: 'assign' : cannot convert from 'highp float' to 'highp 3-component vector of float'
+ERROR: 0:1599: 'uPillarColor' : undeclared identifier
+ERROR: 0:1604: '=' : dimension mismatch
+ERROR: 0:1604: 'assign' : cannot convert from 'highp float' to 'highp 3-component vector of float'
+ERROR: 0:1604: 'uCheckerA' : undeclared identifier
+ERROR: 0:1604: 'uCheckerB' : undeclared identifier
+ERROR: 0:1605: 'uCrumble' : undeclared identifier
+ERROR: 0:1613: '=' : dimension mismatch
+ERROR: 0:1613: 'assign' : cannot convert from 'const highp float' to 'highp 3-component vector of float'
+ERROR: 0:1613: 'uBottomColor' : undeclared identifier
+ERROR: 0:1615: '=' : dimension mismatch
+ERROR: 0:1615: 'assign' : cannot convert from 'const highp float' to 'highp 3-component vector of float'
+ERROR: 0:1615: 'uSideColor' : undeclared identifier
+ERROR: 0:1712: 'uPadGlow' : undeclared identifier
+ERROR: 0:1722: 'uWarnAmber' : undeclared identifier
+ERROR: 0:1722: 'uWarnRed' : undeclared identifier
+ERROR: 0:1731: 'uEdgeColor' : undeclared identifier
+ERROR: 0:1732: 'uIce' : undeclared identifier
+ERROR: 0:1733: 'uCrumble' : undeclared identifier
+ERROR: 0:1733: 'uIceEmissive' : undeclared identifier
+ERROR: 0:1734: 'uWarnAmber' : undeclared identifier
+ERROR: 0:1744: 'uWarnAmber' : undeclared identifier
+ERROR: 0:1744: 'uWarnRed' : undeclared identifier
+ERROR: 0:1754: 'uIce' : undeclared identifier
+ERROR: 0:1755: 'uIceEmissive' : undeclared identifier

@@ -200,3 +200,9 @@ T-053 got a third round instead of an OVERSEER takeover, to save Opus credits (u
   `turret_standing_on_a_floor_fires_at_a_player_in_the_open` (fails at floor height, passes now).
 - Also lead-found real bug: hub spawn point 1 u from the hub edge + SPAWN_RING (up to 1.6 u) put players over the
   void; spawn now inset 3.5 u.
+- T-057b r2 ACCEPTED (+ lead strict-index fixes): platform shaders now declare every uniform/varying (generated
+  headers + a regression vitest); verified in the real packaged game: the level renders, "0 / 46" gifts on level 1,
+  Ctrl toggles pointer lock. (Play-test found the shader failure that no unit test could.)
+- T-055 r8a ACCEPTED: plain jumps climb <= 2.0 u (2.25 = apex, impossible); chunks + validator updated (25 valid).
+  T-055 r8b ACCEPTED: harness handles deep drops; remaining failures are ONLY jump pads -> lead probe proved a REAL
+  controller bug (pads never launch, walked onto or landed on) -> T-052 r3.
