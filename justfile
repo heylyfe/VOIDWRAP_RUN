@@ -41,6 +41,7 @@ verify: wasm
     pnpm --dir web exec eslint .
     pnpm --dir web exec vitest run
     node tools/matchmaker-conformance/run.mjs
+    node tools/voting-conformance/run.mjs
 
 # Screenshot the running client into shots/ (needs `just run` in another terminal)
 capture:
