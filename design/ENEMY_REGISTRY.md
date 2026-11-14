@@ -210,17 +210,17 @@ enemy instead:
 | `turret` | Bolt Turret | 2 | 2 | 1 | 3 | zone |
 | `mimic` | False Gift | 1 | 3 | 2 | 3 | ambush, small |
 | `corrupter` | Floor Rotter | 3 | 2 | 1 | 2 | zone, debuff, collapse |
-| `rewind` | Rewind | 2 | 1 | 2 | 3 | chase, zone |
-| `warden` | Warden | 2 | 2 | 1 | 3 | chase, loot |
-| `peal` | Peal | 1 | 4 | 1 | 4 | zone, debuff |
-| `kite` | Kite | 2 | 6 | 1 | 4 | chase, zone |
-| `static` | Static | 3 | 5 | 2 | 3 | fog, chase |
-| `blight` | Blight | 3 | 8 | 1 | 4 | debuff, chase |
-| `metronome` | Metronome | 1 | 10 | 1 | 5 | zone, debuff |
-| `overlook` | Overlook | 2 | 12 | 1 | 4 | zone, chase |
-| `chorus` | Chorus | 3 | 10 | 1 | 4 | summon, small |
-| `coil` | Coil | 1 | 4 | 2 | 3 | zone, debuff |
-| `lure` | Lure | 1 | 3 | 2 | 3 | fog, ambush, collapse |
+| `rewind` | Path Replayer | 2 | 1 | 2 | 3 | chase, zone |
+| `warden` | Gift Guard | 2 | 2 | 1 | 3 | chase, loot |
+| `peal` | Bell Ringer | 1 | 4 | 1 | 4 | zone, debuff |
+| `kite` | Tether Tracker | 2 | 6 | 1 | 4 | chase, zone |
+| `static` | Fog Dasher | 3 | 5 | 2 | 3 | fog, chase |
+| `blight` | Ground Infector | 3 | 8 | 1 | 4 | debuff, chase |
+| `metronome` | Beat Keeper | 1 | 10 | 1 | 5 | zone, debuff |
+| `overlook` | Marking Eye | 2 | 12 | 1 | 4 | zone, chase |
+| `chorus` | Choir Summoner | 3 | 10 | 1 | 4 | summon, small |
+| `coil` | Spring Leaper | 1 | 4 | 2 | 3 | zone, debuff |
+| `lure` | Fog Decoy | 1 | 3 | 2 | 3 | fog, ambush, collapse |
 
 ### 10.2 Interactions and hooks
 
@@ -254,63 +254,75 @@ enemy instead:
 Behaviour is implemented in T-074 / T-075. This section is the contract they build against; the
 `behavior` string in `content.json` is the player-facing version of the same thing.
 
-### `rewind` — Rewind (cue 2, min 1, cap 2, chase/zone)
-- Cue: a floor mark at the enemy's remembered position, 1.2 s, shrinking onto the exact return point.
-- Punish: on close, the enemy snaps to the mark and drags the player to it. A reposition, not damage.
-- Counter: Striker dash breaks the drag; Grappler is immune (the grapple anchors).
+### `rewind` — Path Replayer (cue 2, min 1, cap 2, chase/zone)
+- Cue: the body trembles in place for 1.5 s with a floor mark on the exact hit volume.
+- Punish: it then replays the nearest player's path from 1.5 s ago. Touching it is lethal.
+- Counter: sharp direction changes and jump pads break the replay; a Striker dash breaks the drag;
+  a Grappler is immune (the grapple anchors).
 
-### `warden` — Warden (cue 2, min 2, cap 1, chase/loot)
+### `warden` — Gift Guard (cue 2, min 2, cap 1, chase/loot)
 - Cue: a ring around the gift it guards, 1.5 s, before its reach extends to the ring edge.
-- Punish: standing inside the ring when it closes costs a life-chunk and knocks the gift away.
+- Punish: standing inside the ring when it closes is lethal; it lunges at whoever takes a guarded
+  gift and frenzies in the collapse phase.
 - Counter: Grappler pulls the gift out; Bulwark is immune (the ward shoves it off its post).
 
-### `peal` — Peal (cue 1, min 4, cap 1, zone/debuff)
+### `peal` — Bell Ringer (cue 1, min 4, cap 1, zone/debuff)
 - Cue: the bell body opens for 0.6 s before each ring.
-- Punish: each ring widens the zone; the third ring is the final one.
+- Punish: it teleports beside the closest player every 6 s and rings three times. The rings are
+  harmless unless the target carries OVERTUNED, in which case the ring kills.
 - Counter: Bulwark is immune (the ward ignores the ring); Glider crosses above it.
-- Hook: with `coil` permanent, the final ring is lethal instead of a debuff.
+- Hook: with `coil` permanent the final ring is lethal outright.
 
-### `kite` — Kite (cue 2, min 6, cap 1, chase/zone)
-- Cue: the tether line brightens for 1.4 s before it tightens.
-- Punish: the tether tightens while the player runs away; it snaps for damage at full tension.
-- Counter: Striker and Grappler both close the gap and cut the line.
+### `kite` — Tether Tracker (cue 2, min 6, cap 1, chase/zone)
+- Cue: the tether brightens and the strike marker tracks the target for 1.4 s, then freezes for
+  0.4 s before the blast rings resolve.
+- Punish: the frozen marker detonates into blast rings.
+- Counter: Striker and Grappler both close the gap and cut the line; height breaks it too.
 
-### `static` — Static (cue 3, min 5, cap 2, fog/chase)
-- Cue: ambient — fog density rises around it and a loop plays while it is tracking.
-- Punish: it follows the sound of running; the fog it leaves slows the player inside it.
-- Counter: Glider is never attracted (silent); Bulwark is immune (the ward grounds it).
+### `static` — Fog Dasher (cue 3, min 5, cap 2, fog/chase)
+- Cue: ambient — the fog patch around the body is the persistent cue and it is also the hit volume,
+  so a player can walk out of it at any time.
+- Punish: it dashes, strikes, then goes invisible and reappears beside the next-closest player.
+- Counter: Glider is never selected (silent); Bulwark is immune to the strike.
 
-### `blight` — Blight (cue 3, min 8, cap 1, debuff/chase)
+### `blight` — Ground Infector (cue 3, min 8, cap 1, debuff/chase)
 - Cue: ambient — infected ground is discoloured and spreads one tile per beat.
-- Punish: crossing infected ground applies the infection; it spreads and stalls timers.
+- Punish: crossing infected ground applies the infection; it slows the victim and stalls timers.
 - Counter: Glider is immune (airborne); Grappler crosses above the infection.
 - Hook: while infected, `rewind` and `kite` timers do not advance.
 
-### `metronome` — Metronome (cue 1, min 10, cap 1, zone/debuff)
-- Cue: the arm flashes 0.5 s before each swing.
-- Punish: the safe half of the floor alternates on the count; the wrong half debuffs.
-- Counter: Glider crosses the swing; Bulwark is immune (the ward ignores the beat).
+### `metronome` — Beat Keeper (cue 1, min 10, cap 1, zone/debuff)
+- Cue: the arm flashes for 0.5 s before each swing resolves.
+- Punish: a beacon shows a number that ticks up; the marked player must use their class ability
+  exactly on that number or be struck.
+- Counter: Glider crosses the swing; Bulwark is immune (never struck).
 
-### `overlook` — Overlook (cue 2, min 12, cap 1, zone/chase)
-- Cue: a sight line to the player, 1.6 s, before the mark lands.
-- Punish: marks the player for every other enemy on the level.
-- Counter: Striker closes and kills it; Glider is never attracted (out of its floor-bound sight).
+### `overlook` — Marking Eye (cue 2, min 12, cap 1, zone/chase)
+- Cue: a 1.6 s sight line onto the marked player before the laser locks.
+- Punish: a slow tracking laser that only the marked player can see and be harmed by. Teammates can
+  draw its path during the collapse phase.
+- Counter: Striker closes and kills it; Glider is never marked (out of its floor-bound sight).
 
-### `chorus` — Chorus (cue 3, min 10, cap 1, summon/small)
-- Cue: ambient — the singers are audible before they are visible.
-- Punish: summons small singers that copy the player's last move one beat late.
-- Counter: Striker kills the singers; Bulwark is immune (the ward shoves them off).
+### `chorus` — Choir Summoner (cue 3, min 10, cap 1, summon/small)
+- Cue: ambient — the choir murmurs before anything can hurt you.
+- Punish: instruments spawn as special gifts; each one collected freezes the choir and extends its
+  timer. When the timer runs out it moves and hunts.
+- Counter: Striker kills the instruments; Bulwark is immune (the ward shoves them off).
 - Hook: `chorus_needs_small_pair` — only a candidate once two `small` permanents are held.
 
-### `coil` — Coil (cue 1, min 4, cap 2, zone/debuff)
+### `coil` — Spring Leaper (cue 1, min 4, cap 2, zone/debuff)
 - Cue: the coil visibly winds, 0.8 s, before release.
-- Punish: winds tighter every second the player stays near it, then releases a zone debuff.
+- Punish: winds tighter every second the player stays near it, then leaps and releases a shockwave
+  that inflicts OVERTUNED.
 - Counter: Striker dashes out; Glider is never attracted (never stands in it).
 
-### `lure` — Lure (cue 1, min 3, cap 2, fog/ambush/collapse)
-- Cue: the false floor shimmers for 0.7 s before it opens.
-- Punish: paints a false floor over the void; stepping on it drops the player.
-- Counter: Glider is immune (crosses above); Grappler pulls past it.
+### `lure` — Fog Decoy (cue 1, min 3, cap 2, fog/ambush/collapse)
+- Cue: it sits in fog glowing like a gift; the fog pulses slowly and that pulse is the telegraph.
+  A 0.6 s flare-up precedes the shockwave.
+- Punish: a player inside the short radius gets the flare, a small shockwave (knockback, no damage),
+  then a few seconds of pursuit before it re-dorms elsewhere.
+- Counter: a jump-pad launch or a Grappler's ability escapes the pursuit; a Glider sees the true
+  star silhouette through the glimmer.
 
 ---
 
