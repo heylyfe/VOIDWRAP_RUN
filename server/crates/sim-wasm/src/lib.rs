@@ -6,7 +6,7 @@
 //!
 //! 1. JS calls `vw_io_buf(len)` → pointer to a `len`-byte buffer in WASM memory.
 //! 2. JS writes encoded bytes there, then calls `vw_load_level(len)` / `vw_set_state(len)`
-//!    / `vw_set_tuning(len)`.
+//!    / `vw_set_tuning(len)` / `vw_set_tiles(len)`.
 //! 3. `vw_step(...)` advances the predicted controller one physics frame.
 //! 4. `vw_get_state()` encodes the state into the I/O buffer and returns its length;
 //!    JS reads it from the pointer returned by `vw_io_ptr()`.
@@ -14,7 +14,7 @@
 //! `#[unsafe(no_mangle)]` is the only unsafe-flagged construct; there are no `unsafe` blocks.
 #![allow(unsafe_code)]
 
-use protocol::{ControllerState, InputFrame, LevelData, Tuning, Vec3};
+use protocol::{ControllerState, InputFrame, LevelData, TileState, Tuning, Vec3};
 use sim::controller;
 use sim::world::World;
 use std::cell::RefCell;
@@ -106,6 +106,25 @@ pub extern "C" fn vw_set_tuning(len: u32) -> i32 {
     )
 }
 
+/// Replace the loaded level's tile states with an encoded `Vec<TileState>`. Returns 0 on
+/// success, a negative value on a decode error.
+///
+/// Applies the same rules as [`sim::world::World::set_tiles`]: platforms listed as
+/// `TILE_GONE` stop being solid, everything else (including `TILE_WARN` and absent ids)
+/// is solid again. Platforms absent from the list are solid again.
+#[unsafe(no_mangle)]
+pub extern "C" fn vw_set_tiles(len: u32) -> i32 {
+    BRIDGE.with_borrow_mut(
+        |b| match io_bytes(b, len).and_then(|x| protocol::decode::<Vec<TileState>>(x).ok()) {
+            Some(tiles) => {
+                b.world.set_tiles(&tiles);
+                0
+            }
+            None => -1,
+        },
+    )
+}
+
 /// Advance the predicted state one physics frame. Out-of-range inputs are clamped
 /// exactly as the server would see them after i8/u8 decoding.
 #[unsafe(no_mangle)]
@@ -136,11 +155,39 @@ pub extern "C" fn vw_get_state() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use protocol::{Aabb, EVENT_NONE, PLATFORM_NORMAL, Platform, TILE_GONE, TILE_WARN};
 
     fn write_io(bytes: &[u8]) -> u32 {
         vw_io_buf(bytes.len() as u32);
         BRIDGE.with_borrow_mut(|b| b.io.copy_from_slice(bytes));
         bytes.len() as u32
+    }
+
+    fn test_level() -> LevelData {
+        LevelData {
+            level: 1,
+            seed: 1,
+            spawn: Vec3::ZERO,
+            beacon: Vec3::new(0.0, 0.0, 6.0),
+            kill_y: -50.0,
+            platforms: vec![Platform {
+                id: 42,
+                kind: PLATFORM_NORMAL,
+                bounds: Aabb {
+                    min: Vec3::new(-2.0, -1.0, -2.0),
+                    max: Vec3::new(2.0, 0.0, 2.0),
+                },
+            }],
+            gifts: vec![],
+            event: EVENT_NONE,
+            altars: vec![],
+        }
+    }
+
+    fn read_state() -> ControllerState {
+        let len = vw_get_state() as usize;
+        let bytes = BRIDGE.with_borrow(|b| b.io[..len].to_vec());
+        protocol::decode::<ControllerState>(&bytes).unwrap()
     }
 
     #[test]
@@ -182,6 +229,60 @@ mod tests {
         let len = vw_get_state() as usize;
         let bytes = BRIDGE.with_borrow(|b| b.io[..len].to_vec());
         assert_eq!(protocol::decode::<ControllerState>(&bytes).unwrap(), native);
+    }
+
+    #[test]
+    fn bridge_set_tiles_removes_and_restores_solidity() {
+        let level = test_level();
+        let len = write_io(&protocol::encode(&level).unwrap());
+        assert_eq!(vw_load_level(len), 0);
+
+        let start = controller::spawn_state(Vec3::new(0.0, 0.0, 0.0));
+        let len = write_io(&protocol::encode(&start).unwrap());
+        assert_eq!(vw_set_state(len), 0);
+        vw_step(0, 0, 0);
+        let state = read_state();
+        assert!(state.grounded);
+        assert_eq!(state.pos.y, 0.0);
+
+        // TILE_GONE: the platform is no longer solid, the player falls.
+        let tiles = vec![TileState {
+            id: 42,
+            state: TILE_GONE,
+        }];
+        let len = write_io(&protocol::encode(&tiles).unwrap());
+        assert_eq!(vw_set_tiles(len), 0);
+        for _ in 0..90 {
+            vw_step(0, 0, 0);
+        }
+        let state = read_state();
+        assert!(
+            state.pos.y < 0.0,
+            "player on a TILE_GONE platform must fall, got y = {}",
+            state.pos.y
+        );
+
+        // TILE_WARN keeps the platform solid again (also proves restore works).
+        let tiles = vec![TileState {
+            id: 42,
+            state: TILE_WARN,
+        }];
+        let len = write_io(&protocol::encode(&tiles).unwrap());
+        assert_eq!(vw_set_tiles(len), 0);
+        let len = write_io(&protocol::encode(&start).unwrap());
+        assert_eq!(vw_set_state(len), 0);
+        vw_step(0, 0, 0);
+        let state = read_state();
+        assert!(state.grounded, "TILE_WARN platform must be solid again");
+
+        // An empty tile list restores everything.
+        let tiles: Vec<TileState> = vec![];
+        let len = write_io(&protocol::encode(&tiles).unwrap());
+        assert_eq!(vw_set_tiles(len), 0);
+
+        // A decode error is reported, not panicked on.
+        let len = write_io(&[0xff, 0xff]);
+        assert_eq!(vw_set_tiles(len), -1);
     }
 
     #[test]

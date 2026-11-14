@@ -4,18 +4,51 @@
 //! velocity, coyote time, jump buffering, variable jump height (jump cut) and a
 //! dash class ability. Collision is axis-separated AABB against [`World`].
 //!
+//! M2 classes (`ControllerState.class`, CLASS_*): CLASS_STRIKER dashes (the M1
+//! ability), CLASS_GLIDER glides, CLASS_BLINKER blinks and CLASS_GRAPPLER
+//! grapples. Unknown values behave like CLASS_STRIKER. Glide: holding
+//! BTN_ABILITY while airborne and falling caps the fall speed at
+//! `GLIDE_FALL_SPEED`, multiplies the horizontal air-speed limit by
+//! `GLIDE_AIR_SPEED_MUL`, and grants one extra air jump (total still capped at
+//! `TUNING_AIR_JUMPS_MAX + GLIDER_BONUS_AIR_JUMPS`). Blink: a BTN_ABILITY press
+//! teleports horizontally up to `BLINK_DISTANCE` (never through a solid); the
+//! blink frame applies no gravity and performs no normal horizontal movement,
+//! so the teleported distance is exact. Grapple: a BTN_ABILITY press pulls the
+//! player toward an automatically picked target point.
+//!
 //! [`step_with`] applies a [`Tuning`] on top of that (upgrades and curses): run,
-//! jump, gravity and dash-speed multipliers, a dash-cooldown multiplier and extra
-//! air jumps. [`step`] is the same step with the neutral default tuning.
+//! jump, gravity and dash-speed multipliers, a dash-cooldown multiplier, extra
+//! air jumps, and a ground `friction_mul` that scales per-frame ground
+//! acceleration and braking (air control is not affected). [`step`] is the same
+//! step with the neutral default tuning.
 //!
 //! [`step`] is the contract shared by the authoritative server and the WASM
 //! client prediction. Both must produce bit-identical results, so the step path
 //! only uses `+ - * /`, `sqrt`, `abs`, `min`, `max`, `clamp` and comparisons: no
 //! transcendental functions, no randomness, no time, no allocation.
+//!
+//! Step order (identical on server and client):
+//!   1. timers & edge detection (+ grapple cancel on a BTN_JUMP rising edge)
+//!   2. class ability start (dash / blink / grapple)
+//!   3. jump (buffer + coyote, then air jumps)
+//!   4. vertical velocity (grapple pull / dash / gravity / jump cut / glide cap; skipped on the blink frame)
+//!   5. horizontal velocity (grapple pull / dash / ground friction / glider boost; skipped on the blink frame)
+//!   6. collide Y, then X, then Z (the blink frame moves on Y only)
+//!   7. grounded & coyote refresh, air jump reset, ability timer tick
+//!   8. `prev_buttons = input.buttons`
+//!
+//! Horizontal and vertical velocity were computed in the opposite order in M1;
+//! the two are independent there so all M1 behaviour is preserved.
+//! Ability frame counters follow the dash convention: a counter is set when the
+//! ability starts and decremented later in the same step, so the firing step
+//! ends with `counter == START - 1`.
 
 use crate::tuning::*;
 use crate::world::{World, overlaps};
-use protocol::{Aabb, BTN_ABILITY, BTN_JUMP, ControllerState, InputFrame, Tuning, Vec3};
+use protocol::{
+    Aabb, BTN_ABILITY, BTN_JUMP, CLASS_BLINKER, CLASS_GLIDER, CLASS_GRAPPLER, CLASS_STRIKER, ControllerState,
+    InputFrame, Tuning, Vec3,
+};
 
 /// A fresh controller standing at `pos`.
 pub fn spawn_state(pos: Vec3) -> ControllerState {
@@ -68,23 +101,26 @@ pub fn step(state: &mut ControllerState, input: &InputFrame, world: &World) {
     step_with(state, input, world, &Tuning::default());
 }
 
+/// How `state.class` selects the BTN_ABILITY behaviour. Unknown values behave like CLASS_STRIKER.
+fn effective_class(class: u8) -> u8 {
+    match class {
+        CLASS_STRIKER | CLASS_GRAPPLER | CLASS_BLINKER | CLASS_GLIDER => class,
+        _ => CLASS_STRIKER,
+    }
+}
+
 /// Advance one fixed physics frame of [`DT`] seconds under `tuning`.
-///
-/// Step order (identical on server and client):
-///   1. timers & edge detection
-///   2. dash start
-///   3. jump (buffer + coyote, then air jumps)
-///   4. horizontal velocity
-///   5. vertical velocity (gravity / jump cut / dash)
-///   6. collide Y, then X, then Z
-///   7. grounded & coyote refresh, air jump reset, ability timer tick
-///   8. `prev_buttons = input.buttons`
 ///
 /// Every multiplier is clamped to [`TUNING_MUL_MIN`]..=[`TUNING_MUL_MAX`] (NaN
 /// becomes the neutral 1.0) and `air_jumps` to `0..=TUNING_AIR_JUMPS_MAX`, so a
-/// malformed tuning can never produce a non-finite or absurd step.
+/// malformed tuning can never produce a non-finite or absurd step. `friction_mul`
+/// is clamped to [`FRICTION_MUL_MIN`]..=[`TUNING_MUL_MAX`] (NaN becomes 1.0).
+///
+/// On a frame in which a blink actually happens, gravity and normal horizontal
+/// movement are not applied; the teleport is the frame's only horizontal movement.
 pub fn step_with(state: &mut ControllerState, input: &InputFrame, world: &World, tuning: &Tuning) {
     let was_grounded = state.grounded;
+    let class = effective_class(state.class);
 
     // Defensive, deterministic clamps. With the default tuning every product
     // below is exactly the untuned constant (`x * 1.0 == x`), which is what keeps
@@ -93,8 +129,14 @@ pub fn step_with(state: &mut ControllerState, input: &InputFrame, world: &World,
     let jump_velocity = JUMP_VELOCITY * clamp_mul(tuning.jump_mul);
     let gravity = GRAVITY * clamp_mul(tuning.gravity_mul);
     let dash_speed = DASH_SPEED * clamp_mul(tuning.dash_speed_mul);
-    let dash_cooldown = tuned_dash_cooldown(clamp_mul(tuning.dash_cooldown_mul));
-    let air_jumps = tuning.air_jumps.min(TUNING_AIR_JUMPS_MAX);
+    let ability_cooldown = tuned_dash_cooldown(clamp_mul(tuning.dash_cooldown_mul));
+    let tuning_air_jumps = tuning.air_jumps.min(TUNING_AIR_JUMPS_MAX);
+    let air_jumps = if class == CLASS_GLIDER {
+        (tuning_air_jumps + GLIDER_BONUS_AIR_JUMPS).min(TUNING_AIR_JUMPS_MAX + GLIDER_BONUS_AIR_JUMPS)
+    } else {
+        tuning_air_jumps
+    };
+    let friction = clamp_friction(tuning.friction_mul);
 
     // 1. Timers and button edges.
     state.ability_cooldown_frames = state.ability_cooldown_frames.saturating_sub(1);
@@ -105,11 +147,25 @@ pub fn step_with(state: &mut ControllerState, input: &InputFrame, world: &World,
     }
     let (wx, wz) = wish_dir(input);
 
-    // 2. Dash start.
+    // A BTN_JUMP rising edge ends an active grapple. The normal jump path below
+    // still runs, so the same press performs a jump if one is available.
+    if jump_pressed && class == CLASS_GRAPPLER && state.ability_active_frames > 0 {
+        state.ability_active_frames = 0;
+    }
+
+    // 2. Ability start (class-dependent).
+    let mut blinked = false;
     if ability_pressed && state.ability_cooldown_frames == 0 && state.ability_active_frames == 0 {
-        state.ability_dir = dash_dir(wx, wz, &state.vel);
-        state.ability_active_frames = DASH_FRAMES;
-        state.ability_cooldown_frames = dash_cooldown;
+        match class {
+            CLASS_STRIKER => {
+                state.ability_dir = dash_dir(wx, wz, &state.vel);
+                state.ability_active_frames = DASH_FRAMES;
+                state.ability_cooldown_frames = ability_cooldown;
+            }
+            CLASS_BLINKER => blinked = blink(state, input, world, ability_cooldown),
+            CLASS_GRAPPLER => try_grapple(state, input, world, ability_cooldown),
+            _ => {} // CLASS_GLIDER: BTN_ABILITY is a hold-to-glide, not a press action
+        }
     }
 
     // 3. Jump: consume the buffer on the first step a jump is allowed.
@@ -118,7 +174,7 @@ pub fn step_with(state: &mut ControllerState, input: &InputFrame, world: &World,
         state.grounded = false;
         state.coyote_frames = 0;
         state.jump_buffer_frames = 0;
-        state.ability_active_frames = 0; // jumping cancels a dash
+        state.ability_active_frames = 0; // jumping cancels a dash/grapple
     } else if state.jump_buffer_frames > 0 && state.air_jumps_used < air_jumps {
         // Air jump: only reachable when the ground/coyote rules said no. Coyote
         // jumps take the branch above and therefore never spend an air jump.
@@ -126,7 +182,7 @@ pub fn step_with(state: &mut ControllerState, input: &InputFrame, world: &World,
         state.grounded = false;
         state.coyote_frames = 0;
         state.jump_buffer_frames = 0;
-        state.ability_active_frames = 0; // an air jump cancels a dash too
+        state.ability_active_frames = 0; // an air jump cancels a dash/grapple too
         state.air_jumps_used += 1;
     } else if state.jump_buffer_frames > 0 && !jump_pressed {
         // The arming step itself does not tick, so a press N steps before
@@ -134,31 +190,76 @@ pub fn step_with(state: &mut ControllerState, input: &InputFrame, world: &World,
         state.jump_buffer_frames -= 1;
     }
 
-    let dashing = state.ability_active_frames > 0;
-
-    // 4. Horizontal velocity (instant, ground and air).
-    if dashing {
-        state.vel.x = state.ability_dir.x * dash_speed;
-        state.vel.z = state.ability_dir.z * dash_speed;
-    } else {
-        state.vel.x = wx * run_speed;
-        state.vel.z = wz * run_speed;
+    // Grapple pull: decide whether a grapple in flight keeps driving velocity
+    // this frame. The stored `ability_dir` is the target POINT, not a unit axis.
+    let mut grappling = false;
+    if class == CLASS_GRAPPLER && state.ability_active_frames > 0 {
+        let target = state.ability_dir.clone();
+        let dx = target.x - state.pos.x;
+        let dy = target.y - state.pos.y;
+        let dz = target.z - state.pos.z;
+        let dist_sq = dx * dx + dy * dy + dz * dz;
+        if dist_sq <= GRAPPLE_END_DISTANCE * GRAPPLE_END_DISTANCE {
+            state.ability_active_frames = 0; // arrived; normal physics resumes
+        } else {
+            let scale = GRAPPLE_SPEED / dist_sq.sqrt();
+            state.vel = Vec3::new(dx * scale, dy * scale, dz * scale);
+            grappling = true;
+        }
     }
 
-    // 5. Vertical velocity. Terminal fall speed is deliberately not tuned.
-    if dashing {
+    let dashing = class == CLASS_STRIKER && state.ability_active_frames > 0;
+
+    // 4. Vertical velocity. Terminal fall speed is deliberately not tuned.
+    if grappling {
+        // Velocity was fully set by the grapple; no gravity or jump cut applies.
+    } else if dashing {
         state.vel.y = 0.0;
+    } else if blinked {
+        // The blink already set vel.y = max(vel.y, 0.0); gravity must not be
+        // applied in the frame of the blink.
     } else {
         state.vel.y = (state.vel.y - gravity * DT).max(-MAX_FALL_SPEED);
+        if class == CLASS_GLIDER
+            && !state.grounded
+            && input.buttons & BTN_ABILITY != 0
+            && state.vel.y < -GLIDE_FALL_SPEED
+        {
+            state.vel.y = -GLIDE_FALL_SPEED;
+        }
         if input.buttons & BTN_JUMP == 0 && state.vel.y > 0.0 {
             state.vel.y = state.vel.y.min(JUMP_CUT_VELOCITY);
         }
     }
 
-    // 6. Collide, one axis at a time.
+    // 5. Horizontal velocity (instant, ground and air; friction scales ground response).
+    if grappling {
+        // Velocity was fully set by the grapple.
+    } else if dashing {
+        state.vel.x = state.ability_dir.x * dash_speed;
+        state.vel.z = state.ability_dir.z * dash_speed;
+    } else if blinked {
+        // The blink is the frame's only horizontal movement.
+    } else if state.grounded {
+        state.vel.x = approach_ground(state.vel.x, wx * run_speed, friction);
+        state.vel.z = approach_ground(state.vel.z, wz * run_speed, friction);
+    } else {
+        let mut target_x = wx * run_speed;
+        let mut target_z = wz * run_speed;
+        if class == CLASS_GLIDER && input.buttons & BTN_ABILITY != 0 && state.vel.y < 0.0 {
+            target_x *= GLIDE_AIR_SPEED_MUL;
+            target_z *= GLIDE_AIR_SPEED_MUL;
+        }
+        state.vel.x = target_x;
+        state.vel.z = target_z;
+    }
+
+    // 6. Collide, one axis at a time. A blink frame performs no normal horizontal movement.
     let landed = move_axis(state, world, Axis::Y, state.vel.y * DT);
-    move_axis(state, world, Axis::X, state.vel.x * DT);
-    move_axis(state, world, Axis::Z, state.vel.z * DT);
+    if !blinked {
+        move_axis(state, world, Axis::X, state.vel.x * DT);
+        move_axis(state, world, Axis::Z, state.vel.z * DT);
+    }
 
     // 7. Grounded & coyote refresh.
     state.grounded = landed || resting_on_solid(state, world);
@@ -176,6 +277,23 @@ pub fn step_with(state: &mut ControllerState, input: &InputFrame, world: &World,
     state.prev_buttons = input.buttons;
 }
 
+/// Clamp the ground-velocity response toward `target` by `friction`.
+///
+/// With `friction >= 1.0` the target is applied instantly (the M1 behaviour,
+/// bit-identical). Below 1.0 the remaining error shrinks by that factor per
+/// ground step; errors below [`GROUND_STOP_EPSILON`] snap to the target so the
+/// velocity reaches exactly zero instead of approaching it forever.
+fn approach_ground(current: f32, target: f32, friction: f32) -> f32 {
+    if friction >= 1.0 {
+        return target;
+    }
+    let delta = target - current;
+    if delta.abs() <= GROUND_STOP_EPSILON {
+        return target;
+    }
+    current + delta * friction
+}
+
 /// Clamp a tuning multiplier into [`TUNING_MUL_MIN`]..=[`TUNING_MUL_MAX`], mapping
 /// NaN to the neutral 1.0.
 ///
@@ -188,6 +306,18 @@ fn clamp_mul(value: f32) -> f32 {
         value.clamp(TUNING_MUL_MIN, TUNING_MUL_MAX)
     } else if value <= TUNING_MUL_MAX {
         TUNING_MUL_MIN
+    } else {
+        1.0
+    }
+}
+
+/// Clamp `Tuning::friction_mul` to [`FRICTION_MUL_MIN`]..=[`TUNING_MUL_MAX`],
+/// mapping NaN to the neutral 1.0 (same pattern as [`clamp_mul`]).
+fn clamp_friction(value: f32) -> f32 {
+    if value >= FRICTION_MUL_MIN {
+        value.clamp(FRICTION_MUL_MIN, TUNING_MUL_MAX)
+    } else if value <= TUNING_MUL_MAX {
+        FRICTION_MUL_MIN
     } else {
         1.0
     }
@@ -219,6 +349,133 @@ fn dash_dir(wx: f32, wz: f32, vel: &Vec3) -> Vec3 {
         return Vec3::new(vel.x / len, 0.0, vel.z / len);
     }
     Vec3::new(0.0, 0.0, -1.0)
+}
+
+/// Unit horizontal aim direction: wish input, else horizontal velocity, else None.
+///
+/// Used by the blink and grapple classes; unlike [`dash_dir`] there is no
+/// fallback direction, because those abilities do nothing without an aim.
+fn aim_dir(wx: f32, wz: f32, vel: &Vec3) -> Option<Vec3> {
+    let wish_len_sq = wx * wx + wz * wz;
+    if wish_len_sq > 0.0 {
+        let len = wish_len_sq.sqrt();
+        return Some(Vec3::new(wx / len, 0.0, wz / len));
+    }
+    let vel_len_sq = vel.x * vel.x + vel.z * vel.z;
+    if vel_len_sq > 0.0 {
+        let len = vel_len_sq.sqrt();
+        return Some(Vec3::new(vel.x / len, 0.0, vel.z / len));
+    }
+    None
+}
+
+/// True when `bounds` overlap any currently solid platform.
+fn overlaps_any_solid(world: &World, bounds: &Aabb) -> bool {
+    world.solids.iter().any(|solid| overlaps(bounds, solid))
+}
+
+/// CLASS_BLINKER: teleport up to `BLINK_DISTANCE` horizontally in the input
+/// direction (or the horizontal velocity) sweeping in [`BLINK_SWEEP_STEP`]
+/// increments. Stops at the last position whose player box overlaps no solid
+/// platform. With no direction nothing happens and no cooldown starts.
+///
+/// Returns `true` when a blink happened. The caller skips gravity and normal
+/// horizontal movement for that frame, so the teleport distance is exact.
+fn blink(state: &mut ControllerState, input: &InputFrame, world: &World, cooldown: u16) -> bool {
+    let (wx, wz) = wish_dir(input);
+    let Some(dir) = aim_dir(wx, wz, &state.vel) else {
+        return false; // no direction: nothing happens, no cooldown
+    };
+    // BLINK_DISTANCE and BLINK_SWEEP_STEP are exact multiples (24 steps of 0.25).
+    let steps = (BLINK_DISTANCE / BLINK_SWEEP_STEP) as u32;
+    let mut last = state.pos.clone();
+    for i in 1..=steps {
+        let d = BLINK_SWEEP_STEP * i as f32;
+        let candidate = Vec3::new(state.pos.x + dir.x * d, state.pos.y, state.pos.z + dir.z * d);
+        if overlaps_any_solid(world, &player_box(&candidate)) {
+            break; // never tunnel through walls
+        }
+        last = candidate;
+    }
+    state.pos = last;
+    state.vel.y = state.vel.y.max(0.0);
+    state.ability_active_frames = BLINK_FLASH_FRAMES;
+    state.ability_dir = dir;
+    state.ability_cooldown_frames = cooldown;
+    true
+}
+
+/// CLASS_GRAPPLER: pick a grapple target automatically and begin the pull.
+///
+/// Candidates are the points on solid platforms' top faces closest (in x/z, y
+/// fixed at the top) to `pos + aim * GRAPPLE_AIM_DISTANCE`. A candidate is valid
+/// when its 3D distance from the feet is within [`GRAPPLE_MIN_RANGE`]..=[`GRAPPLE_RANGE`],
+/// its y is at least `pos.y - GRAPPLE_MAX_BELOW`, and the horizontal direction
+/// to it dots with the aim at least [`GRAPPLE_MIN_DOT`]. The valid candidate
+/// closest to the anchor wins; ties go to the lowest platform id. With no aim,
+/// or no valid candidate, nothing happens and no cooldown starts.
+///
+/// On a fire the stored `ability_dir` is the target POINT (top point +
+/// [`GRAPPLE_TARGET_HEIGHT`]), not a direction axis.
+fn try_grapple(state: &mut ControllerState, input: &InputFrame, world: &World, cooldown: u16) {
+    let (wx, wz) = wish_dir(input);
+    let Some(aim) = aim_dir(wx, wz, &state.vel) else {
+        return; // no aim: no grapple, no cooldown
+    };
+    let anchor = Vec3::new(
+        state.pos.x + aim.x * GRAPPLE_AIM_DISTANCE,
+        state.pos.y,
+        state.pos.z + aim.z * GRAPPLE_AIM_DISTANCE,
+    );
+    // (distance squared to the anchor, platform id, target point).
+    let mut best: Option<(f32, u16, Vec3)> = None;
+    for platform in &world.platforms {
+        if world.gone.contains(&platform.id) {
+            continue; // TILE_GONE platforms are not solid
+        }
+        let point = Vec3::new(
+            anchor.x.clamp(platform.bounds.min.x, platform.bounds.max.x),
+            platform.bounds.max.y,
+            anchor.z.clamp(platform.bounds.min.z, platform.bounds.max.z),
+        );
+        let dx = point.x - state.pos.x;
+        let dy = point.y - state.pos.y;
+        let dz = point.z - state.pos.z;
+        let dist_sq = dx * dx + dy * dy + dz * dz;
+        if dist_sq < GRAPPLE_MIN_RANGE * GRAPPLE_MIN_RANGE || dist_sq > GRAPPLE_RANGE * GRAPPLE_RANGE {
+            continue;
+        }
+        if point.y < state.pos.y - GRAPPLE_MAX_BELOW {
+            continue;
+        }
+        let hlen_sq = dx * dx + dz * dz;
+        if hlen_sq == 0.0 {
+            continue; // no horizontal direction to P
+        }
+        let dot = (dx * aim.x + dz * aim.z) / hlen_sq.sqrt();
+        if dot < GRAPPLE_MIN_DOT {
+            continue;
+        }
+        let ax = point.x - anchor.x;
+        let ay = point.y - anchor.y;
+        let az = point.z - anchor.z;
+        let anchor_dist_sq = ax * ax + ay * ay + az * az;
+        let better = match &best {
+            None => true,
+            Some((best_dist, best_id, _)) => {
+                anchor_dist_sq < *best_dist || (anchor_dist_sq == *best_dist && platform.id < *best_id)
+            }
+        };
+        if better {
+            best = Some((anchor_dist_sq, platform.id, point));
+        }
+    }
+    let Some((_, _, point)) = best else {
+        return; // no valid target: no grapple, no cooldown
+    };
+    state.ability_dir = Vec3::new(point.x, point.y + GRAPPLE_TARGET_HEIGHT, point.z);
+    state.ability_active_frames = GRAPPLE_MAX_FRAMES;
+    state.ability_cooldown_frames = cooldown;
 }
 
 /// True when the feet rest on a solid top (within [`GROUND_EPSILON`]) while
@@ -301,6 +558,7 @@ fn move_axis(state: &mut ControllerState, world: &World, axis: Axis, delta: f32)
 mod tests {
     use super::*;
     use crate::levels;
+    use protocol::{EVENT_NONE, LevelData, PLATFORM_NORMAL, Platform, TILE_GONE, TILE_WARN, TileState};
 
     fn input(seq: u32, move_x: i8, move_z: i8, buttons: u8) -> InputFrame {
         InputFrame {
@@ -331,7 +589,65 @@ mod tests {
                 max: Vec3::new(100.0, 0.0, 100.0),
             }],
             kill_y: -200.0,
+            platforms: vec![],
+            gone: vec![],
         }
+    }
+
+    /// Two candidate grapple platforms over a void, id 3 above id 5.
+    fn grapple_level() -> LevelData {
+        LevelData {
+            level: 1,
+            seed: 7,
+            spawn: Vec3::ZERO,
+            beacon: Vec3::new(9.0, 5.0, 0.0),
+            kill_y: -100.0,
+            platforms: vec![
+                Platform {
+                    id: 3,
+                    kind: PLATFORM_NORMAL,
+                    bounds: Aabb {
+                        min: Vec3::new(6.0, 4.0, -2.0),
+                        max: Vec3::new(12.0, 5.0, 2.0),
+                    },
+                },
+                Platform {
+                    id: 5,
+                    kind: PLATFORM_NORMAL,
+                    bounds: Aabb {
+                        min: Vec3::new(6.0, 1.0, -2.0),
+                        max: Vec3::new(12.0, 2.0, 2.0),
+                    },
+                },
+            ],
+            gifts: vec![],
+            event: EVENT_NONE,
+            altars: vec![],
+        }
+    }
+
+    /// Like `count_air_jumps`, but for any class.
+    fn count_class_air_jumps(class: u8, tuning: &Tuning, start_y: f32, steps: u32) -> u32 {
+        let w = flat_world();
+        let mut s = spawn_state(Vec3::new(0.0, start_y, 0.0));
+        s.class = class;
+        let mut seq = 0;
+        for _ in 0..3 {
+            step_with(&mut s, &idle(seq), &w, tuning);
+            seq += 1;
+        }
+        assert!(!s.grounded, "controller must still be airborne");
+        let mut fired = 0;
+        for i in 0..steps {
+            let buttons = if i.is_multiple_of(2) { BTN_JUMP } else { 0 };
+            let before = s.air_jumps_used;
+            step_with(&mut s, &input(seq, 0, 0, buttons), &w, tuning);
+            seq += 1;
+            if s.air_jumps_used > before {
+                fired += 1;
+            }
+        }
+        fired
     }
 
     /// Runs +X until the controller leaves the ground. On return the controller
@@ -617,6 +933,8 @@ mod tests {
         let w = World {
             solids: vec![slab],
             kill_y: -30.0,
+            platforms: vec![],
+            gone: vec![],
         };
         let mut s = spawn_state(Vec3::new(0.0, 40.0, 0.0));
         for i in 0..400 {
@@ -636,6 +954,8 @@ mod tests {
         let w = World {
             solids: vec![wall.clone()],
             kill_y: -100.0,
+            platforms: vec![],
+            gone: vec![],
         };
         let mut s = spawn_state(Vec3::new(0.0, 5.0, 0.0));
         for i in 0..40 {
@@ -714,6 +1034,23 @@ mod tests {
     }
 
     #[test]
+    fn nan_friction_behaves_like_one() {
+        let w = world();
+        let nan = Tuning {
+            friction_mul: f32::NAN,
+            ..Tuning::default()
+        };
+        let mut plain = spawn_state(Vec3::new(0.0, 2.0, 0.0));
+        let mut tuned = spawn_state(Vec3::new(0.0, 2.0, 0.0));
+        for i in 0..600 {
+            let frame = scripted(i);
+            step(&mut plain, &frame, &w);
+            step_with(&mut tuned, &frame, &w, &nan);
+        }
+        assert_eq!(plain, tuned, "NaN friction must behave like the neutral tuning");
+    }
+
+    #[test]
     fn tuning_clamps_are_defensive() {
         assert_eq!(clamp_mul(f32::NAN), 1.0);
         assert_eq!(clamp_mul(0.0), TUNING_MUL_MIN);
@@ -722,6 +1059,62 @@ mod tests {
         assert_eq!(tuned_dash_cooldown(1.0), DASH_COOLDOWN_FRAMES);
         assert_eq!(tuned_dash_cooldown(0.0), DASH_COOLDOWN_MIN_FRAMES);
         assert_eq!(tuned_dash_cooldown(100.0), DASH_COOLDOWN_MAX_FRAMES);
+    }
+
+    #[test]
+    fn friction_clamps_are_defensive() {
+        assert_eq!(clamp_friction(f32::NAN), 1.0);
+        assert_eq!(clamp_friction(0.0), FRICTION_MUL_MIN);
+        assert_eq!(clamp_friction(1.0), 1.0);
+        assert_eq!(clamp_friction(100.0), TUNING_MUL_MAX);
+        assert_eq!(FRICTION_MUL_MIN, 0.1);
+    }
+
+    #[test]
+    fn ice_friction_takes_longer_to_stop_than_normal() {
+        let w = flat_world();
+        let stop_steps = |friction: f32| -> u32 {
+            let tuning = Tuning {
+                friction_mul: friction,
+                ..Tuning::default()
+            };
+            let mut s = spawn_state(Vec3::ZERO);
+            let mut seq = 0;
+            step_with(&mut s, &idle(seq), &w, &tuning);
+            seq += 1;
+            assert!(s.grounded);
+            for _ in 0..10 {
+                step_with(&mut s, &run_x(seq, 0), &w, &tuning);
+                seq += 1;
+            }
+            let mut n = 0;
+            while s.vel.x != 0.0 {
+                step_with(&mut s, &idle(seq), &w, &tuning);
+                seq += 1;
+                n += 1;
+                assert!(n < 1000, "friction {friction} never stopped");
+            }
+            n
+        };
+        let normal = stop_steps(1.0);
+        let ice = stop_steps(0.25);
+        assert_eq!(normal, 1, "friction 1.0 brakes instantly");
+        assert!(
+            ice > normal,
+            "friction 0.25 ({ice} steps) must take longer to stop than 1.0 ({normal} steps)"
+        );
+    }
+
+    #[test]
+    fn friction_does_not_affect_air_control() {
+        let w = flat_world();
+        let tuning = Tuning {
+            friction_mul: 0.25,
+            ..Tuning::default()
+        };
+        let mut s = spawn_state(Vec3::new(0.0, 30.0, 0.0));
+        step_with(&mut s, &run_x(0, 0), &w, &tuning);
+        assert_eq!(s.vel.x, RUN_SPEED, "air control stays instant regardless of friction");
     }
 
     #[test]
@@ -739,6 +1132,412 @@ mod tests {
             ..Tuning::default()
         };
         assert_eq!(count_air_jumps(&clamped, 40.0, 40), 3, "air_jumps clamps to 3");
+    }
+
+    #[test]
+    fn glider_gets_one_extra_air_jump() {
+        assert_eq!(count_class_air_jumps(CLASS_GLIDER, &Tuning::default(), 40.0, 40), 1);
+        let three = Tuning {
+            air_jumps: 3,
+            ..Tuning::default()
+        };
+        assert_eq!(
+            count_class_air_jumps(CLASS_GLIDER, &three, 40.0, 40),
+            4,
+            "glider total budget is TUNING_AIR_JUMPS_MAX + 1"
+        );
+        let huge = Tuning {
+            air_jumps: 255,
+            ..Tuning::default()
+        };
+        assert_eq!(
+            count_class_air_jumps(CLASS_GLIDER, &huge, 40.0, 40),
+            4,
+            "a huge tuning air_jumps still caps the glider at 4"
+        );
+    }
+
+    #[test]
+    fn glider_caps_fall_speed_while_holding_ability() {
+        let w = flat_world();
+        // Not holding BTN_ABILITY: falls well past the glide speed.
+        let mut plain = spawn_state(Vec3::new(0.0, 60.0, 0.0));
+        plain.class = CLASS_GLIDER;
+        for i in 0..30 {
+            step_with(&mut plain, &idle(i), &w, &Tuning::default());
+        }
+        assert!(
+            plain.vel.y < -GLIDE_FALL_SPEED,
+            "un-powered glider must fall faster than the cap, got {}",
+            plain.vel.y
+        );
+        // Holding BTN_ABILITY: fall speed is capped.
+        let mut gliding = spawn_state(Vec3::new(0.0, 60.0, 0.0));
+        gliding.class = CLASS_GLIDER;
+        for i in 0..30 {
+            step_with(&mut gliding, &input(i, 0, 0, BTN_ABILITY), &w, &Tuning::default());
+        }
+        assert_eq!(gliding.vel.y, -GLIDE_FALL_SPEED);
+    }
+
+    #[test]
+    fn glider_air_speed_boosted_only_while_gliding() {
+        let w = flat_world();
+        let mut boosted = spawn_state(Vec3::new(0.0, 60.0, 0.0));
+        boosted.class = CLASS_GLIDER;
+        for i in 0..30 {
+            step_with(&mut boosted, &input(i, 127, 0, BTN_ABILITY), &w, &Tuning::default());
+        }
+        assert_eq!(
+            boosted.vel.x,
+            RUN_SPEED * GLIDE_AIR_SPEED_MUL,
+            "while gliding the horizontal air-speed limit is multiplied"
+        );
+        // Not holding ability: normal air speed.
+        let mut normal = spawn_state(Vec3::new(0.0, 60.0, 0.0));
+        normal.class = CLASS_GLIDER;
+        for i in 0..30 {
+            step_with(&mut normal, &run_x(i, 0), &w, &Tuning::default());
+        }
+        assert_eq!(normal.vel.x, RUN_SPEED);
+    }
+
+    #[test]
+    fn glider_has_no_dash() {
+        let w = flat_world();
+        let mut s = spawn_state(Vec3::ZERO);
+        s.class = CLASS_GLIDER;
+        step_with(&mut s, &idle(0), &w, &Tuning::default());
+        assert!(s.grounded);
+        step_with(&mut s, &run_x(1, BTN_ABILITY), &w, &Tuning::default());
+        assert_eq!(s.ability_active_frames, 0, "glider must not dash");
+        assert_eq!(s.ability_cooldown_frames, 0, "glider's glide is not on cooldown");
+    }
+
+    #[test]
+    fn striker_dash_unchanged_by_class_system() {
+        let w = flat_world();
+        let mut s = spawn_state(Vec3::ZERO);
+        step_with(&mut s, &idle(0), &w, &Tuning::default());
+        assert_eq!(s.class, CLASS_STRIKER);
+        assert!(s.grounded);
+        step_with(&mut s, &run_x(1, BTN_ABILITY), &w, &Tuning::default());
+        // The counter is set and then decremented within the same step.
+        assert_eq!(s.ability_active_frames, DASH_FRAMES - 1);
+        assert_eq!(s.ability_cooldown_frames, DASH_COOLDOWN_FRAMES);
+    }
+
+    #[test]
+    fn unknown_class_behaves_like_striker() {
+        let w = world();
+        let mut striker = spawn_state(Vec3::new(0.0, 2.0, 0.0));
+        let mut unknown = spawn_state(Vec3::new(0.0, 2.0, 0.0));
+        unknown.class = 200;
+        for i in 0..300 {
+            let frame = scripted(i);
+            step(&mut striker, &frame, &w);
+            step(&mut unknown, &frame, &w);
+        }
+        unknown.class = CLASS_STRIKER;
+        assert_eq!(striker, unknown, "unknown class must behave exactly like CLASS_STRIKER");
+    }
+
+    #[test]
+    fn blinker_teleports_up_to_blink_distance() {
+        let w = flat_world();
+        let mut s = spawn_state(Vec3::ZERO);
+        s.class = CLASS_BLINKER;
+        step_with(&mut s, &idle(0), &w, &Tuning::default());
+        assert!(s.grounded);
+        step_with(&mut s, &run_x(1, BTN_ABILITY), &w, &Tuning::default());
+        assert!(
+            (s.pos.x - BLINK_DISTANCE).abs() < 1e-4,
+            "blink must teleport BLINK_DISTANCE, got {}",
+            s.pos.x
+        );
+        // The counter is set and then decremented within the same step.
+        assert_eq!(s.ability_active_frames, BLINK_FLASH_FRAMES - 1);
+        assert_eq!(s.ability_dir, Vec3::new(1.0, 0.0, 0.0));
+        assert_eq!(s.ability_cooldown_frames, DASH_COOLDOWN_FRAMES);
+    }
+
+    #[test]
+    fn blink_stops_at_last_free_position() {
+        let floor = Aabb {
+            min: Vec3::new(-50.0, -1.0, -50.0),
+            max: Vec3::new(50.0, 0.0, 50.0),
+        };
+        let wall = Aabb {
+            min: Vec3::new(3.0, -10.0, -5.0),
+            max: Vec3::new(4.0, 10.0, 5.0),
+        };
+        let w = World {
+            solids: vec![floor, wall],
+            kill_y: -100.0,
+            platforms: vec![],
+            gone: vec![],
+        };
+        let mut s = spawn_state(Vec3::ZERO);
+        s.class = CLASS_BLINKER;
+        step_with(&mut s, &idle(0), &w, &Tuning::default());
+        assert!(s.grounded);
+        step_with(&mut s, &run_x(1, BTN_ABILITY), &w, &Tuning::default());
+        // Box half-width 0.4; wall starts at x = 3.0 → last free sample is 2.5.
+        assert!(
+            (s.pos.x - 2.5).abs() < 1e-4,
+            "blink must stop before the wall, got {}",
+            s.pos.x
+        );
+        assert_eq!(s.ability_active_frames, BLINK_FLASH_FRAMES - 1);
+        assert_eq!(s.ability_cooldown_frames, DASH_COOLDOWN_FRAMES);
+    }
+
+    #[test]
+    fn blinker_with_no_direction_does_nothing() {
+        let w = flat_world();
+        let mut s = spawn_state(Vec3::ZERO);
+        s.class = CLASS_BLINKER;
+        step_with(&mut s, &idle(0), &w, &Tuning::default());
+        let before = s.pos.clone();
+        step_with(&mut s, &input(1, 0, 0, BTN_ABILITY), &w, &Tuning::default());
+        assert_eq!(s.pos, before, "no input and no velocity means no blink");
+        assert_eq!(s.ability_cooldown_frames, 0, "no cooldown starts without a direction");
+        assert_eq!(s.ability_active_frames, 0);
+    }
+
+    #[test]
+    fn blink_uses_horizontal_velocity_when_no_input() {
+        let w = flat_world();
+        let mut s = spawn_state(Vec3::ZERO);
+        s.class = CLASS_BLINKER;
+        for i in 0..3 {
+            step_with(&mut s, &run_x(i, 0), &w, &Tuning::default());
+        }
+        assert!(s.vel.x > 0.0);
+        step_with(&mut s, &input(3, 0, 0, BTN_ABILITY), &w, &Tuning::default());
+        assert_eq!(s.ability_dir, Vec3::new(1.0, 0.0, 0.0));
+        // The counter is set and then decremented within the same step.
+        assert_eq!(s.ability_active_frames, BLINK_FLASH_FRAMES - 1);
+        assert_eq!(s.ability_cooldown_frames, DASH_COOLDOWN_FRAMES);
+    }
+
+    #[test]
+    fn blink_clamps_negative_fall_speed_to_zero() {
+        let w = flat_world();
+        let mut s = spawn_state(Vec3::new(0.0, 30.0, 0.0));
+        s.class = CLASS_BLINKER;
+        for i in 0..5 {
+            step_with(&mut s, &idle(i), &w, &Tuning::default());
+        }
+        assert!(s.vel.y < 0.0);
+        step_with(&mut s, &input(5, 127, 0, BTN_ABILITY), &w, &Tuning::default());
+        assert_eq!(s.vel.y, 0.0, "a blink must not leave the player falling");
+    }
+
+    #[test]
+    fn grapple_picks_nearest_valid_platform_and_lands_on_it() {
+        let w = World::from_level(&grapple_level());
+        let mut s = spawn_state(Vec3::new(0.0, 6.0, 0.0));
+        s.class = CLASS_GRAPPLER;
+        step_with(&mut s, &input(0, 127, 0, BTN_ABILITY), &w, &Tuning::default());
+        // Platform id 3 (top y = 5.0) is closest to the anchor at (8, 6, 0).
+        // The counter is set and then decremented within the same step.
+        assert_eq!(s.ability_active_frames, GRAPPLE_MAX_FRAMES - 1);
+        assert_eq!(s.ability_cooldown_frames, DASH_COOLDOWN_FRAMES);
+        assert_eq!(s.ability_dir.x, 8.0);
+        assert!(
+            (s.ability_dir.y - (5.0 + GRAPPLE_TARGET_HEIGHT)).abs() < 1e-4,
+            "target is the stored point P + GRAPPLE_TARGET_HEIGHT, got {}",
+            s.ability_dir.y
+        );
+        assert_eq!(s.ability_dir.z, 0.0);
+        let target = s.ability_dir.clone();
+        for i in 0..400u32 {
+            step_with(&mut s, &idle(1 + i), &w, &Tuning::default());
+            if s.ability_active_frames == 0 {
+                break;
+            }
+        }
+        assert_eq!(s.ability_active_frames, 0, "grapple must end");
+        let dx = s.pos.x - target.x;
+        let dy = s.pos.y - target.y;
+        let dz = s.pos.z - target.z;
+        assert!(
+            (dx * dx + dy * dy + dz * dz).sqrt() <= GRAPPLE_END_DISTANCE + 0.5,
+            "grapple must end near its target"
+        );
+        for i in 0..300u32 {
+            step_with(&mut s, &idle(500 + i), &w, &Tuning::default());
+        }
+        assert!(s.grounded);
+        assert_eq!(s.pos.y, 5.0, "must land on the chosen platform (id 3)");
+    }
+
+    #[test]
+    fn grapple_ignores_gone_platforms() {
+        let w = World::from_level(&grapple_level());
+        let mut w = w;
+        w.set_tiles(&[TileState {
+            id: 3,
+            state: TILE_GONE,
+        }]);
+        // Spawn low enough that platform id 5's top (y = 2.0) is exactly
+        // GRAPPLE_MAX_BELOW below the feet (the validity bound is inclusive);
+        // from y = 6.0 the only remaining candidate would be rejected.
+        let mut s = spawn_state(Vec3::new(0.0, 3.0, 0.0));
+        s.class = CLASS_GRAPPLER;
+        step_with(&mut s, &input(0, 127, 0, BTN_ABILITY), &w, &Tuning::default());
+        // The counter is set and then decremented within the same step.
+        assert_eq!(s.ability_active_frames, GRAPPLE_MAX_FRAMES - 1);
+        assert!(
+            (s.ability_dir.y - (2.0 + GRAPPLE_TARGET_HEIGHT)).abs() < 1e-4,
+            "with id 3 gone, the grapple must pick id 5, got y = {}",
+            s.ability_dir.y
+        );
+
+        // With every candidate gone, no grapple fires.
+        w.set_tiles(&[
+            TileState {
+                id: 3,
+                state: TILE_GONE,
+            },
+            TileState {
+                id: 5,
+                state: TILE_GONE,
+            },
+        ]);
+        let mut s2 = spawn_state(Vec3::new(0.0, 6.0, 0.0));
+        s2.class = CLASS_GRAPPLER;
+        step_with(&mut s2, &input(0, 127, 0, BTN_ABILITY), &w, &Tuning::default());
+        assert_eq!(s2.ability_active_frames, 0);
+        assert_eq!(s2.ability_cooldown_frames, 0);
+    }
+
+    #[test]
+    fn grapple_treats_warn_tiles_as_solid() {
+        let mut w = World::from_level(&grapple_level());
+        w.set_tiles(&[TileState {
+            id: 3,
+            state: TILE_WARN,
+        }]);
+        let mut s = spawn_state(Vec3::new(0.0, 6.0, 0.0));
+        s.class = CLASS_GRAPPLER;
+        step_with(&mut s, &input(0, 127, 0, BTN_ABILITY), &w, &Tuning::default());
+        // The counter is set and then decremented within the same step.
+        assert_eq!(s.ability_active_frames, GRAPPLE_MAX_FRAMES - 1);
+        assert!((s.ability_dir.y - (5.0 + GRAPPLE_TARGET_HEIGHT)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn grapple_cancelled_by_jump_edge_and_jump_fires() {
+        let w = World::from_level(&grapple_level());
+        let tuning = Tuning {
+            air_jumps: 1,
+            ..Tuning::default()
+        };
+        let mut s = spawn_state(Vec3::new(0.0, 6.0, 0.0));
+        s.class = CLASS_GRAPPLER;
+        step_with(&mut s, &input(0, 127, 0, BTN_ABILITY), &w, &tuning);
+        assert!(s.ability_active_frames > 0);
+        step_with(&mut s, &input(1, 0, 0, BTN_JUMP), &w, &tuning);
+        assert_eq!(s.ability_active_frames, 0, "BTN_JUMP must cancel the grapple");
+        assert!(s.vel.y > 0.0, "an available jump fires with the same press");
+        assert_eq!(s.air_jumps_used, 1);
+    }
+
+    #[test]
+    fn grapple_cancelled_by_jump_without_jump_available() {
+        let w = World::from_level(&grapple_level());
+        let mut s = spawn_state(Vec3::new(0.0, 6.0, 0.0));
+        s.class = CLASS_GRAPPLER;
+        step_with(&mut s, &input(0, 127, 0, BTN_ABILITY), &w, &Tuning::default());
+        assert!(s.ability_active_frames > 0);
+        step_with(&mut s, &input(1, 0, 0, BTN_JUMP), &w, &Tuning::default());
+        assert_eq!(s.ability_active_frames, 0, "BTN_JUMP must cancel the grapple");
+        assert_eq!(s.air_jumps_used, 0, "no jump was available, so none fired");
+    }
+
+    #[test]
+    fn grapple_without_aim_does_nothing() {
+        let w = World::from_level(&grapple_level());
+        let mut s = spawn_state(Vec3::new(0.0, 6.0, 0.0));
+        s.class = CLASS_GRAPPLER;
+        step_with(&mut s, &idle(0), &w, &Tuning::default());
+        assert_eq!(s.vel.x, 0.0);
+        step_with(&mut s, &input(1, 0, 0, BTN_ABILITY), &w, &Tuning::default());
+        assert_eq!(s.ability_active_frames, 0);
+        assert_eq!(s.ability_cooldown_frames, 0);
+    }
+
+    #[test]
+    fn grapple_aims_along_horizontal_velocity_when_no_input() {
+        let w = World::from_level(&grapple_level());
+        let mut s = spawn_state(Vec3::new(0.0, 6.0, 0.0));
+        s.class = CLASS_GRAPPLER;
+        step_with(&mut s, &input(0, 127, 0, 0), &w, &Tuning::default());
+        assert!(s.vel.x > 0.0);
+        step_with(&mut s, &input(1, 0, 0, BTN_ABILITY), &w, &Tuning::default());
+        // The counter is set and then decremented within the same step.
+        assert_eq!(s.ability_active_frames, GRAPPLE_MAX_FRAMES - 1);
+        assert!(s.ability_dir.x > s.pos.x, "aim falls back to the velocity direction");
+    }
+
+    #[test]
+    fn grapple_rejects_candidate_with_bad_dot() {
+        let level = LevelData {
+            level: 1,
+            seed: 7,
+            spawn: Vec3::ZERO,
+            beacon: Vec3::new(-9.0, 4.0, 0.0),
+            kill_y: -100.0,
+            platforms: vec![Platform {
+                id: 8,
+                kind: PLATFORM_NORMAL,
+                bounds: Aabb {
+                    min: Vec3::new(-12.0, 3.0, -2.0),
+                    max: Vec3::new(-6.0, 4.0, 2.0),
+                },
+            }],
+            gifts: vec![],
+            event: EVENT_NONE,
+            altars: vec![],
+        };
+        let w = World::from_level(&level);
+        let mut s = spawn_state(Vec3::new(0.0, 6.0, 0.0));
+        s.class = CLASS_GRAPPLER;
+        // Aim is +X; the only platform is behind the player (dot < 0.5).
+        step_with(&mut s, &input(0, 127, 0, BTN_ABILITY), &w, &Tuning::default());
+        assert_eq!(s.ability_active_frames, 0);
+        assert_eq!(s.ability_cooldown_frames, 0);
+    }
+
+    #[test]
+    fn grapple_rejects_candidate_within_min_range() {
+        let level = LevelData {
+            level: 1,
+            seed: 7,
+            spawn: Vec3::ZERO,
+            beacon: Vec3::new(0.0, 6.0, 0.0),
+            kill_y: -100.0,
+            platforms: vec![Platform {
+                id: 2,
+                kind: PLATFORM_NORMAL,
+                // Directly overhead, point P only 1 unit away (< GRAPPLE_MIN_RANGE).
+                bounds: Aabb {
+                    min: Vec3::new(-0.05, 5.5, -0.05),
+                    max: Vec3::new(0.05, 6.0, 0.05),
+                },
+            }],
+            gifts: vec![],
+            event: EVENT_NONE,
+            altars: vec![],
+        };
+        let w = World::from_level(&level);
+        let mut s = spawn_state(Vec3::new(0.0, 6.0, 0.0));
+        s.class = CLASS_GRAPPLER;
+        step_with(&mut s, &input(0, 127, 0, BTN_ABILITY), &w, &Tuning::default());
+        assert_eq!(s.ability_active_frames, 0);
+        assert_eq!(s.ability_cooldown_frames, 0);
     }
 
     #[test]

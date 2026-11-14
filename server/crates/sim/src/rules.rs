@@ -1,10 +1,10 @@
-//! Pure, deterministic M1 game rules: gift pickups, the beacon, and chaser enemies.
+//! Pure, deterministic game rules: gift pickups, the beacon, and enemy behaviours.
 //!
 //! Everything here is a plain function over protocol data so the authoritative server
 //! and the client-side predictor can run the exact same code. Only `+ - * /` and
 //! `sqrt` are used, so results are bit-identical on every target.
 
-use protocol::{Gift, TICK_HZ, Vec3};
+use protocol::{ENEMY_DISGUISED, ENEMY_DORMANT, ENEMY_HUNTING, Gift, TICK_HZ, Vec3};
 
 use crate::controller::player_box;
 
@@ -32,6 +32,30 @@ pub const CHASER_HALF_SIZE: f32 = 0.5;
 /// Ticks a freshly spawned chaser stays dormant (3 s at 20 Hz).
 pub const CHASER_GRACE_TICKS: u32 = 60;
 
+/// Behaviour tag: flying chaser (the M1 default).
+pub const BEHAVIOR_CHASER: u8 = 0;
+
+/// Behaviour tag: stationary turret that fires projectiles at players in range.
+pub const BEHAVIOR_TURRET: u8 = 1;
+
+/// Behaviour tag: gift mimic that reveals itself when a player gets close.
+pub const BEHAVIOR_MIMIC: u8 = 2;
+
+/// Behaviour tag: chaser that corrupts the nearest valid platform to crumble.
+pub const BEHAVIOR_CORRUPTER: u8 = 3;
+
+/// Default turret firing cadence in ticks (1 s at 20 Hz).
+pub const TURRET_FIRE_INTERVAL_TICKS: u32 = 20;
+
+/// Default turret projectile speed in units per second.
+pub const TURRET_PROJECTILE_SPEED: f32 = 12.0;
+
+/// Default distance at which a mimic reveals itself.
+pub const MIMIC_REVEAL_RADIUS: f32 = 3.0;
+
+/// Default corrupter corruption cadence in ticks (2 s at 20 Hz).
+pub const CORRUPTER_INTERVAL_TICKS: u32 = 40;
+
 /// Height of the player's centre above their feet.
 const PLAYER_CENTRE_HEIGHT: f32 = 0.9;
 
@@ -47,8 +71,18 @@ pub struct EnemyParams {
     pub aggro: f32,
     /// Body radius: the client draws the enemy this big; see [`enemy_hit_radius`].
     pub size: f32,
-    /// Ticks the enemy stays dormant after spawning.
+    /// Ticks the enemy stays dormant after spawning (does not apply to mimics).
     pub grace_ticks: u32,
+    /// Which behaviour drives this enemy (`BEHAVIOR_*`).
+    pub behavior: u8,
+    /// Ticks between shots for `BEHAVIOR_TURRET`.
+    pub fire_interval_ticks: u32,
+    /// Projectile speed in units per second for `BEHAVIOR_TURRET`.
+    pub projectile_speed: f32,
+    /// Distance within which a `BEHAVIOR_MIMIC` reveals itself.
+    pub reveal_radius: f32,
+    /// Ticks between platform corruption for `BEHAVIOR_CORRUPTER`.
+    pub corrupt_interval_ticks: u32,
 }
 
 impl Default for EnemyParams {
@@ -58,6 +92,11 @@ impl Default for EnemyParams {
             aggro: CHASER_AGGRO_RADIUS,
             size: CHASER_HALF_SIZE,
             grace_ticks: CHASER_GRACE_TICKS,
+            behavior: BEHAVIOR_CHASER,
+            fire_interval_ticks: TURRET_FIRE_INTERVAL_TICKS,
+            projectile_speed: TURRET_PROJECTILE_SPEED,
+            reveal_radius: MIMIC_REVEAL_RADIUS,
+            corrupt_interval_ticks: CORRUPTER_INTERVAL_TICKS,
         }
     }
 }
@@ -71,10 +110,14 @@ pub struct Enemy {
     pub home: Vec3,
     pub active_in: u32,
     pub params: EnemyParams,
+    /// Ticks until a turret may fire / a corrupter may corrupt again (counting down).
+    pub cooldown_ticks: u32,
+    /// Mimics only: set once a target has got close enough to reveal the enemy for good.
+    pub revealed: bool,
 }
 
 /// Euclidean distance between two points.
-fn distance(a: &Vec3, b: &Vec3) -> f32 {
+pub(crate) fn distance(a: &Vec3, b: &Vec3) -> f32 {
     let dx = a.x - b.x;
     let dy = a.y - b.y;
     let dz = a.z - b.z;
@@ -82,12 +125,12 @@ fn distance(a: &Vec3, b: &Vec3) -> f32 {
 }
 
 /// The player's centre point, derived from their feet position.
-fn player_centre(player_feet: &Vec3) -> Vec3 {
+pub(crate) fn player_centre(player_feet: &Vec3) -> Vec3 {
     Vec3::new(player_feet.x, player_feet.y + PLAYER_CENTRE_HEIGHT, player_feet.z)
 }
 
 /// Move `pos` toward `target` by at most `max_step`, never overshooting.
-fn move_toward(pos: &mut Vec3, target: &Vec3, max_step: f32) {
+pub(crate) fn move_toward(pos: &mut Vec3, target: &Vec3, max_step: f32) {
     let dx = target.x - pos.x;
     let dy = target.y - pos.y;
     let dz = target.z - pos.z;
@@ -100,6 +143,75 @@ fn move_toward(pos: &mut Vec3, target: &Vec3, max_step: f32) {
     pos.x += dx * scale;
     pos.y += dy * scale;
     pos.z += dz * scale;
+}
+
+/// Index of the nearest target within `aggro`, or `None`. Ties go to the lowest index.
+pub(crate) fn nearest_target_within(pos: &Vec3, targets: &[Vec3], aggro: f32) -> Option<usize> {
+    let mut nearest: Option<(usize, f32)> = None;
+    for (index, target) in targets.iter().enumerate() {
+        let d = distance(pos, target);
+        if d > aggro {
+            continue;
+        }
+        match nearest {
+            Some((_, best)) if best <= d => {}
+            _ => nearest = Some((index, d)),
+        }
+    }
+    nearest.map(|(index, _)| index)
+}
+
+/// True when any target is within `radius` of `pos`.
+pub(crate) fn target_within(pos: &Vec3, targets: &[Vec3], radius: f32) -> bool {
+    targets.iter().any(|target| distance(pos, target) <= radius)
+}
+
+/// Chaser-family movement shared by chaser/mimic/corrupter: while grace lasts only
+/// count down; afterwards fly at the nearest target in aggro, else drift home at
+/// half speed.
+pub(crate) fn step_hunter(enemy: &mut Enemy, targets: &[Vec3]) {
+    if enemy.active_in > 0 {
+        enemy.active_in -= 1;
+        return;
+    }
+    let step = enemy.params.speed / TICK_HZ as f32;
+    let aggro = enemy.params.aggro;
+    match nearest_target_within(&enemy.pos, targets, aggro) {
+        Some(index) => {
+            let target = targets[index].clone();
+            move_toward(&mut enemy.pos, &target, step);
+        }
+        None => {
+            let home = enemy.home.clone();
+            move_toward(&mut enemy.pos, &home, step * 0.5);
+        }
+    }
+}
+
+/// Behaviour stepping shared by [`step_enemy`] and `crate::hazards`: turret grace
+/// countdown, mimic reveal and chaser-family movement. Firing turrets and
+/// corrupting corrupters need level context and are handled in `crate::hazards`.
+/// Unknown behaviours do nothing.
+pub(crate) fn step_behavior(enemy: &mut Enemy, targets: &[Vec3]) {
+    match enemy.params.behavior {
+        BEHAVIOR_TURRET => {
+            if enemy.active_in > 0 {
+                enemy.active_in -= 1;
+            }
+        }
+        BEHAVIOR_MIMIC => {
+            if !enemy.revealed {
+                if target_within(&enemy.pos, targets, enemy.params.reveal_radius) {
+                    enemy.revealed = true;
+                } else {
+                    return;
+                }
+            }
+            step_hunter(enemy, targets);
+        }
+        BEHAVIOR_CORRUPTER | BEHAVIOR_CHASER => step_hunter(enemy, targets),
+        _ => {}
+    }
 }
 
 /// True when the player's centre is within [`GIFT_RADIUS`] of the gift centre.
@@ -127,15 +239,19 @@ pub fn beacon_reached_within(player_feet: &Vec3, beacon: &Vec3, radius: f32) -> 
 }
 
 /// Create an enemy sitting at `pos`, with `pos` as its home, default params and a
-/// full grace period.
+/// full grace period (mimics never get one).
 pub fn spawn_enemy(id: u32, kind: u8, pos: Vec3) -> Enemy {
     spawn_enemy_with(id, kind, pos, EnemyParams::default())
 }
 
 /// Create an enemy with explicit [`EnemyParams`]; `active_in` starts at
-/// `params.grace_ticks`.
+/// `params.grace_ticks`, except for mimics which never wait.
 pub fn spawn_enemy_with(id: u32, kind: u8, pos: Vec3, params: EnemyParams) -> Enemy {
-    let active_in = params.grace_ticks;
+    let active_in = if params.behavior == BEHAVIOR_MIMIC {
+        0
+    } else {
+        params.grace_ticks
+    };
     Enemy {
         id,
         kind,
@@ -143,6 +259,31 @@ pub fn spawn_enemy_with(id: u32, kind: u8, pos: Vec3, params: EnemyParams) -> En
         pos,
         active_in,
         params,
+        cooldown_ticks: 0,
+        revealed: false,
+    }
+}
+
+/// The protocol state to report for `enemy`: `ENEMY_DISGUISED` for an unrevealed
+/// mimic, `ENEMY_DORMANT` while grace lasts (and for unknown behaviours), else
+/// `ENEMY_HUNTING`.
+pub fn enemy_state(enemy: &Enemy) -> u8 {
+    match enemy.params.behavior {
+        BEHAVIOR_MIMIC => {
+            if enemy.revealed {
+                ENEMY_HUNTING
+            } else {
+                ENEMY_DISGUISED
+            }
+        }
+        BEHAVIOR_CHASER | BEHAVIOR_TURRET | BEHAVIOR_CORRUPTER => {
+            if enemy.active_in > 0 {
+                ENEMY_DORMANT
+            } else {
+                ENEMY_HUNTING
+            }
+        }
+        _ => ENEMY_DORMANT,
     }
 }
 
@@ -151,41 +292,16 @@ pub fn spawn_enemy_with(id: u32, kind: u8, pos: Vec3, params: EnemyParams) -> En
 /// `targets` are the centres of living players. While `active_in > 0` the enemy only
 /// counts down. Afterwards it flies straight at the nearest target inside
 /// `enemy.params.aggro` (ties go to the lowest index), or drifts home at half speed.
-/// Unknown kinds do nothing at all.
+/// Unknown kinds (and unknown behaviours) do nothing at all.
+///
+/// Turret firing and corrupter platform marking need level context; the server must
+/// call `crate::hazards::Hazards::step`, which dispatches behaviour for every enemy
+/// (regardless of `kind`) and replaces this function for all of them.
 pub fn step_enemy(enemy: &mut Enemy, targets: &[Vec3]) {
     if enemy.kind != ENEMY_KIND_CHASER {
         return;
     }
-    if enemy.active_in > 0 {
-        enemy.active_in -= 1;
-        return;
-    }
-
-    let step = enemy.params.speed / TICK_HZ as f32;
-    let aggro = enemy.params.aggro;
-
-    let mut nearest: Option<(usize, f32)> = None;
-    for (index, target) in targets.iter().enumerate() {
-        let d = distance(&enemy.pos, target);
-        if d > aggro {
-            continue;
-        }
-        match nearest {
-            Some((_, best)) if best <= d => {}
-            _ => nearest = Some((index, d)),
-        }
-    }
-
-    match nearest {
-        Some((index, _)) => {
-            let target = targets[index].clone();
-            move_toward(&mut enemy.pos, &target, step);
-        }
-        None => {
-            let home = enemy.home.clone();
-            move_toward(&mut enemy.pos, &home, step * 0.5);
-        }
-    }
+    step_behavior(enemy, targets);
 }
 
 /// Fraction of the drawn body radius that actually kills. Slightly under 1 so a hit
@@ -370,6 +486,7 @@ mod tests {
             aggro: 40.0,
             size: 1.5,
             grace_ticks: 0,
+            ..EnemyParams::default()
         };
         let mut enemy = spawn_enemy_with(7, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0), params.clone());
         assert_eq!(enemy.active_in, 0, "grace_ticks comes from the params");
@@ -395,6 +512,7 @@ mod tests {
             aggro: 4.0,
             size: CHASER_HALF_SIZE,
             grace_ticks: 0,
+            ..EnemyParams::default()
         };
         let mut enemy = spawn_enemy_with(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0), params);
         // 10 units away: outside the tuned 4.0 aggro, so it drifts home instead.
@@ -423,5 +541,122 @@ mod tests {
         assert!(beacon_reached_within(&feet(2.0, 0.0, 0.0), &beacon, 2.5));
         // The vertical tolerance is not part of the radius.
         assert!(!beacon_reached_within(&feet(0.0, 3.0, 0.0), &beacon, 100.0));
+    }
+
+    #[test]
+    fn default_params_are_m1_chaser_plus_new_fields() {
+        let d = EnemyParams::default();
+        assert_eq!(d.speed, CHASER_SPEED);
+        assert_eq!(d.aggro, CHASER_AGGRO_RADIUS);
+        assert_eq!(d.size, CHASER_HALF_SIZE);
+        assert_eq!(d.grace_ticks, CHASER_GRACE_TICKS);
+        assert_eq!(d.behavior, BEHAVIOR_CHASER);
+        assert_eq!(d.fire_interval_ticks, TURRET_FIRE_INTERVAL_TICKS);
+        assert_eq!(d.projectile_speed, TURRET_PROJECTILE_SPEED);
+        assert_eq!(d.reveal_radius, MIMIC_REVEAL_RADIUS);
+        assert_eq!(d.corrupt_interval_ticks, CORRUPTER_INTERVAL_TICKS);
+    }
+
+    #[test]
+    fn enemy_state_tracks_grace_for_chasers() {
+        let mut chaser = spawn_enemy(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0));
+        assert_eq!(enemy_state(&chaser), ENEMY_DORMANT);
+        chaser.active_in = 0;
+        assert_eq!(enemy_state(&chaser), ENEMY_HUNTING);
+    }
+
+    #[test]
+    fn enemy_state_tracks_turret_and_corrupter_grace() {
+        for behavior in [BEHAVIOR_TURRET, BEHAVIOR_CORRUPTER] {
+            let params = EnemyParams {
+                behavior,
+                ..EnemyParams::default()
+            };
+            let mut enemy = spawn_enemy_with(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0), params);
+            assert_eq!(enemy_state(&enemy), ENEMY_DORMANT);
+            enemy.active_in = 0;
+            assert_eq!(enemy_state(&enemy), ENEMY_HUNTING);
+        }
+    }
+
+    #[test]
+    fn unknown_behaviour_is_dormant() {
+        let params = EnemyParams {
+            behavior: 99,
+            grace_ticks: 0,
+            ..EnemyParams::default()
+        };
+        let enemy = spawn_enemy_with(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0), params);
+        assert_eq!(enemy_state(&enemy), ENEMY_DORMANT);
+    }
+
+    #[test]
+    fn mimics_never_spawn_in_grace_and_start_disguised() {
+        let params = EnemyParams {
+            behavior: BEHAVIOR_MIMIC,
+            grace_ticks: 100,
+            ..EnemyParams::default()
+        };
+        let enemy = spawn_enemy_with(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0), params);
+        assert_eq!(enemy.active_in, 0);
+        assert_eq!(enemy_state(&enemy), ENEMY_DISGUISED);
+    }
+
+    #[test]
+    fn enemy_state_reports_revealed_mimic_as_hunting() {
+        let params = EnemyParams {
+            behavior: BEHAVIOR_MIMIC,
+            ..EnemyParams::default()
+        };
+        let mut enemy = spawn_enemy_with(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0), params);
+        assert_eq!(enemy_state(&enemy), ENEMY_DISGUISED);
+        enemy.revealed = true;
+        assert_eq!(enemy_state(&enemy), ENEMY_HUNTING);
+    }
+
+    #[test]
+    fn step_enemy_turret_never_moves() {
+        let params = EnemyParams {
+            behavior: BEHAVIOR_TURRET,
+            grace_ticks: 0,
+            ..EnemyParams::default()
+        };
+        let mut turret = spawn_enemy_with(0, ENEMY_KIND_CHASER, Vec3::new(1.0, 2.0, 3.0), params);
+        step_enemy(&mut turret, &[Vec3::new(0.0, 0.0, 0.0)]);
+        assert_eq!(turret.pos, Vec3::new(1.0, 2.0, 3.0));
+    }
+
+    #[test]
+    fn step_enemy_mimic_waits_disguised_until_close() {
+        let params = EnemyParams {
+            behavior: BEHAVIOR_MIMIC,
+            reveal_radius: 3.0,
+            speed: 5.0,
+            ..EnemyParams::default()
+        };
+        let mut mimic = spawn_enemy_with(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0), params);
+        // Far target: no reveal, no movement.
+        step_enemy(&mut mimic, &[Vec3::new(9.0, 0.0, 0.0)]);
+        assert_eq!(mimic.pos, Vec3::new(0.0, 0.0, 0.0));
+        assert_eq!(enemy_state(&mimic), ENEMY_DISGUISED);
+        // Close target: reveals and chases.
+        step_enemy(&mut mimic, &[Vec3::new(1.0, 0.0, 0.0)]);
+        assert_eq!(enemy_state(&mimic), ENEMY_HUNTING);
+        assert!(mimic.pos.x > 0.0);
+    }
+
+    #[test]
+    fn step_enemy_corrupter_chases_after_grace() {
+        let params = EnemyParams {
+            behavior: BEHAVIOR_CORRUPTER,
+            grace_ticks: 1,
+            speed: 5.0,
+            ..EnemyParams::default()
+        };
+        let mut corrupter = spawn_enemy_with(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0), params);
+        step_enemy(&mut corrupter, &[Vec3::new(10.0, 0.0, 0.0)]);
+        assert!(corrupter.pos.x.abs() < EPS, "grace period: no movement");
+        step_enemy(&mut corrupter, &[Vec3::new(10.0, 0.0, 0.0)]);
+        assert!(corrupter.pos.x > 0.0, "grace over: chases");
     }
 }

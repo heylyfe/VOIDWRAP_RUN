@@ -121,3 +121,13 @@ Paid route usage: 0 tickets (0%).
 ## T-040 / T-041 - returned for r1 (INKLING)
 - T-040: 9 new class tests fail (frame-counter convention, blink distance/gravity, grapple with gone platform).
 - T-041: 5 new hazards tests fail. Both held out of main until green.
+
+## T-040 r1 - classes in the controller (INKLING) - ACCEPTED
+- Per-failure verdicts checked: blink frame now skips gravity and horizontal movement (exact 6.0 teleport, no
+  fall after blink) - code bugs; counter/grapple-height expectations were test bugs (dash convention; P.y >= pos.y - 1).
+- 48 controller tests, sim-wasm bridge tests, no trig/pow/round in sim; clippy clean. OVERSEER: r0 compile slips.
+
+## T-041 r1 - hazards (INKLING) - ACCEPTED
+- Grace-elapse tick fired a tick early (code bug), crumble re-warned on the expiry tick (code bug), two tests had
+  the target outside aggro (test bugs). 138 sim tests pass; full `just verify` green. OVERSEER: r0 compile slips,
+  `slice::from_ref` lint, server `..EnemyParams::default()` stopgap until T-045 maps behaviours from content.

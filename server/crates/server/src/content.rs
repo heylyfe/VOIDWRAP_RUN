@@ -182,6 +182,8 @@ impl RunMods {
             aggro: stats.aggro * self.enemy_aggro_mul,
             size: stats.size * self.enemy_size_mul,
             grace_ticks: (grace_s * protocol::TICK_HZ as f32) as u32,
+            // M2 behaviours (turret/mimic/corrupter) are mapped from content by T-045.
+            ..EnemyParams::default()
         }
     }
 }
