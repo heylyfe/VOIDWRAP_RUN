@@ -78,7 +78,7 @@ VIAddVersionKey "OriginalFilename" "${APP_EXE}"
   Push $0
   again_${_id}:
     FindWindow $0 "" "${APP_NAME}"
-    IfErrors ok_${_id}
+    IntCmp $0 0 ok_${_id}  ; FindWindow returns 0 when no such window exists
     MessageBox MB_YESNO|MB_ICONEXCLAMATION "VOIDWRAP RUN is open.$\r$\n$\r$\nPlease close it, then click Yes to continue.$\r$\nClick No to cancel." /SD IDNO IDYES again_${_id} IDNO abort_${_id}
   abort_${_id}:
     Pop $0
