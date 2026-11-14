@@ -2,9 +2,11 @@ name: Release
 
 # Push a tag like v0.1.0-alpha.1 to build downloadable game packages and publish a GitHub release.
 # Tags containing "alpha", "beta" or "rc" are published as pre-releases.
+# "Run workflow" (workflow_dispatch) builds the packages as downloadable artifacts without publishing a release.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -35,7 +37,19 @@ jobs:
           node-version: 26
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: node tools/package.mjs
+      # The icon files are committed to the repo, so tools/make-icon.mjs does not run here.
+      - name: Ensure NSIS (Windows)
+        if: matrix.name == 'windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
+            choco install nsis -y
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files (x86)\NSIS"
+      - name: Package
+        run: node tools/package.mjs
+        env:
+          VOIDWRAP_VERSION: ${{ github.ref_name }}
       - name: Zip (Windows)
         if: matrix.name == 'windows'
         shell: pwsh
@@ -43,6 +57,13 @@ jobs:
       - name: Tarball (Linux)
         if: matrix.name == 'linux'
         run: tar -C dist -czf "VOIDWRAP_RUN-${{ github.ref_name }}-linux.tar.gz" VOIDWRAP_RUN
+      - name: Upload the Windows installer
+        if: matrix.name == 'windows'
+        uses: actions/upload-artifact@v5
+        with:
+          name: package-installer-windows
+          path: dist/VOIDWRAP_RUN-*-windows-setup.exe
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v5
         with:
           name: package-${{ matrix.name }}
@@ -50,6 +71,7 @@ jobs:
 
   publish:
     needs: package
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

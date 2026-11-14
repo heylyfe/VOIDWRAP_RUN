@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a0f2e"/>
+      <stop offset="1" stop-color="#07060d"/>
+    </linearGradient>
+    <linearGradient id="top" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffefb6"/>
+      <stop offset="1" stop-color="#f2cd7f"/>
+    </linearGradient>
+    <linearGradient id="left" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d9a13e"/>
+      <stop offset="1" stop-color="#8f6222"/>
+    </linearGradient>
+    <linearGradient id="right" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f7d98a"/>
+      <stop offset="1" stop-color="#caa24e"/>
+    </linearGradient>
+    <linearGradient id="rib" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff5cc6"/>
+      <stop offset="1" stop-color="#d61f92"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="32" height="32" rx="7" fill="url(#bg)"/>
+  <circle cx="16" cy="12.5" r="10" fill="none" stroke="#38e8ff" stroke-opacity="0.3" stroke-width="1.6"/>
+
+  <!-- Floating checkerboard tile (dark + violet) with cyan rim light -->
+  <polygon points="6,16.5 26,16.5 31,25 1,25" fill="#14101f"/>
+  <polygon points="10,16.5 16,16.5 14,25 8,25" fill="#5a2a8c"/>
+  <polygon points="21,16.5 25.5,16.5 30.5,25 26,25" fill="#5a2a8c"/>
+  <line x1="1" y1="25" x2="31" y2="25" stroke="#38e8ff" stroke-width="1.5" stroke-linecap="round"/>
+
+  <!-- Soft glow behind the gift -->
+  <ellipse cx="16" cy="11" rx="7.4" ry="6" fill="#ffdf9e" fill-opacity="0.32"/>
+
+  <!-- Gift box (3/4 isometric) -->
+  <polygon points="7,10.5 16,15.5 16,23.5 7,18.5" fill="url(#left)"/>
+  <polygon points="16,15.5 25,10.5 25,18.5 16,23.5" fill="url(#right)"/>
+  <polygon points="16,5.5 25,10.5 16,15.5 7,10.5" fill="url(#top)"/>
+
+  <!-- Ribbon -->
+  <polygon points="13.6,6.8 18.4,6.8 18.4,14.2 13.6,14.2" fill="url(#rib)"/>
+  <polygon points="13.6,14.2 16,15.5 16,23.5 13.6,22.2" fill="#d61f92"/>
+  <polygon points="16,15.5 18.4,14.2 18.4,22.2 16,23.5" fill="#ff5cc6"/>
+
+  <!-- Bow -->
+  <ellipse cx="12.8" cy="10.3" rx="3.6" ry="2" fill="url(#rib)" transform="rotate(-20 12.8 10.3)"/>
+  <ellipse cx="19.2" cy="10.3" rx="3.6" ry="2" fill="url(#rib)" transform="rotate(20 19.2 10.3)"/>
+  <circle cx="16" cy="10.5" r="1.6" fill="#ff3db8"/>
+</svg>

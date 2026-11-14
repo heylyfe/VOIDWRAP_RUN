@@ -2,3 +2,5 @@
 *.cmd text eol=crlf
 *.png binary
 *.wasm binary
+*.ico binary
+*.rgba binary

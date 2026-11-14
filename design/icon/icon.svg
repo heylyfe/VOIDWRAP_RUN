@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="40%" r="80%">
+      <stop offset="0" stop-color="#1a0f2e"/>
+      <stop offset="1" stop-color="#07060d"/>
+    </radialGradient>
+    <radialGradient id="mistA" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#442a6b" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#442a6b" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="mistB" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#241338" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#241338" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="portalGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#38e8ff" stop-opacity="0.5"/>
+      <stop offset="0.35" stop-color="#8a4dff" stop-opacity="0.34"/>
+      <stop offset="0.75" stop-color="#8a4dff" stop-opacity="0.1"/>
+      <stop offset="1" stop-color="#8a4dff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ring" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#38e8ff"/>
+      <stop offset="0.5" stop-color="#a06bff"/>
+      <stop offset="1" stop-color="#ff3db8"/>
+    </linearGradient>
+    <radialGradient id="giftGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#ffdf9e" stop-opacity="0.6"/>
+      <stop offset="0.6" stop-color="#ffdf9e" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#ffdf9e" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="faceTop" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffefb6"/>
+      <stop offset="1" stop-color="#f2cd7f"/>
+    </linearGradient>
+    <linearGradient id="faceLeft" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d9a13e"/>
+      <stop offset="1" stop-color="#8f6222"/>
+    </linearGradient>
+    <linearGradient id="faceRight" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f7d98a"/>
+      <stop offset="1" stop-color="#caa24e"/>
+    </linearGradient>
+    <linearGradient id="ribbonTop" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff6dd0"/>
+      <stop offset="1" stop-color="#ff3db8"/>
+    </linearGradient>
+    <linearGradient id="ribbonLeft" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d61f92"/>
+      <stop offset="1" stop-color="#8f1560"/>
+    </linearGradient>
+    <linearGradient id="ribbonRight" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff5cc6"/>
+      <stop offset="1" stop-color="#cf2896"/>
+    </linearGradient>
+    <linearGradient id="bow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff8ad8"/>
+      <stop offset="1" stop-color="#ff3db8"/>
+    </linearGradient>
+    <radialGradient id="knot" cx="50%" cy="40%" r="60%">
+      <stop offset="0" stop-color="#ff9ae0"/>
+      <stop offset="1" stop-color="#d61f92"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#38e8ff" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#38e8ff" stop-opacity="1"/>
+      <stop offset="1" stop-color="#38e8ff" stop-opacity="0"/>
+    </linearGradient>
+    <pattern id="checker" width="26" height="26" patternUnits="userSpaceOnUse" patternTransform="skewX(-12) scale(1 0.8)">
+      <rect width="26" height="26" fill="#120f1e"/>
+      <rect width="13" height="13" fill="#5a2a8c"/>
+      <rect x="13" y="13" width="13" height="13" fill="#5a2a8c"/>
+    </pattern>
+    <filter id="blur8" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="8"/>
+    </filter>
+    <filter id="blur16" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="16"/>
+    </filter>
+  </defs>
+
+  <rect x="0" y="0" width="256" height="256" rx="56" fill="url(#bg)"/>
+  <ellipse cx="92" cy="88" rx="96" ry="72" fill="url(#mistA)" filter="url(#blur16)"/>
+  <ellipse cx="172" cy="150" rx="88" ry="74" fill="url(#mistB)" filter="url(#blur16)"/>
+  <circle cx="128" cy="112" r="92" fill="url(#portalGlow)"/>
+  <circle cx="128" cy="112" r="80" fill="none" stroke="url(#ring)" stroke-width="9" stroke-opacity="0.32" filter="url(#blur8)"/>
+  <circle cx="128" cy="112" r="80" fill="none" stroke="url(#ring)" stroke-width="2.4" stroke-opacity="0.85"/>
+
+  <!-- Floating checkerboard tile: side face first, then the top plane -->
+  <polygon points="22,214 234,214 234,223 22,223" fill="#0a0810"/>
+  <polygon points="52,164 204,164 234,214 22,214" fill="url(#checker)"/>
+  <polygon points="52,164 204,164 234,214 22,214" fill="none" stroke="#000000" stroke-opacity="0.45" stroke-width="1.5"/>
+  <line x1="22" y1="214" x2="234" y2="214" stroke="url(#rim)" stroke-width="3.4" stroke-linecap="round"/>
+  <line x1="22" y1="223" x2="234" y2="223" stroke="#38e8ff" stroke-opacity="0.35" stroke-width="1.4"/>
+
+  <!-- Drifting checker shards -->
+  <polygon points="36,146 52,139 68,146 52,153" fill="#5a2a8c"/>
+  <polygon points="36,146 52,153 52,157.5 36,150.5" fill="#2c1a44"/>
+  <polygon points="52,153 68,146 68,150.5 52,157.5" fill="#3d2458"/>
+  <polygon points="188,116 200,110.5 212,116 200,121.5" fill="#5a2a8c"/>
+  <polygon points="188,116 200,121.5 200,125 188,119.5" fill="#2c1a44"/>
+  <polygon points="200,121.5 212,116 212,119.5 200,125" fill="#3d2458"/>
+
+  <!-- Warm glow behind the gift -->
+  <ellipse cx="128" cy="118" rx="88" ry="78" fill="url(#giftGlow)"/>
+
+  <!-- Gift box (3/4 isometric) -->
+  <polygon points="76,90 128,116 128,178 76,152" fill="url(#faceLeft)" stroke="#241408" stroke-opacity="0.5" stroke-width="1"/>
+  <polygon points="128,116 180,90 180,152 128,178" fill="url(#faceRight)" stroke="#241408" stroke-opacity="0.5" stroke-width="1"/>
+  <polygon points="128,64 180,90 128,116 76,90" fill="url(#faceTop)"/>
+
+  <!-- Ribbon: over the top along the far-to-near axis, down the near corner -->
+  <polygon points="118,69 138,69 138,111 118,111" fill="url(#ribbonTop)" stroke="#3d0a24" stroke-opacity="0.6" stroke-width="0.75"/>
+  <polygon points="118,111 128,116 128,178 118,173" fill="url(#ribbonLeft)" stroke="#3d0a24" stroke-opacity="0.6" stroke-width="0.75"/>
+  <polygon points="128,116 138,111 138,173 128,178" fill="url(#ribbonRight)" stroke="#3d0a24" stroke-opacity="0.6" stroke-width="0.75"/>
+
+  <!-- Bow -->
+  <ellipse cx="128" cy="88" rx="34" ry="15" fill="#ff3db8" opacity="0.45" filter="url(#blur8)"/>
+  <ellipse cx="111.5" cy="86.5" rx="13.5" ry="8" fill="url(#bow)" transform="rotate(-20 111.5 86.5)" stroke="#8f1560" stroke-opacity="0.5" stroke-width="0.8"/>
+  <ellipse cx="144.5" cy="86.5" rx="13.5" ry="8" fill="url(#bow)" transform="rotate(20 144.5 86.5)" stroke="#8f1560" stroke-opacity="0.5" stroke-width="0.8"/>
+  <ellipse cx="116" cy="87" rx="6.2" ry="3.4" fill="#e0249e" transform="rotate(-20 116 87)" opacity="0.85"/>
+  <ellipse cx="140" cy="87" rx="6.2" ry="3.4" fill="#e0249e" transform="rotate(20 140 87)" opacity="0.85"/>
+  <polygon points="122,91 127,93 121,108 116.5,104.5" fill="#d61f92"/>
+  <polygon points="134,91 129,93 135,108 139.5,104.5" fill="#ff5cc6"/>
+  <circle cx="128" cy="88.5" r="5.6" fill="url(#knot)" stroke="#8f1560" stroke-opacity="0.6" stroke-width="0.8"/>
+
+  <!-- Sparkles -->
+  <path d="M84 44 L86.4 51.6 94 54 L86.4 56.4 84 64 81.6 56.4 74 54 81.6 51.6 Z" fill="#cfeeff" opacity="0.9"/>
+  <path d="M176 36 L177.8 41.7 183.5 43.5 177.8 45.3 176 51 174.2 45.3 168.5 43.5 174.2 41.7 Z" fill="#cfeeff" opacity="0.8"/>
+</svg>
