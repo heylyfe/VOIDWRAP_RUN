@@ -2,7 +2,7 @@
 /* eslint-disable */
 import { Reader, Writer } from "./codec";
 
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
 export const TICK_HZ = 20;
 export const PHYSICS_HZ = 60;
 export const MAX_INPUTS_PER_MSG = 32;
@@ -605,6 +605,39 @@ export function decodeDraftCard(bytes: Uint8Array): DraftCard {
   return v;
 }
 
+/** One pedestal offered by a vote session. index is the ballot slot (0..2); kind reuses the DraftCard kinds (0 enemy, 2 curse). */
+export interface VoteOption {
+  index: number;
+  id: string;
+  name: string;
+  kind: number;
+}
+export function writeVoteOption(w: Writer, v: VoteOption): void {
+  w.u8(v.index);
+  w.string(v.id);
+  w.string(v.name);
+  w.u8(v.kind);
+}
+export function readVoteOption(r: Reader): VoteOption {
+  return {
+    index: r.u8(),
+    id: r.string(),
+    name: r.string(),
+    kind: r.u8(),
+  };
+}
+export function encodeVoteOption(v: VoteOption): Uint8Array<ArrayBuffer> {
+  const w = new Writer();
+  writeVoteOption(w, v);
+  return w.finish();
+}
+export function decodeVoteOption(bytes: Uint8Array): VoteOption {
+  const r = new Reader(bytes);
+  const v = readVoteOption(r);
+  r.end();
+  return v;
+}
+
 /** Run-wide state, sent whenever it changes. */
 export interface RunInfo {
   phase: number;
@@ -661,6 +694,7 @@ export type ClientMsg =
   | { type: "DraftPick"; picks: number[] }
   | { type: "Buy"; item: string }
   | { type: "ChooseClass"; class: number }
+  | { type: "Vote"; option: number }
 ;
 export function writeClientMsg(w: Writer, v: ClientMsg): void {
   switch (v.type) {
@@ -692,6 +726,10 @@ export function writeClientMsg(w: Writer, v: ClientMsg): void {
       w.u32(6);
       w.u8(v.class);
       return;
+    case "Vote":
+      w.u32(7);
+      w.u8(v.option);
+      return;
   }
 }
 export function readClientMsg(r: Reader): ClientMsg {
@@ -711,6 +749,8 @@ export function readClientMsg(r: Reader): ClientMsg {
       return { type: "Buy", item: r.string() };
     case 6:
       return { type: "ChooseClass", class: r.u8() };
+    case 7:
+      return { type: "Vote", option: r.u8() };
     default:
       throw new Error(`ClientMsg: unknown variant tag ${tag}`);
   }
@@ -738,6 +778,9 @@ export type ServerMsg =
   | { type: "Draft"; enemyPicks: number; rewardPicks: number; cards: DraftCard[] }
   | { type: "Shop"; items: ShopItem[] }
   | { type: "Notice"; kind: number; ids: string[] }
+  | { type: "VoteOpen"; level: number; options: VoteOption[]; countdownS: number }
+  | { type: "VoteState"; counts: number[]; voted: number[]; secondsLeft: number }
+  | { type: "VoteResult"; winner: number; id: string; name: string; kind: number; permanent: boolean }
 ;
 export function writeServerMsg(w: Writer, v: ServerMsg): void {
   switch (v.type) {
@@ -799,6 +842,26 @@ export function writeServerMsg(w: Writer, v: ServerMsg): void {
       w.u8(v.kind);
       w.vec(v.ids, (x) => w.string(x));
       return;
+    case "VoteOpen":
+      w.u32(10);
+      w.u32(v.level);
+      w.vec(v.options, (x) => writeVoteOption(w, x));
+      w.u16(v.countdownS);
+      return;
+    case "VoteState":
+      w.u32(11);
+      w.vec(v.counts, (x) => w.u32(x));
+      w.vec(v.voted, (x) => w.u32(x));
+      w.u16(v.secondsLeft);
+      return;
+    case "VoteResult":
+      w.u32(12);
+      w.u8(v.winner);
+      w.string(v.id);
+      w.string(v.name);
+      w.u8(v.kind);
+      w.bool(v.permanent);
+      return;
   }
 }
 export function readServerMsg(r: Reader): ServerMsg {
@@ -824,6 +887,12 @@ export function readServerMsg(r: Reader): ServerMsg {
       return { type: "Shop", items: r.vec(() => readShopItem(r)) };
     case 9:
       return { type: "Notice", kind: r.u8(), ids: r.vec(() => r.string()) };
+    case 10:
+      return { type: "VoteOpen", level: r.u32(), options: r.vec(() => readVoteOption(r)), countdownS: r.u16() };
+    case 11:
+      return { type: "VoteState", counts: r.vec(() => r.u32()), voted: r.vec(() => r.u32()), secondsLeft: r.u16() };
+    case 12:
+      return { type: "VoteResult", winner: r.u8(), id: r.string(), name: r.string(), kind: r.u8(), permanent: r.bool() };
     default:
       throw new Error(`ServerMsg: unknown variant tag ${tag}`);
   }
@@ -858,6 +927,7 @@ export const CODECS = {
   RunSummary: { encode: encodeRunSummary, decode: decodeRunSummary },
   Tuning: { encode: encodeTuning, decode: decodeTuning },
   DraftCard: { encode: encodeDraftCard, decode: decodeDraftCard },
+  VoteOption: { encode: encodeVoteOption, decode: decodeVoteOption },
   RunInfo: { encode: encodeRunInfo, decode: decodeRunInfo },
   ClientMsg: { encode: encodeClientMsg, decode: decodeClientMsg },
   ServerMsg: { encode: encodeServerMsg, decode: decodeServerMsg },

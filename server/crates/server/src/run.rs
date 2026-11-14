@@ -6,6 +6,8 @@
 //! Playing (two phases: LEVEL_COLLECT until every gift is gathered, then LEVEL_COLLAPSE_PENDING — the siren — and
 //! LEVEL_COLLAPSING; golden gifts exist at the collected positions, the beacon opens, the non-hub platforms fall
 //! in six farthest-first batches) → beacon → Lobby for the next level. The spawn hub is exempt from collapse.
+//! During the collapse/exit window every connected player votes on one permanent addition for the rest of the run
+//! (T-078); the automatic one-enemy-per-level scaling is gone.
 //! Death with no lives left ends that player's run; when everyone is down the run is Over and Restart begins a new one.
 
 use crate::content::{Content, RunMods};
@@ -33,6 +35,281 @@ const GREATER_EVERY: u32 = 10;
 const SHOP_OFFER: usize = 4;
 /// Ticks of siren/banner before the collapse proper begins (design §1.4: 3.0 s).
 const COLLAPSE_PENDING_TICKS: u32 = 3 * TICK_HZ;
+/// The countdown of a vote session, in TICK_HZ ticks (20 s at 20 Hz).
+pub const VOTE_COUNTDOWN_TICKS: u32 = 20 * TICK_HZ;
+/// The number of options a vote session offers (the registry pool's first candidates, registry §9).
+pub const VOTE_POOL_OFFER: usize = 3;
+/// Salt separating the vote tie-break coin from the curse-injection coin (both derive from the run seed and level).
+const VOTE_COIN_SALT: u32 = 0xA5A5_5A5A;
+/// Salt separating the curse-injection draw from the tie-break coin.
+const VOTE_CURSE_SALT: u32 = 0x3A6F_1D2B;
+
+/// One option offered by a vote session. The wire copy is `protocol::VoteOption`; this carries the
+/// server-side `temporary` flag the client does not need.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionOption {
+    /// Position of this option in the offer (0-based; what the client votes with).
+    pub index: u8,
+    /// Stable id (registry id for enemies, content id for curses).
+    pub id: String,
+    /// Display name (registry name for enemies; the curse id when no curse name is available).
+    pub name: String,
+    /// `CARD_ENEMY` or `CARD_CURSE`.
+    pub kind: u8,
+    /// True when winning this option summons a one-level temporary enemy instead of a permanent (registry §9 overflow).
+    pub temporary: bool,
+}
+
+/// The outcome of a closed vote session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoteOutcome {
+    /// Index of the winning option (matches `SessionOption::index`).
+    pub winner: u8,
+    /// Id of the winning option.
+    pub id: String,
+    /// Display name of the winning option.
+    pub name: String,
+    /// `CARD_ENEMY` or `CARD_CURSE`.
+    pub kind: u8,
+    /// True when the winner joins the run's permanents (enemy votes that are not overflow summons).
+    pub permanent: bool,
+    /// True when the winner is a one-level temporary summon (registry §9 overflow).
+    pub temporary: bool,
+    /// Final per-option ballot counts.
+    pub counts: Vec<u32>,
+}
+
+/// A vote session: the options on offer, the ballots keyed by player id, the host and the countdown.
+///
+/// Ballots are keyed by player id, never by connection, so a disconnect does not destroy a cast ballot.
+/// A reconnected player is a fresh player id; the old ballot still counts. All draws and tie-breaks are
+/// seeded from the run seed mixed with the level — never from the clock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoteSession {
+    /// The level the vote belongs to (the level being exited).
+    pub level: u32,
+    /// The options on offer (never more than `VOTE_POOL_OFFER`).
+    options: Vec<SessionOption>,
+    /// Ballots keyed by player id; re-voting replaces the player's earlier ballot.
+    ballots: BTreeMap<u32, u8>,
+    /// Ticks remaining before the session closes on its own.
+    ticks_left: u32,
+    /// The host's player id (the lowest connected player id when the session opened).
+    host: Option<u32>,
+    /// The run seed mixed with the level; drives every deterministic coin flip in this session.
+    draw_seed: u32,
+    /// Last whole second that was broadcast in `VoteState` (`None` before the first broadcast).
+    pub last_sent_second: Option<u16>,
+}
+
+impl VoteSession {
+    /// Open a session for `level` with the offered `options`.
+    pub fn open(level: u32, seed: u32, options: Vec<SessionOption>, host: Option<u32>) -> Self {
+        VoteSession {
+            level,
+            options,
+            ballots: BTreeMap::new(),
+            ticks_left: VOTE_COUNTDOWN_TICKS,
+            host,
+            draw_seed: mix_seed(seed, level),
+            last_sent_second: None,
+        }
+    }
+
+    /// The options on offer.
+    pub fn options(&self) -> &[SessionOption] {
+        &self.options
+    }
+
+    /// Whole seconds left in the countdown (rounds up; 20 right after opening).
+    pub fn seconds_left(&self) -> u16 {
+        u16::try_from(self.ticks_left.div_ceil(TICK_HZ)).unwrap_or(0)
+    }
+
+    /// Cast (or re-cast) a ballot. Fails when the session is closed or the option index is out of range.
+    pub fn cast(&mut self, player_id: u32, option: u8) -> Result<(), &'static str> {
+        if self.ticks_left == 0 {
+            return Err("the vote is closed");
+        }
+        if usize::from(option) >= self.options.len() {
+            return Err("option out of range");
+        }
+        self.ballots.insert(player_id, option);
+        Ok(())
+    }
+
+    /// Player ids holding a ballot, ascending.
+    pub fn voted_ids(&self) -> Vec<u32> {
+        self.ballots.keys().copied().collect()
+    }
+
+    /// True when `player_id` has cast a ballot in this session.
+    pub fn has_voted(&self, player_id: u32) -> bool {
+        self.ballots.contains_key(&player_id)
+    }
+
+    /// Per-option ballot counts, in option order.
+    pub fn counts(&self) -> Vec<u32> {
+        let mut counts = vec![0u32; self.options.len()];
+        for &option in self.ballots.values() {
+            if let Some(slot) = counts.get_mut(usize::from(option)) {
+                *slot = slot.saturating_add(1);
+            }
+        }
+        counts
+    }
+
+    /// Advance the countdown one tick. Returns true on the tick the session closes.
+    pub fn tick(&mut self) -> bool {
+        if self.ticks_left > 0 {
+            self.ticks_left -= 1;
+        }
+        self.ticks_left == 0
+    }
+
+    /// Resolve the ballots: majority wins; a tie goes to the host's ballot when the host voted for a tied
+    /// option, otherwise to a deterministic coin flip from the run seed and the level. With no ballots at all
+    /// the coin is flipped across every option. Returns `None` only when no option was offered.
+    pub fn resolve(&self) -> Option<VoteOutcome> {
+        if self.options.is_empty() {
+            return None;
+        }
+        let counts = self.counts();
+        let max = counts.iter().copied().max().unwrap_or(0);
+        let tied: Vec<usize> = counts
+            .iter()
+            .enumerate()
+            .filter(|&(_, &c)| c == max)
+            .map(|(i, _)| i)
+            .collect();
+        let winner = if tied.len() == 1 {
+            tied[0]
+        } else {
+            match self.host.and_then(|h| self.ballots.get(&h).copied()).map(usize::from) {
+                Some(ballot) if tied.contains(&ballot) => ballot,
+                _ => {
+                    let mut rng = Rng::new(self.draw_seed.wrapping_add(VOTE_COIN_SALT));
+                    tied[rng.below(tied.len())]
+                }
+            }
+        };
+        let option = &self.options[winner];
+        Some(VoteOutcome {
+            winner: option.index,
+            id: option.id.clone(),
+            name: option.name.clone(),
+            kind: option.kind,
+            permanent: option.kind == CARD_ENEMY && !option.temporary,
+            temporary: option.temporary,
+            counts,
+        })
+    }
+}
+
+/// One registry entry reduced to the fields the pool rules use (registry §9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PoolEntry {
+    /// Stable enemy id.
+    pub id: String,
+    /// Plain name for the vote UI.
+    pub name: String,
+    /// First level the enemy may be offered.
+    pub min_level: u32,
+    /// Permanent copies allowed in one run.
+    pub selection_cap: u32,
+    /// Tags (used by `requires` hooks).
+    pub tags: Vec<String>,
+    /// Class id → relation; only ever compared against `"ignores"` here.
+    pub class_interactions: BTreeMap<String, String>,
+    /// `requires` hooks as (tag, count) pairs.
+    pub requires: Vec<(String, u32)>,
+    /// Position in design/content.json (network kind index); ties in the sort are broken by this.
+    pub content_order: usize,
+}
+
+/// Tag → count over the run's permanent copies (temporary summons never count; each copy counts once).
+fn permanent_tag_counts<'a>(entries: &'a [PoolEntry], permanents: &[String]) -> BTreeMap<&'a str, u32> {
+    let mut tag_counts: BTreeMap<&'a str, u32> = BTreeMap::new();
+    for id in permanents {
+        if let Some(entry) = entries.iter().find(|e| &e.id == id) {
+            for tag in &entry.tags {
+                *tag_counts.entry(tag.as_str()).or_default() += 1;
+            }
+        }
+    }
+    tag_counts
+}
+
+/// True when every `requires` hook of `entry` is satisfied by the run's permanents.
+fn requires_satisfied(entry: &PoolEntry, tag_counts: &BTreeMap<&str, u32>) -> bool {
+    entry
+        .requires
+        .iter()
+        .all(|(tag, count)| tag_counts.get(tag.as_str()).copied().unwrap_or(0) >= *count)
+}
+
+/// True when `entry` refuses to spawn against any of the class ids present in the lobby.
+fn class_excluded(entry: &PoolEntry, classes: &[&str]) -> bool {
+    classes.iter().any(|class| {
+        entry
+            .class_interactions
+            .get(*class)
+            .is_some_and(|relation| relation == "ignores")
+    })
+}
+
+/// The filtered, deterministically ordered enemy pool (registry §9): `min_level` gate, `selection_cap`
+/// against the run's permanents, `requires` hooks, class composition. Ordered by `min_level` ascending,
+/// ties broken by content order. No RNG.
+pub fn vote_pool(entries: &[PoolEntry], level: u32, classes: &[&str], permanents: &[String]) -> Vec<PoolEntry> {
+    let tag_counts = permanent_tag_counts(entries, permanents);
+    let mut pool: Vec<PoolEntry> = entries
+        .iter()
+        .filter(|e| e.min_level <= level)
+        .filter(|e| {
+            let held = permanents.iter().filter(|id| id.as_str() == e.id).count();
+            held < e.selection_cap as usize
+        })
+        .filter(|e| requires_satisfied(e, &tag_counts))
+        .filter(|e| !class_excluded(e, classes))
+        .cloned()
+        .collect();
+    pool.sort_by(|a, b| {
+        a.min_level
+            .cmp(&b.min_level)
+            .then(a.content_order.cmp(&b.content_order))
+    });
+    pool
+}
+
+/// Registry §9 overflow: every entry is at its cap, so the vote offers TEMPORARY summons for the next
+/// level. Candidates ignore `selection_cap` (temporaries never count) but still respect `min_level`, the
+/// `requires` hooks and class composition; ordered by `min_level` descending, ties broken by content order.
+pub fn overflow_pool(entries: &[PoolEntry], level: u32, classes: &[&str], permanents: &[String]) -> Vec<PoolEntry> {
+    let tag_counts = permanent_tag_counts(entries, permanents);
+    let mut pool: Vec<PoolEntry> = entries
+        .iter()
+        .filter(|e| e.min_level <= level)
+        .filter(|e| requires_satisfied(e, &tag_counts))
+        .filter(|e| !class_excluded(e, classes))
+        .cloned()
+        .collect();
+    pool.sort_by(|a, b| {
+        b.min_level
+            .cmp(&a.min_level)
+            .then(a.content_order.cmp(&b.content_order))
+    });
+    pool.truncate(VOTE_POOL_OFFER);
+    pool
+}
+
+/// Deterministic seed mix (SplitMix32-style) for vote draws and tie-breaks.
+fn mix_seed(seed: u32, level: u32) -> u32 {
+    let mut z = seed ^ level.wrapping_mul(0x9E37_79B9);
+    z = (z ^ (z >> 16)).wrapping_mul(0x85EB_CA6B);
+    z = (z ^ (z >> 13)).wrapping_mul(0xC2B2_AE35);
+    z ^ (z >> 16)
+}
 
 /// True when `level` has a milestone row in the escalation table (design §5: level 4+; 25+ is the endless row).
 pub fn escalation_milestone_level(level: u32) -> bool {
@@ -65,11 +342,6 @@ pub(crate) fn escalation_fog_mul(level: u32) -> f32 {
     }
     fog
 }
-
-/// T-062 enemy scaling cap: per-level scaling adds at most this many enemies (reached at
-/// level 7), so late levels stay playable. Scaling copies stack with curse copies
-/// (`RunMods::extra_enemies`, capped at 6) and milestone escalation copies.
-const LEVEL_SCALING_ENEMY_CAP: u32 = 6;
 
 /// Extra enemy speed multiplier from the endless escalation row (+5% per 5 levels past 25).
 pub(crate) fn escalation_speed_mul(level: u32) -> f32 {
@@ -214,7 +486,7 @@ struct CollapseEntry {
     state: CollapseTile,
 }
 
-/// Small deterministic PRNG (SplitMix32) for draft offers, shop offers, altar rolls and level seeds. Server-only.
+/// Small deterministic PRNG (SplitMix32) for draft offers, shop offers, altar rolls, vote coins and level seeds. Server-only.
 #[derive(Debug, Clone)]
 pub struct Rng(u32);
 
@@ -301,6 +573,14 @@ pub struct Run {
     pub lives: u32,
     pub enemies: Vec<Enemy>,
     pub drafted_enemies: Vec<String>,
+    /// Enemies won in votes (T-078); permanent for the rest of the run. Ordered by when they were won.
+    pub permanents: Vec<String>,
+    /// One-level temporary summons won in overflow votes; consumed by (and only by) the next level.
+    pub pending_temporary: Vec<String>,
+    /// The open vote session for the level being exited, if any.
+    pub vote_session: Option<VoteSession>,
+    /// The seed the run was created with (vote draws and tie-breaks are deterministic).
+    pub seed: u32,
     pub upgrades: Vec<String>,
     pub curses: Vec<String>,
     pub mods: RunMods,
@@ -323,7 +603,7 @@ pub struct Run {
     collapse: Vec<CollapseEntry>,
     /// Gift id -> platform id it rests on (for golden gifts vanishing with a fallen tile).
     gift_platform: BTreeMap<u16, u16>,
-    /// The single most-voted drafted enemy of the last draft (escalation \"Second Step\", level 4+).
+    /// The single most-voted drafted enemy of the last draft (escalation "Second Step", level 4+).
     most_voted_enemy: Option<String>,
     rng: Rng,
 }
@@ -344,6 +624,10 @@ impl Run {
             lives: 0,
             enemies: Vec::new(),
             drafted_enemies: Vec::new(),
+            permanents: Vec::new(),
+            pending_temporary: Vec::new(),
+            vote_session: None,
+            seed,
             upgrades: Vec::new(),
             curses: Vec::new(),
             mods: RunMods::default(),
@@ -363,6 +647,142 @@ impl Run {
         run.offer = Some(run.make_offer(content));
         run.shop = run.make_shop(content);
         run
+    }
+
+    /// Everything permanent in the run, drafted enemies first, voted permanents after; used for the
+    /// pool's `selection_cap` count and the `requires` hooks. Temporary summons never appear here.
+    pub fn all_permanents(&self) -> Vec<String> {
+        let mut all = self.drafted_enemies.clone();
+        all.extend(self.permanents.iter().cloned());
+        all
+    }
+
+    /// Build the pool entries from the registry content, in content order.
+    fn pool_entries(content: &Content) -> Vec<PoolEntry> {
+        content
+            .enemies
+            .iter()
+            .enumerate()
+            .map(|(content_order, e)| PoolEntry {
+                id: e.id.clone(),
+                name: e.name.clone(),
+                min_level: e.min_level.into(),
+                selection_cap: e.selection_cap.into(),
+                tags: e.tags.clone(),
+                class_interactions: e.class_interactions.clone(),
+                requires: e
+                    .synergy_hooks
+                    .iter()
+                    .filter_map(|h| h.requires.as_ref())
+                    .map(|r| (r.tag.clone(), r.count.into()))
+                    .collect(),
+                content_order,
+            })
+            .collect()
+    }
+
+    /// Build the vote options for the level being exited. Deterministic: enemy candidates come from the
+    /// registry order (registry §9), a curse may replace the last enemy option on a seeded coin (eligible
+    /// curses are non-greater, or greater-only on `GREATER_EVERY` levels), and an empty enemy pool overflows
+    /// into temporary summons. Never pads with entries the filters exclude.
+    pub fn build_vote_options(&self, content: &Content, classes: &[&str]) -> Vec<SessionOption> {
+        let entries = Self::pool_entries(content);
+        let permanents = self.all_permanents();
+        let level = self.level_num;
+        let pool = vote_pool(&entries, level, classes, &permanents);
+        let mut options: Vec<SessionOption> = pool
+            .iter()
+            .take(VOTE_POOL_OFFER)
+            .map(|e| SessionOption {
+                index: 0,
+                id: e.id.clone(),
+                name: e.name.clone(),
+                kind: CARD_ENEMY,
+                temporary: false,
+            })
+            .collect();
+        if options.is_empty() {
+            options = overflow_pool(&entries, level, classes, &permanents)
+                .into_iter()
+                .map(|e| SessionOption {
+                    index: 0,
+                    id: e.id,
+                    name: e.name,
+                    kind: CARD_ENEMY,
+                    temporary: true,
+                })
+                .collect();
+        }
+        // One of the three options may be a curse instead of an enemy: seeded coin, 1 in 2.
+        let mut rng = Rng::new(mix_seed(self.seed, level) ^ VOTE_CURSE_SALT);
+        let greater = level.is_multiple_of(GREATER_EVERY);
+        let curse_pool: Vec<&crate::content::ModCard> =
+            content.curses.iter().filter(|c| c.greater == greater).collect();
+        if !curse_pool.is_empty() && rng.below(2) == 0 {
+            let pick = curse_pool[rng.below(curse_pool.len())];
+            if !options.is_empty() {
+                options.pop();
+            }
+            options.push(SessionOption {
+                index: 0,
+                id: pick.id.clone(),
+                // No curse name is assumed to exist in content; the wire carries the id.
+                name: pick.id.clone(),
+                kind: CARD_CURSE,
+                temporary: false,
+            });
+        }
+        for (i, option) in options.iter_mut().enumerate() {
+            option.index = i as u8;
+        }
+        options
+    }
+
+    /// Open the vote session for the level being exited; `classes` are the class ids present in the lobby.
+    /// Returns false when a session is already open or no option can be offered at all.
+    pub fn open_vote(&mut self, content: &Content, classes: &[&str], host: Option<u32>) -> bool {
+        if self.vote_session.is_some() {
+            return false;
+        }
+        let options = self.build_vote_options(content, classes);
+        if options.is_empty() {
+            return false;
+        }
+        self.vote_session = Some(VoteSession::open(self.level_num, self.seed, options, host));
+        true
+    }
+
+    /// Close the vote session (countdown elapsed, everyone voted, or the level ended) and apply the outcome.
+    /// Returns `None` when no session was open.
+    pub fn close_vote(&mut self, content: &Content) -> Option<VoteOutcome> {
+        let session = self.vote_session.take()?;
+        let outcome = session.resolve()?;
+        self.apply_vote_outcome(content, &outcome);
+        Some(outcome)
+    }
+
+    /// Apply a closed vote: enemies join the permanents (or the one-level temporary list on overflow),
+    /// curses act like drafted curses (mods + the run's curse list).
+    fn apply_vote_outcome(&mut self, content: &Content, outcome: &VoteOutcome) {
+        match outcome.kind {
+            CARD_ENEMY => {
+                if outcome.temporary {
+                    self.pending_temporary.push(outcome.id.clone());
+                } else {
+                    self.permanents.push(outcome.id.clone());
+                }
+            }
+            _ => {
+                if let Some(def) = content.curse(&outcome.id) {
+                    let lives_before = self.mods.extra_lives;
+                    self.mods.apply(&def.mods);
+                    self.lives = self
+                        .lives
+                        .saturating_add(self.mods.extra_lives.saturating_sub(lives_before));
+                    self.curses.push(outcome.id.clone());
+                }
+            }
+        }
     }
 
     /// The reward cards for the current lobby (greater-curse level or mixed upgrade/curse), drawn from the run RNG.
@@ -622,29 +1042,27 @@ impl Run {
         // The shop lives in the lobby only; starting a level closes it.
         self.shop = None;
         self.event_friction_mul = event_friction_mul(content, self.level.event);
-        // Roster: drafted enemies + curse copies + per-level scaling copies (T-062)
-        // + milestone escalation copies (design §5, from level 4 on).
-        let mut roster: Vec<String> = self.drafted_enemies.clone();
-        let drafted = self.drafted_enemies.len();
-        if drafted > 0 {
+        // Roster: drafted enemies + voted permanents + curse copies + milestone escalation copies
+        // (design §5, from level 4 on). T-078: no per-level automatic scaling remains.
+        let base = self.all_permanents();
+        let base_len = base.len();
+        let mut roster: Vec<String> = base.clone();
+        if base_len > 0 {
             for k in 0..self.mods.extra_enemies as usize {
-                roster.push(self.drafted_enemies[k % drafted].clone());
-            }
-            // T-062: one extra enemy per level after level 1 (level_num - 1), cycling the
-            // drafted roster, capped at LEVEL_SCALING_ENEMY_CAP so late levels stay playable.
-            let scaling = self.level_num.saturating_sub(1).min(LEVEL_SCALING_ENEMY_CAP);
-            for k in 0..scaling as usize {
-                roster.push(self.drafted_enemies[k % drafted].clone());
+                roster.push(base[k % base_len].clone());
             }
         }
         roster.extend(escalation_extra_copies(
             self.level_num,
-            &self.drafted_enemies,
+            &base,
             self.most_voted_enemy.as_deref(),
         ));
         // Level 1 stays plain (design A4): no enemies at all.
         if self.level_num == 1 {
             roster.clear();
+        } else {
+            // One-level temporary summons from the last vote's overflow (registry §9).
+            roster.append(&mut self.pending_temporary);
         }
         // The hub has 8 fixed spawn slots; extra copies cycle onto the slots.
         for (index, id) in roster.iter().enumerate() {
@@ -917,7 +1335,7 @@ impl Run {
             currency: self.currency,
             tuning: self.tuning(),
             fog_density_mul: self.mods.fog_density_mul * escalation_fog_mul(self.level_num),
-            enemies: self.drafted_enemies.clone(),
+            enemies: self.all_permanents(),
             upgrades: self.upgrades.clone(),
             curses: self.curses.clone(),
         }
@@ -1036,9 +1454,9 @@ mod tests {
         assert_eq!(run.upgrades.len() + run.curses.len(), 1);
         assert!(run.level.gifts.iter().all(|g| g.kind == protocol::GIFT_NORMAL));
         assert!(!run.level.gifts.is_empty());
-        // T-062 enemy scaling: one extra copy per level after level 1, capped.
-        let scaling = run.level_num.saturating_sub(1).min(LEVEL_SCALING_ENEMY_CAP);
-        assert_eq!(run.enemies.len() as u32, 2 + run.mods.extra_enemies + scaling);
+        // T-078: the automatic per-level scaling is gone; a fresh run spawns the drafted
+        // enemies and nothing else (no vote has been won yet).
+        assert_eq!(run.enemies.len() as u32, 2 + run.mods.extra_enemies);
         assert!(run.offer.is_none());
         assert!(run.shop.is_none(), "the shop closes while a level is being played");
     }
@@ -1306,234 +1724,287 @@ mod tests {
 }
 
 #[cfg(test)]
-mod m3_tests {
+mod vote_tests {
     use super::*;
-    use protocol::{EVENT_NONE, TILE_GONE, TILE_WARN};
 
-    fn feet_above(g: &protocol::Gift) -> Vec3 {
-        Vec3::new(g.pos.x, g.pos.y - 0.9, g.pos.z)
+    fn content() -> Content {
+        Content::load().unwrap()
     }
 
-    #[test]
-    fn goldens_are_phase_two_only_worth_one_and_at_collected_positions() {
-        let c = Content::load().unwrap();
-        let mut run = Run::new(&c, 11, 2);
-        run.resolve(&c, &[valid_picks(&run)]);
-        assert_eq!(run.level_phase, LEVEL_COLLECT);
-        assert!(run.level.gifts.iter().all(|g| g.kind == protocol::GIFT_NORMAL));
-        for g in run.level.gifts.clone() {
-            assert_eq!(run.collect_gifts(&feet_above(&g)).len(), 1);
-            assert_eq!(run.currency, 0, "goldens do not exist during LEVEL_COLLECT");
-        }
-        assert_eq!(run.level_phase, LEVEL_COLLAPSE_PENDING, "last gift starts phase 2");
-        let collected = run.level.gifts.len();
-        for g in run.level.gifts.clone() {
-            let before = run.currency;
-            let picked = run.collect_gifts(&feet_above(&g));
-            assert_eq!(picked.len(), 1, "golden {} at the collected position", g.id);
-            assert_eq!(run.currency, before + 1, "goldens are worth 1");
-        }
-        assert_eq!(run.golden_taken.len(), collected);
-        // Re-touching a collected position collects nothing twice.
-        for g in run.level.gifts.clone() {
-            assert!(run.collect_gifts(&feet_above(&g)).is_empty());
+    fn entry(id: &str, min_level: u32, cap: u32, tags: &[&str], order: usize) -> PoolEntry {
+        PoolEntry {
+            id: id.to_string(),
+            name: id.to_string(),
+            min_level,
+            selection_cap: cap,
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+            class_interactions: BTreeMap::new(),
+            requires: Vec::new(),
+            content_order: order,
         }
     }
 
-    #[test]
-    fn golden_vanishes_once_its_platform_falls() {
-        let c = Content::load().unwrap();
-        let mut run = Run::new(&c, 13, 2);
-        run.resolve(&c, &[valid_picks(&run)]);
-        for g in run.level.gifts.clone() {
-            run.collect_gifts(&feet_above(&g));
+    fn opt(index: u8, id: &str, kind: u8) -> SessionOption {
+        SessionOption {
+            index,
+            id: id.to_string(),
+            name: id.to_string(),
+            kind,
+            temporary: false,
         }
-        // A gift that rests on a platform which is part of the collapse plan.
-        let target = run
-            .level
-            .gifts
-            .iter()
-            .find(|g| {
-                run.gift_platform
-                    .get(&g.id)
-                    .is_some_and(|pid| run.collapse.iter().any(|e| e.id == *pid))
-            })
-            .cloned()
-            .expect("some gift rests on a collapsible platform");
-        let pid = run.gift_platform[&target.id];
-        for entry in &mut run.collapse {
-            if entry.id == pid {
-                entry.state = CollapseTile::Gone;
+    }
+
+    fn session(level: u32, seed: u32, host: Option<u32>) -> VoteSession {
+        VoteSession::open(
+            level,
+            seed,
+            vec![
+                opt(0, "a", CARD_ENEMY),
+                opt(1, "b", CARD_ENEMY),
+                opt(2, "c", CARD_ENEMY),
+            ],
+            host,
+        )
+    }
+
+    #[test]
+    fn majority_winner_takes_the_session() {
+        let mut s = session(3, 42, Some(1));
+        for (id, option) in [(1, 1u8), (2, 1), (3, 1), (4, 0)] {
+            s.cast(id, option).unwrap();
+        }
+        let outcome = s.resolve().unwrap();
+        assert_eq!(outcome.winner, 1);
+        assert_eq!(outcome.id, "b");
+        assert!(outcome.permanent);
+        assert!(!outcome.temporary);
+        assert_eq!(outcome.counts, vec![1, 3, 0]);
+    }
+
+    #[test]
+    fn a_tie_goes_to_the_hosts_vote() {
+        // Host voted for option 0; the rest split 1-1: the host's option wins.
+        let mut s = session(3, 42, Some(7));
+        s.cast(7, 0).unwrap();
+        s.cast(8, 0).unwrap();
+        s.cast(9, 1).unwrap();
+        assert_eq!(s.resolve().unwrap().winner, 0);
+        // Host voted for option 1 instead; the tie flips to option 1.
+        let mut s = session(3, 42, Some(7));
+        s.cast(7, 1).unwrap();
+        s.cast(8, 1).unwrap();
+        s.cast(9, 0).unwrap();
+        assert_eq!(s.resolve().unwrap().winner, 1);
+    }
+
+    #[test]
+    fn a_tie_without_a_host_vote_is_a_deterministic_coin() {
+        // Host present in the session but silent; the tie is broken by the seed, not the clock.
+        let winner_of = || {
+            let mut s = session(3, 42, Some(7));
+            s.cast(8, 0).unwrap();
+            s.cast(9, 1).unwrap();
+            s.resolve().unwrap().winner
+        };
+        let first = winner_of();
+        assert!(first == 0 || first == 1, "the coin lands on a tied option");
+        assert_eq!(first, winner_of(), "same seed and level, same coin");
+        // A three-way tie: same determinism, winner in the tied set.
+        let winner_of_three = || {
+            let mut s = session(9, 1234, Some(7));
+            s.cast(8, 0).unwrap();
+            s.cast(9, 1).unwrap();
+            s.cast(10, 2).unwrap();
+            s.resolve().unwrap().winner
+        };
+        let w = winner_of_three();
+        assert!(w <= 2, "the coin lands on a tied option");
+        assert_eq!(w, winner_of_three());
+    }
+
+    #[test]
+    fn the_pool_respects_selection_cap() {
+        let entries = vec![entry("unique", 1, 1, &[], 0), entry("pair", 1, 2, &[], 1)];
+        let pool = vote_pool(&entries, 1, &[], &["unique".to_string(), "pair".to_string()]);
+        assert_eq!(
+            pool.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+            vec!["pair"],
+            "a cap-1 entry with a permanent is out; the pair with one copy stays"
+        );
+        let pool = vote_pool(
+            &entries,
+            1,
+            &[],
+            &["unique".to_string(), "pair".to_string(), "pair".to_string()],
+        );
+        assert!(pool.is_empty(), "both entries are at their cap");
+    }
+
+    #[test]
+    fn the_pool_scales_by_level() {
+        let entries = vec![
+            entry("early", 1, 2, &[], 0),
+            entry("mid", 3, 1, &[], 1),
+            entry("late", 6, 1, &[], 2),
+        ];
+        let ids = |level: u32| {
+            vote_pool(&entries, level, &[], &[])
+                .into_iter()
+                .map(|e| e.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(1), vec!["early"]);
+        assert_eq!(ids(2), vec!["early"]);
+        assert_eq!(ids(3), vec!["early", "mid"]);
+        assert_eq!(ids(6), vec!["early", "mid", "late"]);
+        // Deterministic order: min_level ascending, ties by content order (no RNG).
+        let tie = vec![entry("b", 1, 1, &[], 5), entry("a", 1, 1, &[], 0)];
+        let ids: Vec<String> = vote_pool(&tie, 1, &[], &[]).into_iter().map(|e| e.id).collect();
+        assert_eq!(ids, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn pool_filters_requires_hooks_and_class_composition() {
+        let mut needs_pair = entry("needs_pair", 1, 1, &[], 0);
+        needs_pair.requires = vec![("small".to_string(), 2)];
+        let small_a = entry("small_a", 1, 2, &["small"], 1);
+        let small_b = entry("small_b", 1, 2, &["small"], 2);
+        let entries = vec![needs_pair, small_a.clone(), small_b.clone()];
+        // Not satisfied: no small permanents.
+        let pool = vote_pool(&entries, 1, &[], &[]);
+        assert!(!pool.iter().any(|e| e.id == "needs_pair"));
+        // Satisfied: two small permanents.
+        let permanents = vec!["small_a".to_string(), "small_b".to_string()];
+        let pool = vote_pool(&entries, 1, &[], &permanents);
+        assert!(pool.iter().any(|e| e.id == "needs_pair"));
+        // Class composition: an entry that refuses the lobby's class is never offered.
+        let mut refuses = entry("refuses", 1, 1, &[], 3);
+        refuses
+            .class_interactions
+            .insert("striker".to_string(), "ignores".to_string());
+        let entries = vec![refuses];
+        let pool = vote_pool(&entries, 1, &["striker"], &[]);
+        assert!(pool.is_empty());
+        // ...but a different class in the lobby leaves it in the pool.
+        let pool = vote_pool(&entries, 1, &["bulwark"], &[]);
+        assert_eq!(pool.len(), 1);
+    }
+
+    #[test]
+    fn a_vote_win_is_permanent_across_levels() {
+        let c = content();
+        let mut run = Run::new(&c, 7, 2);
+        // Cast a winning vote for a permanent mid-collapse.
+        run.vote_session = Some(VoteSession::open(
+            2,
+            run.seed,
+            vec![SessionOption {
+                index: 0,
+                id: "moteling".to_string(),
+                name: "Stillness Shrieker".to_string(),
+                kind: CARD_ENEMY,
+                temporary: false,
+            }],
+            Some(1),
+        ));
+        if let Some(session) = run.vote_session.as_mut() {
+            session.cast(1, 0).unwrap();
+        }
+        let outcome = run.close_vote(&c).unwrap();
+        assert!(outcome.permanent);
+        assert_eq!(run.permanents, vec!["moteling".to_string()]);
+        // The current level is unaffected; permanents spawn from the next level on.
+        let picks = valid_picks(&run);
+        run.resolve(&c, &[picks]);
+        let drafted = run.drafted_enemies.len();
+        assert_eq!(run.enemies.len(), drafted + 1, "the permanent is on the field");
+        assert_eq!(
+            run.info().enemies.iter().filter(|id| id.as_str() == "moteling").count(),
+            1
+        );
+        // And on every level after that.
+        run.finish_level(&c);
+        let picks = valid_picks(&run);
+        run.resolve(&c, &[picks]);
+        assert_eq!(run.enemies.len(), drafted + 1, "the permanent spawns again next level");
+        // Run::new(&c, 7, 2) starts on level 2; finish_level is the only thing that advances it.
+        assert_eq!(run.level_num, 3);
+    }
+
+    #[test]
+    fn an_exhausted_pool_overflows_into_a_temporary_for_one_level_only() {
+        let c = content();
+        let mut run = Run::new(&c, 7, 2);
+        // Drive every registry entry to its cap with the run's permanents.
+        let mut permanents = Vec::new();
+        for e in &c.enemies {
+            for _ in 0..u32::from(e.selection_cap) {
+                permanents.push(e.id.clone());
             }
         }
-        let picked = run.collect_gifts(&feet_above(&target));
-        assert!(picked.is_empty(), "a golden on a fallen tile is gone forever");
-        assert!(!run.golden_taken.contains(&target.id));
-    }
-
-    #[test]
-    fn beacon_is_closed_during_collect_and_opens_from_pending() {
-        let c = Content::load().unwrap();
-        let mut run = Run::new(&c, 17, 2);
-        run.resolve(&c, &[valid_picks(&run)]);
-        assert!(!run.beacon_reached(&run.level.beacon.clone()));
-        for g in run.level.gifts.clone() {
-            run.collect_gifts(&feet_above(&g));
-        }
-        assert_eq!(run.level_phase, LEVEL_COLLAPSE_PENDING);
-        assert!(run.beacon_reached(&run.level.beacon.clone()));
-    }
-
-    #[test]
-    fn collapse_plan_is_farthest_first_excludes_the_hub_and_breaks_ties_by_id() {
-        let mk = |id: u16, cx: f32| Platform {
-            id,
-            kind: protocol::PLATFORM_NORMAL,
-            bounds: protocol::Aabb {
-                min: Vec3::new(cx - 1.5, -0.5, -1.5),
-                max: Vec3::new(cx + 1.5, 0.0, 1.5),
-            },
-        };
-        let platforms = vec![
-            mk(0, 0.0),   // spawn hub (contains beacon and spawn, top 0)
-            mk(1, 8.0),   // near
-            mk(2, 19.0),  // tie, lower id
-            mk(3, -19.0), // tie, higher id
-            mk(4, 41.0),  // far
-        ];
-        let beacon = Vec3::new(0.0, 0.0, 0.0);
-        let spawn = Vec3::new(0.0, 0.0, 0.0);
-        let plan = build_collapse_plan(&platforms, &beacon, &spawn, 1);
-        let ids: Vec<u16> = plan.iter().map(|e| e.id).collect();
-        assert_eq!(
-            ids,
-            vec![4, 2, 3, 1],
-            "farthest first; ties by platform id ascending; hub exempted"
-        );
-        let warns: Vec<u32> = plan.iter().map(|e| e.warn_start_tick).collect();
-        for w in warns.windows(2) {
-            assert!(w[0] <= w[1], "batch warnings are issued in order");
-        }
-        assert_eq!(plan[0].warn_start_tick, 0, "the farthest batch starts warning at once");
-    }
-
-    #[test]
-    fn warn_then_gone_flip_and_collapse_ms_counts_to_zero() {
-        let c = Content::load().unwrap();
-        let mut run = Run::new(&c, 5, 1);
-        let mk = |id: u16, cx: f32| Platform {
-            id,
-            kind: protocol::PLATFORM_NORMAL,
-            bounds: protocol::Aabb {
-                min: Vec3::new(cx - 1.5, -0.5, -1.5),
-                max: Vec3::new(cx + 1.5, 0.0, 1.5),
-            },
-        };
-        run.level = LevelData {
-            level: 1,
-            seed: 1,
-            spawn: Vec3::new(0.0, 0.0, 0.0),
-            beacon: Vec3::new(0.0, 0.0, 0.0),
-            kill_y: -50.0,
-            platforms: vec![mk(0, 0.0), mk(1, 30.0)],
-            gifts: Vec::new(),
-            event: EVENT_NONE,
-            altars: Vec::new(),
-        };
-        run.world = World::from_level(&run.level);
-        run.enemies.clear();
-        // Level 2 warning time (3.0 s), one collapsing platform.
-        run.collapse = build_collapse_plan(&run.level.platforms, &run.level.beacon, &run.level.spawn, 2);
-        run.gift_platform.clear();
-        run.phase = PHASE_PLAYING;
-        // A level with no gifts completes phase 1 vacuously on the first collection pass.
-        run.collect_gifts(&Vec3::new(0.0, 0.0, 0.0));
-        assert_eq!(run.level_phase, LEVEL_COLLAPSE_PENDING);
-        run.tick_collapse();
-        assert!(run.world_tiles().iter().any(|t| t.id == 1 && t.state == TILE_WARN));
-        for _ in 0..60 {
-            run.tick_collapse();
-        }
-        assert!(run.world_tiles().iter().any(|t| t.id == 1 && t.state == TILE_GONE));
-        assert_eq!(run.level_phase, LEVEL_COLLAPSING, "the siren window is 3.0 s");
-        assert_eq!(run.collapse_ms(), 0);
-    }
-
-    #[test]
-    fn collapse_duration_matches_the_design_table() {
-        assert_eq!(collapse_duration_seconds(1), 52.0);
-        assert_eq!(collapse_duration_seconds(6), 42.0);
-        assert_eq!(collapse_duration_seconds(11), 32.0);
-        assert_eq!(
-            collapse_duration_seconds(17),
-            30.0,
-            "Hunger is absorbed by the 30 s floor"
-        );
-        assert_eq!(collapse_duration_seconds(25), 30.0);
-        assert_eq!(collapse_duration_seconds(30), 25.0, "level 30: floor 25");
-        assert_eq!(collapse_duration_seconds(40), 25.0);
-    }
-
-    #[test]
-    fn escalation_extra_copies_follow_the_table() {
-        let drafted = vec!["pallbearer".to_string(), "snapshrike".to_string(), "turret".to_string()];
-        // Below level 4: nothing.
-        assert!(escalation_extra_copies(3, &drafted, Some("pallbearer")).is_empty());
-        // Level 4 (Second Step): one copy of the most-voted enemy.
-        assert_eq!(
-            escalation_extra_copies(4, &drafted, Some("snapshrike")),
-            vec!["snapshrike".to_string()]
-        );
-        // Level 6 (Crowded Wake): most-voted + pallbearer + one full roster copy.
-        let six = escalation_extra_copies(6, &drafted, Some("turret"));
-        let count = |s: &str| six.iter().filter(|e| e.as_str() == s).count();
-        assert_eq!(count("turret"), 2, "most-voted + per-3 copy");
-        assert_eq!(count("pallbearer"), 2, "level-6 pallbearer + per-3 copy");
-        assert_eq!(count("snapshrike"), 1, "per-3 copy");
-        // Level 21: per-3 capped at 6, plus Second Front (floor(3/2)=1, k=0 -> pallbearer) and Full Chorus.
-        let many = escalation_extra_copies(21, &drafted, None);
-        let count = |s: &str| many.iter().filter(|e| e.as_str() == s).count();
-        assert_eq!(
-            count("pallbearer"),
-            9,
-            "per-3 (6) + L6 pallbearer + Second Front + Full Chorus"
-        );
-        assert_eq!(count("snapshrike"), 7, "per-3 (6) + Full Chorus");
-        // Level 40: per-3 pinned at the +6 cap.
-        let endless = escalation_extra_copies(40, &drafted, None);
-        let count = |s: &str| endless.iter().filter(|e| e.as_str() == s).count();
-        assert_eq!(count("turret"), 7, "per-3 (6) + Full Chorus");
-    }
-
-    #[test]
-    fn fog_and_milestone_escalation() {
-        assert_eq!(escalation_fog_mul(4), 1.0);
-        assert_eq!(escalation_fog_mul(12), 1.25);
+        let total_permanents = permanents.len();
+        run.permanents = permanents;
+        assert!(run.open_vote(&c, &["striker"], Some(1)), "the session still opens");
+        let options: Vec<SessionOption> = run
+            .vote_session
+            .as_ref()
+            .map(|s| s.options().to_vec())
+            .unwrap_or_default();
+        assert!(!options.is_empty());
         assert!(
-            (escalation_fog_mul(18) - 1.4375).abs() < 1e-6,
-            "Grey Tide and Deep Night stack"
+            options.iter().any(|o| o.kind == CARD_ENEMY),
+            "the overflow still offers at least one enemy"
         );
-        assert!(escalation_milestone_level(4));
-        assert!(escalation_milestone_level(9));
-        assert!(escalation_milestone_level(17));
-        assert!(escalation_milestone_level(20));
-        assert!(escalation_milestone_level(25));
-        assert!(escalation_milestone_level(40));
-        assert!(!escalation_milestone_level(1));
-        assert!(!escalation_milestone_level(11));
-        assert!(!escalation_milestone_level(24));
+        assert!(
+            options.iter().filter(|o| o.kind == CARD_ENEMY).all(|o| o.temporary),
+            "every enemy option is a temporary summon when the pool is exhausted"
+        );
+        if let Some(session) = run.vote_session.as_mut() {
+            session.cast(1, 0).unwrap();
+        }
+        let outcome = run.close_vote(&c).unwrap();
+        assert!(!outcome.permanent);
+        assert!(outcome.temporary);
+        assert_eq!(run.permanents.len(), total_permanents, "no new permanent was added");
+        assert_eq!(run.pending_temporary.len(), 1);
+        // The temporary spawns on the next level and only that level. `resolve` also drafts, so the
+        // drafted count is read after each resolve rather than before it.
+        let picks = valid_picks(&run);
+        run.resolve(&c, &[picks]);
+        let drafted = run.drafted_enemies.len();
+        assert_eq!(run.enemies.len(), drafted + total_permanents + 1);
+        assert!(run.pending_temporary.is_empty(), "the temporary is consumed");
+        run.finish_level(&c);
+        let picks = valid_picks(&run);
+        run.resolve(&c, &[picks]);
+        let drafted = run.drafted_enemies.len();
+        assert_eq!(
+            run.enemies.len(),
+            drafted + total_permanents,
+            "the temporary does not return"
+        );
     }
 
     #[test]
-    fn collapse_pending_lasts_exactly_three_seconds() {
-        let c = Content::load().unwrap();
-        let mut run = Run::new(&c, 5, 1);
-        run.phase = PHASE_PLAYING;
-        run.level_phase = LEVEL_COLLAPSE_PENDING;
-        run.collapse_elapsed_ticks = 0;
-        for _ in 0..COLLAPSE_PENDING_TICKS {
-            run.tick_collapse();
+    fn the_countdown_closes_the_session() {
+        let mut s = session(1, 99, None);
+        for i in 0..VOTE_COUNTDOWN_TICKS - 1 {
+            assert!(!s.tick(), "the session closed too early at tick {i}");
         }
-        assert_eq!(run.level_phase, LEVEL_COLLAPSING);
+        assert_eq!(s.seconds_left(), 1);
+        assert!(s.tick(), "the session closes when the countdown elapses");
+        assert_eq!(s.seconds_left(), 0);
+        assert!(s.cast(1, 0).is_err(), "no ballots after the countdown closed");
+    }
+
+    #[test]
+    fn ballots_are_keyed_by_player_id_not_connection() {
+        let mut s = session(1, 99, Some(1));
+        s.cast(7, 0).unwrap();
+        // Re-voting replaces the ballot.
+        s.cast(7, 2).unwrap();
+        assert_eq!(s.counts(), vec![0, 0, 1]);
+        assert!(s.has_voted(7));
+        assert_eq!(s.voted_ids(), vec![7]);
     }
 }

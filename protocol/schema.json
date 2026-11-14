@@ -3,7 +3,7 @@
   "constants": {
     "PROTOCOL_VERSION": [
       "u16",
-      7
+      8
     ],
     "TICK_HZ": [
       "u32",
@@ -623,6 +623,28 @@
       ]
     },
     {
+      "name": "VoteOption",
+      "$comment": "One pedestal offered by a vote session. index is the ballot slot (0..2); kind reuses the DraftCard kinds (0 enemy, 2 curse).",
+      "struct": [
+        [
+          "index",
+          "u8"
+        ],
+        [
+          "id",
+          "string"
+        ],
+        [
+          "name",
+          "string"
+        ],
+        [
+          "kind",
+          "u8"
+        ]
+      ]
+    },
+    {
       "name": "RunInfo",
       "$comment": "Run-wide state, sent whenever it changes.",
       "struct": [
@@ -740,6 +762,15 @@
           [
             [
               "class",
+              "u8"
+            ]
+          ]
+        ],
+        [
+          "Vote",
+          [
+            [
+              "option",
               "u8"
             ]
           ]
@@ -938,6 +969,74 @@
                 "vec",
                 "string"
               ]
+            ]
+          ]
+        ],
+        [
+          "VoteOpen",
+          [
+            [
+              "level",
+              "u32"
+            ],
+            [
+              "options",
+              [
+                "vec",
+                "VoteOption"
+              ]
+            ],
+            [
+              "countdown_s",
+              "u16"
+            ]
+          ]
+        ],
+        [
+          "VoteState",
+          [
+            [
+              "counts",
+              [
+                "vec",
+                "u32"
+              ]
+            ],
+            [
+              "voted",
+              [
+                "vec",
+                "u32"
+              ]
+            ],
+            [
+              "seconds_left",
+              "u16"
+            ]
+          ]
+        ],
+        [
+          "VoteResult",
+          [
+            [
+              "winner",
+              "u8"
+            ],
+            [
+              "id",
+              "string"
+            ],
+            [
+              "name",
+              "string"
+            ],
+            [
+              "kind",
+              "u8"
+            ],
+            [
+              "permanent",
+              "bool"
             ]
           ]
         ]

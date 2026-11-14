@@ -8,7 +8,9 @@
 //!
 //! Run flow (see [`crate::run`]): lobby on the spawn hub with a draft offer (and, from level 2 on, the shop)
 //! -> every player votes -> a generated level -> collect all normal gifts -> golden gifts + beacon -> lobby.
-//! Tick order: movement (altar uses on rising-edge BTN_INTERACT) -> (playing) gifts -> hazards -> deaths/lives -> beacon -> end check -> snapshots.
+//! During the collapse/exit window every connected player votes on one permanent addition (T-078); the
+//! vote closes on its own 20 s countdown, early once every joined player has balloted, or when the level ends.
+//! Tick order: movement (altar uses on rising-edge BTN_INTERACT) -> (playing) vote countdown -> gifts -> hazards -> deaths/lives -> beacon -> end check -> snapshots.
 //!
 //! Multiplayer: a player who enters the open beacon is FINISHED and one who runs out of lives is DEAD; both
 //! become invisible spectators. The level ends when nobody is ACTIVE: back to the lobby if anyone finished,
@@ -101,6 +103,17 @@ fn player_spawn_state(at: Vec3, class: u8) -> ControllerState {
     state
 }
 
+/// Map a CLASS_* protocol constant to the class id the enemy registry filters on.
+fn class_id_str(class: u8) -> Option<&'static str> {
+    match class {
+        CLASS_STRIKER => Some("striker"),
+        protocol::CLASS_GRAPPLER => Some("grappler"),
+        protocol::CLASS_BULWARK => Some("bulwark"),
+        CLASS_GLIDER => Some("glider"),
+        _ => None,
+    }
+}
+
 pub struct Game {
     tick: u32,
     conns: BTreeMap<ConnId, Conn>,
@@ -148,6 +161,27 @@ impl Game {
             .collect()
     }
 
+    /// Player ids of every joined player, ascending by connection order.
+    fn joined_player_ids(&self) -> Vec<u32> {
+        self.conns
+            .values()
+            .filter_map(|c| c.player.as_ref().map(|p| p.id))
+            .collect()
+    }
+
+    /// Distinct class ids present in the lobby (the vote pool refuses enemies that ignore any of them).
+    fn lobby_class_ids(&self) -> Vec<&'static str> {
+        let mut classes: Vec<&'static str> = self
+            .conns
+            .values()
+            .filter_map(|c| c.player.as_ref())
+            .filter_map(|p| class_id_str(p.class))
+            .collect();
+        classes.sort_unstable();
+        classes.dedup();
+        classes
+    }
+
     /// Spawn position for the n-th joined player.
     fn spawn_point(&self, slot: usize) -> Vec3 {
         let (dx, dz) = SPAWN_RING[slot % MAX_PLAYERS];
@@ -164,6 +198,8 @@ impl Game {
                 if let Some(Conn { player: Some(p), .. }) = self.conns.remove(&id) {
                     tracing::info!(conn = id, player = p.id, name = %p.name, "player left");
                 }
+                // Draft votes are connection-scoped and drop with the connection; vote-session
+                // ballots are keyed by player id and survive (T-078).
                 self.votes.remove(&id);
                 self.maybe_resolve_draft();
             }
@@ -235,6 +271,83 @@ impl Game {
                 })
                 .collect(),
         })
+    }
+
+    /// The VoteOpen message for the open session, if any.
+    fn vote_open_msg(&self) -> Option<ServerMsg> {
+        let session = self.run.vote_session.as_ref()?;
+        Some(ServerMsg::VoteOpen {
+            level: session.level,
+            options: session
+                .options()
+                .iter()
+                .map(|o| protocol::VoteOption {
+                    index: o.index,
+                    id: o.id.clone(),
+                    name: o.name.clone(),
+                    kind: o.kind,
+                })
+                .collect(),
+            countdown_s: u16::try_from(crate::run::VOTE_COUNTDOWN_TICKS / TICK_HZ).unwrap_or(20),
+        })
+    }
+
+    /// The VoteState message for the open session, if any.
+    fn vote_state_msg(&self) -> Option<ServerMsg> {
+        let session = self.run.vote_session.as_ref()?;
+        Some(ServerMsg::VoteState {
+            counts: session.counts(),
+            voted: session.voted_ids(),
+            seconds_left: session.seconds_left(),
+        })
+    }
+
+    /// Broadcast the current VoteState (counts, who has voted, seconds left).
+    fn broadcast_vote_state(&mut self) {
+        if let Some(msg) = self.vote_state_msg() {
+            self.broadcast(&msg);
+        }
+    }
+
+    /// Open and broadcast a fresh vote session for the level being exited (no-op when one is open).
+    fn open_vote_session(&mut self) {
+        let classes = self.lobby_class_ids();
+        let host = self.joined_player_ids().into_iter().min();
+        if !self.run.open_vote(&self.content, &classes, host) {
+            return;
+        }
+        if let Some(session) = self.run.vote_session.as_mut() {
+            session.last_sent_second = Some(session.seconds_left());
+        }
+        if let Some(msg) = self.vote_open_msg() {
+            self.broadcast(&msg);
+        }
+        self.broadcast_vote_state();
+        tracing::info!(level = self.run.level_num, "vote session opened");
+    }
+
+    /// Close the vote session and broadcast the outcome (winner, new permanent).
+    fn finish_vote(&mut self) {
+        let Some(outcome) = self.run.close_vote(&self.content) else {
+            return;
+        };
+        self.broadcast(&ServerMsg::VoteResult {
+            winner: outcome.winner,
+            id: outcome.id.clone(),
+            name: outcome.name.clone(),
+            kind: outcome.kind,
+            permanent: outcome.permanent,
+        });
+        tracing::info!(winner = %outcome.id, permanent = outcome.permanent, "vote resolved");
+    }
+
+    /// True when every joined player holds a ballot in the open session.
+    fn all_joined_voted(&self) -> bool {
+        let Some(session) = self.run.vote_session.as_ref() else {
+            return false;
+        };
+        let players = self.joined_player_ids();
+        !players.is_empty() && players.iter().all(|id| session.has_voted(*id))
     }
 
     /// Everyone back on the spawn platform of the current level (hub or generated), alive, then tell them.
@@ -384,6 +497,13 @@ impl Game {
                 if let Some(shop) = self.shop_msg() {
                     self.send(id, &shop);
                 }
+                // Rejoining during an open vote: re-offer the session so the new player can ballot.
+                if let Some(open) = self.vote_open_msg() {
+                    self.send(id, &open);
+                }
+                if let Some(state) = self.vote_state_msg() {
+                    self.send(id, &state);
+                }
             }
             _ if !joined => self.reject(id, 400, "hello required first"),
             ClientMsg::Inputs { frames } => {
@@ -479,6 +599,37 @@ impl Game {
                     Ok(()) => {
                         self.votes.insert(id, picks);
                         self.maybe_resolve_draft();
+                    }
+                    Err(why) => self.send(
+                        id,
+                        &ServerMsg::Error {
+                            code: 422,
+                            message: why.to_owned(),
+                        },
+                    ),
+                }
+            }
+            ClientMsg::Vote { option } => {
+                let player_id = match conn.player.as_ref() {
+                    Some(p) => p.id,
+                    None => return self.reject(id, 400, "hello required first"),
+                };
+                let Some(session) = self.run.vote_session.as_mut() else {
+                    return self.send(
+                        id,
+                        &ServerMsg::Error {
+                            code: 409,
+                            message: "no vote is open".to_owned(),
+                        },
+                    );
+                };
+                match session.cast(player_id, option) {
+                    Ok(()) => {
+                        self.broadcast_vote_state();
+                        // The session closes early once every joined player holds a ballot.
+                        if self.all_joined_voted() {
+                            self.finish_vote();
+                        }
                     }
                     Err(why) => self.send(
                         id,
@@ -627,6 +778,24 @@ impl Game {
         // Phase timers advance with the tick (PENDING -> COLLAPSING after 3.0 s; batch warnings and drops).
         self.run.tick_collapse();
 
+        // The vote session countdown advances with the playing phase; it closes on zero, on
+        // everyone having voted (at cast time), or when the level ends (below).
+        let vote_tick = match self.run.vote_session.as_mut() {
+            Some(session) => {
+                let closed = session.tick();
+                let secs = session.seconds_left();
+                let changed = session.last_sent_second != Some(secs);
+                session.last_sent_second = Some(secs);
+                Some((closed, changed))
+            }
+            None => None,
+        };
+        match vote_tick {
+            Some((true, _)) => self.finish_vote(),
+            Some((false, true)) => self.broadcast_vote_state(),
+            _ => {}
+        }
+
         // Gifts (shared by the team). In phase 2 these are the golden gifts at the collected positions.
         let currency_before = self.run.currency;
         let mut pickups: Vec<Vec3> = Vec::new();
@@ -642,6 +811,8 @@ impl Game {
                 kind: NOTICE_EVENT,
                 ids: vec!["collapse".to_string()],
             });
+            // T-078: the vote session opens with the collapse/exit window.
+            self.open_vote_session();
         }
 
         // Hazards: the senses of the ACTIVE players. `warded` = Bulwark Aegis Bloom is up (knockback-immune).
@@ -671,7 +842,7 @@ impl Game {
             })
             .collect();
         // Registry brains read the phase and the run's permanents.
-        let coil_permanent = self.run.drafted_enemies.iter().any(|id| id == "coil");
+        let coil_permanent = self.run.all_permanents().iter().any(|id| id == "coil");
         self.run
             .hazards
             .set_run_context(self.run.level_phase == protocol::LEVEL_COLLAPSING, coil_permanent);
@@ -821,6 +992,8 @@ impl Game {
         let players: Vec<&Player> = self.conns.values().filter_map(|c| c.player.as_ref()).collect();
         if !players.is_empty() && !players.iter().any(|p| p.active()) {
             if players.iter().any(|p| p.mode == PLAYER_FINISHED) {
+                // Any open vote closes with the level: the winner still applies to the next level.
+                self.finish_vote();
                 self.run.finish_level(&self.content);
                 tracing::info!(
                     next_level = self.run.level_num,
@@ -830,6 +1003,8 @@ impl Game {
                 self.votes.clear();
                 self.respawn_all_and_broadcast();
             } else {
+                // Team wipe: the run is over; an open vote is discarded with it.
+                self.run.vote_session = None;
                 self.end_run();
             }
             return;
@@ -1927,6 +2102,42 @@ mod m3_tests {
         });
     }
 
+    /// Collect every remaining normal gift as `id`; the last one starts the collapse window
+    /// (and with it the vote session). The final tick's messages are left in the outboxes.
+    fn enter_collapse_and_open_vote(g: &mut Game, id: ConnId, rxs: &mut [&mut mpsc::Receiver<Vec<u8>>]) {
+        let gifts: Vec<_> = g
+            .run
+            .level
+            .gifts
+            .iter()
+            .filter(|g| g.kind != protocol::GIFT_GOLDEN)
+            .cloned()
+            .collect();
+        for (i, gift) in gifts.iter().enumerate() {
+            {
+                let p = player(g, id);
+                p.state.pos = Vec3::new(gift.pos.x, gift.pos.y - 0.9, gift.pos.z);
+                p.state.vel = Vec3::ZERO;
+                p.starved_ticks = 0;
+            }
+            for e in &mut g.run.enemies {
+                e.active_in = 1_000;
+            }
+            g.tick();
+            // Keep the outboxes under capacity; leave the last tick's burst for the caller.
+            if i + 1 < gifts.len() {
+                for rx in &mut *rxs {
+                    let _ = drain(rx);
+                }
+            }
+        }
+        assert_eq!(g.run.level_phase, protocol::LEVEL_COLLAPSE_PENDING);
+        assert!(
+            g.run.vote_session.is_some(),
+            "the vote session opens with the collapse window"
+        );
+    }
+
     #[test]
     fn pulse_stagger_targets_are_radius_limited_and_never_the_caster_nor_warded_players() {
         let centre = Vec3::new(0.0, 0.9, 0.0);
@@ -2141,5 +2352,106 @@ mod m3_tests {
             m,
             ServerMsg::Notice { kind: NOTICE_EVENT, ids } if ids == &vec!["milestone_4".to_string()]
         )));
+    }
+
+    #[test]
+    fn vote_opens_with_the_collapse_window_and_the_countdown_closes_it() {
+        let mut g = game2();
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        vote(&mut g, 1);
+        drain(&mut rx);
+        enter_collapse_and_open_vote(&mut g, 1, &mut [&mut rx]);
+        let opened = drain(&mut rx);
+        assert!(
+            opened.iter().any(|m| matches!(
+                m,
+                ServerMsg::VoteOpen { options, countdown_s, .. } if options.len() == 3 && *countdown_s == 20
+            )),
+            "VoteOpen carries three options and a 20 s countdown"
+        );
+        let safe = player(&mut g, 1).state.pos;
+        let mut result: Option<(String, u8, bool)> = None;
+        for _ in 0..crate::run::VOTE_COUNTDOWN_TICKS {
+            {
+                let p = player(&mut g, 1);
+                p.state.pos = safe;
+                p.state.vel = Vec3::ZERO;
+                p.starved_ticks = 0;
+            }
+            for e in &mut g.run.enemies {
+                e.active_in = 1_000;
+            }
+            g.tick();
+            for m in drain(&mut rx) {
+                if let ServerMsg::VoteResult {
+                    id, kind, permanent, ..
+                } = m
+                {
+                    result = Some((id, kind, permanent));
+                }
+            }
+        }
+        let (id, kind, permanent) = result.expect("a VoteResult is broadcast when the countdown closes");
+        assert!(g.run.vote_session.is_none(), "the countdown closed the session");
+        if kind == CARD_ENEMY {
+            if permanent {
+                assert_eq!(g.run.permanents, vec![id], "the winner became a permanent");
+            } else {
+                assert_eq!(g.run.pending_temporary, vec![id], "the winner is a one-level temporary");
+            }
+        } else {
+            assert!(!permanent, "a curse is not a permanent enemy");
+            assert!(g.run.curses.contains(&id), "the winning curse was applied");
+        }
+    }
+
+    #[test]
+    fn a_vote_survives_a_disconnect_and_is_re_offered_on_rejoin() {
+        let mut g = game2();
+        let mut rx1 = connect(&mut g, 1);
+        hello(&mut g, 1);
+        let mut rx2 = connect(&mut g, 2);
+        hello(&mut g, 2);
+        vote(&mut g, 1);
+        vote(&mut g, 2);
+        drain(&mut rx1);
+        drain(&mut rx2);
+        enter_collapse_and_open_vote(&mut g, 1, &mut [&mut rx1, &mut rx2]);
+        let _ = drain(&mut rx1);
+        let _ = drain(&mut rx2);
+        // Player 2 casts a ballot, then the connection drops.
+        g.handle(GameEvent::Message {
+            id: 2,
+            msg: ClientMsg::Vote { option: 2 },
+        });
+        g.handle(GameEvent::Disconnected { id: 2 });
+        assert_eq!(
+            g.run.vote_session.as_ref().map(|s| s.has_voted(2)),
+            Some(true),
+            "the ballot is keyed by player id and survives the disconnect"
+        );
+        // Player 2 comes back (a fresh player id, 3) and is offered the session again.
+        let mut rx3 = connect(&mut g, 3);
+        hello(&mut g, 3);
+        let msgs = drain(&mut rx3);
+        assert!(
+            msgs.iter()
+                .any(|m| matches!(m, ServerMsg::VoteOpen { options, .. } if options.len() == 3)),
+            "the re-joining player is re-offered the vote"
+        );
+        assert!(
+            msgs.iter()
+                .any(|m| matches!(m, ServerMsg::VoteState { voted, .. } if voted == &vec![2])),
+            "the re-sent VoteState carries the surviving ballot"
+        );
+        // The new ballot is cast; the old one still counts.
+        g.handle(GameEvent::Message {
+            id: 3,
+            msg: ClientMsg::Vote { option: 0 },
+        });
+        let session = g.run.vote_session.as_ref().unwrap();
+        assert!(session.has_voted(2) && session.has_voted(3));
+        assert_eq!(session.counts(), vec![1, 0, 1]);
     }
 }

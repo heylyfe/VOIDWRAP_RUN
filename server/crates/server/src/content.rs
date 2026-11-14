@@ -113,6 +113,9 @@ pub struct SynergyHook {
 #[derive(Debug, Clone, Deserialize)]
 pub struct EnemyDef {
     pub id: String,
+    /// Plain what-it-does display name; the vote pedestals and the HUD show it verbatim.
+    #[serde(default)]
+    pub name: String,
     /// 1 = under 1 s telegraph, 2 = 1-2 s, 3 = ambient. Defaults to 3 so an older file promises nothing.
     #[serde(default = "default_cue_tier")]
     pub cue_tier: u8,

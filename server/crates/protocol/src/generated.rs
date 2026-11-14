@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 7;
+pub const PROTOCOL_VERSION: u16 = 8;
 pub const TICK_HZ: u32 = 20;
 pub const PHYSICS_HZ: u32 = 60;
 pub const MAX_INPUTS_PER_MSG: u32 = 32;
@@ -208,6 +208,15 @@ pub struct DraftCard {
     pub id: String,
 }
 
+/// One pedestal offered by a vote session. index is the ballot slot (0..2); kind reuses the DraftCard kinds (0 enemy, 2 curse).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VoteOption {
+    pub index: u8,
+    pub id: String,
+    pub name: String,
+    pub kind: u8,
+}
+
 /// Run-wide state, sent whenever it changes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunInfo {
@@ -231,6 +240,7 @@ pub enum ClientMsg {
     DraftPick { picks: Vec<u8> },
     Buy { item: String },
     ChooseClass { class: u8 },
+    Vote { option: u8 },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -245,6 +255,9 @@ pub enum ServerMsg {
     Draft { enemy_picks: u8, reward_picks: u8, cards: Vec<DraftCard> },
     Shop { items: Vec<ShopItem> },
     Notice { kind: u8, ids: Vec<String> },
+    VoteOpen { level: u32, options: Vec<VoteOption>, countdown_s: u16 },
+    VoteState { counts: Vec<u32>, voted: Vec<u32>, seconds_left: u16 },
+    VoteResult { winner: u8, id: String, name: String, kind: u8, permanent: bool },
 }
 
 #[cfg(test)]
@@ -266,6 +279,7 @@ pub(crate) fn fixture_encode(type_name: &str, value: serde_json::Value) -> Resul
         "RunSummary" => crate::encode(&serde_json::from_value::<RunSummary>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "Tuning" => crate::encode(&serde_json::from_value::<Tuning>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "DraftCard" => crate::encode(&serde_json::from_value::<DraftCard>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
+        "VoteOption" => crate::encode(&serde_json::from_value::<VoteOption>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "RunInfo" => crate::encode(&serde_json::from_value::<RunInfo>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "ClientMsg" => crate::encode(&serde_json::from_value::<ClientMsg>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "ServerMsg" => crate::encode(&serde_json::from_value::<ServerMsg>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
