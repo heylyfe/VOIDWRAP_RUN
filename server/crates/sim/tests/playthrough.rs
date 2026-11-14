@@ -796,12 +796,29 @@ fn bucket_platforms(bucket: LandingBucket) -> Vec<Platform> {
     vec![a, b]
 }
 
-/// Runs the real controller from the far end of A straight at the goal's centre.
-/// Full input the whole time; in `Jump` mode BTN_JUMP is pressed on the last frame
-/// still grounded on A (coyote time honoured as a backstop) and held for the full
-/// rise, and released on the way down. `goal_top` / `goal` describe the landing
-/// platform for the success check (grounded on its top) and the closest-approach
-/// metric. 180 frames = 3 s.
+/// Runs the real controller from the far end of A straight at B's centre.
+/// Full input the whole time; steering is always toward B's centre. In `Jump`
+/// mode BTN_JUMP is sent as a fresh rising-edge press — the controller jumps on
+/// a rising edge / jump buffer, so the frame before the press never holds
+/// BTN_JUMP — timed so the player is still grounded (or within coyote frames)
+/// at A's edge:
+/// - gap 0 with a B above step height (> 0.55 u): take off ~1.4 u before A's
+///   edge and keep running, so the ascent happens before B's face is reached
+///   (the front may still clip B's face while rising; the controller unblocks
+///   the horizontal move once the feet clear B's top, and the player then
+///   rides up onto B);
+/// - otherwise: take off in the last ~0.3 u before the edge;
+/// - if the player has already left the edge (coyote backstop), hop on the
+///   first coyote frame still holding the press.
+///
+/// The press is held through the whole rise and released only once the jump has
+/// left the ground and `vel.y <= 0.0`, so the variable-jump rule never cuts the
+/// ascent. `jump_launched` exists so the release check can never swallow the
+/// press frame itself (where `vel.y` is still 0 before the step runs).
+/// `Pad` mode never presses BTN_JUMP: standing on the pad launches the player
+/// on contact (vel.y = PAD_LAUNCH_VEL) and the bot then steers to B's centre.
+/// `goal_top` / `goal` describe the landing platform for the success check
+/// (grounded on its top) and the closest-approach metric. 180 frames = 3 s.
 fn simulate_controller(
     platforms: Vec<Platform>,
     spawn: (f32, f32, f32),
@@ -812,6 +829,13 @@ fn simulate_controller(
 ) -> EdgeSim {
     // A's jump edge is always at x = 0 in the constructed worlds.
     const A_EDGE_X: f32 = 0.0;
+    // Mirrors sim::tuning::STEP_HEIGHT (max ledge the controller steps up).
+    const STEP_HEIGHT: f32 = 0.55;
+    // Gap 0 with a higher B: take off ~1.4 u before A's edge (inside the
+    // ~0.5-1.5 u window) and keep running, so the ascent starts before B's face.
+    const FLUSH_TAKEOFF_X: f32 = A_EDGE_X - 1.4;
+    // General case: take off in the last ~0.3 u still grounded on A.
+    const EDGE_TAKEOFF_X: f32 = A_EDGE_X - 0.3;
     let lvl = tiny_level(platforms, spawn.0, spawn.1, spawn.2);
     let world = World::from_level(&lvl);
     let mut state = spawn_state(lvl.spawn.clone());
@@ -819,6 +843,11 @@ fn simulate_controller(
     let mut frames = 0u32;
     let mut holding_jump = false;
     let mut jumped = false;
+    // True once the pressed jump has actually left the ground (vel.y > 0 seen
+    // after the press). The release check below only fires once this is set, so
+    // the press frame — where vel.y is still 0 — can never release the hold
+    // before the press has been sent.
+    let mut jump_launched = false;
     let mut closest = f32::INFINITY;
     while frames < 180 {
         frames += 1;
@@ -840,18 +869,32 @@ fn simulate_controller(
             let dist = ((state.pos.x - clamp_x).powi(2) + (state.pos.z - clamp_z).powi(2)).sqrt();
             closest = closest.min(dist);
         }
-        // Jump on the last frame still grounded on A (coyote allowed); never off a pad.
-        if mode == SimMode::Jump && !jumped && !holding_jump {
-            let at_edge = state.grounded && state.pos.x >= A_EDGE_X - 0.15;
-            let coyote_hop = !state.grounded && state.coyote_frames > 0;
-            if at_edge || coyote_hop {
-                holding_jump = true;
-                jumped = true;
-            }
+        // Release BTN_JUMP on the way down, never before the jump has launched.
+        // Runs BEFORE the press decision below: the frame of the press itself
+        // still has vel.y == 0, so a hold started this frame survives the check,
+        // and the previous frame never held BTN_JUMP — the press is a fresh
+        // rising edge (never a re-arm of an already-held button).
+        if holding_jump && state.vel.y > 0.0 {
+            jump_launched = true;
         }
-        if holding_jump && state.vel.y <= 0.0 {
+        if holding_jump && jump_launched && state.vel.y <= 0.0 {
             // Release on the way down; BTN_JUMP was held for the full rise.
             holding_jump = false;
+        }
+        // Takeoff. Gap 0 with a flush B above step height: jump ~1.4 u before
+        // the edge and keep running. Otherwise: jump in the last ~0.3 u still
+        // grounded on A; coyote frames are a backstop if the edge was walked
+        // off first.
+        if mode == SimMode::Jump && !jumped && !holding_jump {
+            let flush_high = goal.0 <= 0.001 && goal_top > STEP_HEIGHT;
+            let takeoff_x = if flush_high { FLUSH_TAKEOFF_X } else { EDGE_TAKEOFF_X };
+            let at_takeoff = state.grounded && state.pos.x >= takeoff_x;
+            let coyote_hop = !state.grounded && state.coyote_frames > 0;
+            if at_takeoff || coyote_hop {
+                holding_jump = true;
+                jump_launched = false;
+                jumped = true;
+            }
         }
         let input = InputFrame {
             seq,
@@ -896,14 +939,20 @@ fn report_case(label: &str, out: &EdgeSim, failures: &mut Vec<String>) {
 /// `levelgen::platform_graph`, classifies it as walk / step-up / drop / jump / pad,
 /// buckets the jump and pad edges by (gap rounded up to 0.25 u, rise rounded to 0.25 u,
 /// landing smaller extent rounded down to 0.5 u, launcher is pad) and simulates each
-/// bucket in a two-platform world (run at full input from the far end of A straight
-/// at B's centre, jump on the last frame still grounded on A — coyote allowed — hold
-/// jump for the full rise, steer to B's centre while airborne; success = grounded on
-/// B's top within 3 s). Representative 0.5 u step-up, 4-step (0.5 u rise, 1 u tread)
-/// stair and touching -6.0 u drop cases are simulated the same way. Prints a per-bucket
-/// table (count, gap, rise, width, pad, ok); on failure prints the failing buckets with
-/// the closest landing distance. Fails if any bucket or representative case cannot be
-/// performed.
+/// bucket in a two-platform world (run at full input from the far end of A straight at
+/// B's centre — steering is always toward B's centre; BTN_JUMP is sent as a fresh
+/// rising-edge press, held through the full rise and released on the way down, timed
+/// so the player is grounded or within coyote frames at A's edge — ~1.4 u before the
+/// edge for a flush B above step height, else the last ~0.3 u; pad buckets never press
+/// BTN_JUMP and ride the contact launch; success = grounded on B's top within 3 s).
+/// Representative 0.5 u step-up, 4-step (0.5 u rise, 1 u tread) stair and touching
+/// -6.0 u drop cases are simulated the same way, plus three hand cases that fix the
+/// physics by construction: rise +1.0 gap 0.0 (jump ~1.4 u before the face and keep
+/// running), rise +2.0 gap 2.0 (held running jump at the edge; ride up B's face once
+/// the feet clear its top) and rise -4.0 gap 7.0 (a running jump lands ~1.0 s later,
+/// ~9 u out). Prints a per-bucket table (count, gap, rise, width, pad, ok); on failure
+/// prints the failing buckets with the closest landing distance. Fails if any bucket
+/// or representative case cannot be performed.
 #[test]
 fn every_graph_edge_kind_is_physically_doable() {
     let mut counts: BTreeMap<LandingBucket, u32> = BTreeMap::new();
@@ -1039,6 +1088,56 @@ fn every_graph_edge_kind_is_physically_doable() {
             (0.0, 4.0, -2.0, 2.0),
         );
         report_case("drop -6.0 off the edge", &out, &mut failures);
+    }
+    // Hand cases (Jump) with takeoffs and arcs verified against the tuning
+    // constants (DT = 1/60, GRAVITY = 32, JUMP_VELOCITY = 12, RUN_SPEED = 9).
+    // 4) Rise +1.0, gap 0.0 (B flush against A): the jump starts ~1.4 u before
+    //    A's edge; by the time the box reaches B's face the feet are above its
+    //    top and the player lands on B.
+    {
+        let a = rect_platform(&proto, -12.0, 0.0, -1.0, 0.0, -2.0, 2.0);
+        let b = rect_platform(&proto, 0.0, 3.0, 0.0, 1.0, -2.0, 2.0);
+        let out = simulate_controller(
+            vec![a, b],
+            (-11.0, 1.0, 0.0),
+            (1.5, 0.0),
+            SimMode::Jump,
+            1.0,
+            (0.0, 3.0, -2.0, 2.0),
+        );
+        report_case("rise +1.0 gap 0.0", &out, &mut failures);
+    }
+    // 5) Rise +2.0, gap 2.0: the running jump leaves the edge with the boost of
+    //    full height; even if the box meets B's face below its top, the
+    //    controller unblocks once the feet rise above it, and the player rides
+    //    up onto B's top (apex ~2.15 u > 2.0 u).
+    {
+        let a = rect_platform(&proto, -12.0, 0.0, -1.0, 0.0, -2.0, 2.0);
+        let b = rect_platform(&proto, 2.0, 5.0, 1.0, 2.0, -2.0, 2.0);
+        let out = simulate_controller(
+            vec![a, b],
+            (-11.0, 1.0, 0.0),
+            (3.5, 0.0),
+            SimMode::Jump,
+            2.0,
+            (2.0, 5.0, -2.0, 2.0),
+        );
+        report_case("rise +2.0 gap 2.0", &out, &mut failures);
+    }
+    // 6) Rise -4.0, gap 7.0: a jump that lands 4 u lower stays airborne
+    //    (12 + sqrt(144 + 2*32*4)) / 32 = 1.0 s, covering ~9 u at 9 u/s.
+    {
+        let a = rect_platform(&proto, -12.0, 0.0, -1.0, 0.0, -2.0, 2.0);
+        let b = rect_platform(&proto, 7.0, 10.0, -5.0, -4.0, -2.0, 2.0);
+        let out = simulate_controller(
+            vec![a, b],
+            (-11.0, 1.0, 0.0),
+            (8.5, 0.0),
+            SimMode::Jump,
+            -4.0,
+            (7.0, 10.0, -2.0, 2.0),
+        );
+        report_case("rise -4.0 gap 7.0", &out, &mut failures);
     }
 
     assert!(
