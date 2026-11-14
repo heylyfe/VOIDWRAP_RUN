@@ -437,3 +437,15 @@ commit.
   matchmaker kit; self-skips without `VOTING_URL`. GAP: the kit speaks its own JSON contract, so it
   gates the design against a reference stub, not the shipped bincode server — the shipped voting
   core is gated by the 94 `cargo test -p server` tests instead.
+- T-080 ACCEPTED WITH TWO PARKED ITEMS: the answer could not read the files it needed, so it
+  delivered a duplicate `pool.rs` and the theme half of `pattern.rs`. `pool.rs` was deleted rather
+  than registered — `run.rs::vote_pool` / `overflow_pool` already implement §9 with tests, and two
+  implementations is worse than one; its one real contribution, the `chorus_needs_small_pair` gate,
+  was folded into both existing functions with a test. The Blight ↔ Rewind/Kite synergy was
+  implemented: `PlayerStatus` gained `infected_ticks` and `is_infected()`, `hazards.rs` fills it from
+  `PlayerSense` instead of `PlayerStatus::default()`, and both brains skip their phase-timer
+  decrement while the tracked player is infected (two tests). Peal ↔ Coil needed no work — the
+  T-074/T-075 wiring already carries `overtuned_ticks` through to `PlayerStatus`. Parked: the lobby
+  poll's theme choice is not yet consumed by the server, and the matchmaker heartbeat does not report
+  `phase: "voting"`.
+- `just verify` green after each merge (T-078 → T-079 → T-081 → T-080) and on the release commit.
