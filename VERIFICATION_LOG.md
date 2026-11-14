@@ -348,3 +348,56 @@ T-053 got a third round instead of an OVERSEER takeover, to save Opus credits (u
   failures, 2000 distinct geometries, 100 reproducible pairs. Fallback 0/360.
 - New guard `shipped_catalog_has_at_least_fifty_patterns` counts ids across the three catalog files.
 - `just verify` green after each merge (T-069 → T-070 → T-071) and on the release commit.
+
+## v0.8.0-alpha.1 — Wave 3: enemies
+
+- T-072 ACCEPTED: `design/ENEMY_REGISTRY.md` frozen (entry shape, cue tiers, min levels, selection
+  caps, closed tag/class/synergy vocabularies, pool rules with overflow, the registry table and the
+  eleven new contracts). `design/content.json` grows 9 → 20 enemies; `content.rs` parses the six
+  registry fields with serde defaults so an older file still loads; `validate-content.mjs` gates
+  them. Lead fixes: dropped an unused `name` field from `EnemyDef`, `is_some_and` for clippy.
+  Note: the ticket said "the fifth class" but only four exist (striker/grappler/bulwark/glider);
+  no class was invented.
+- T-074 ACCEPTED: enemy batch A — Rewind, Warden, Peal, Kite, Static in
+  `server/crates/sim/src/enemies/{rewind,warden,peal,kite,static}.rs` plus `rules.rs` wiring.
+  Lead fixes: added the five brains to three exhaustive matches in `hazards.rs`; Warden has no
+  `frenzy` field so the wind decal takes its period from the remaining timer; clippy fixes.
+- T-075 ACCEPTED: enemy batch B — Blight, Metronome, Overlook, Chorus, Coil and the Lure redesign.
+  Parallel-batch merge: both batches claimed behaviour tags 9-13, so batch B renumbered to 14-19;
+  `enemies/mod.rs` and `rules.rs` were rewritten by both agents and hand-merged. Three real bugs
+  fixed while integrating (the authoring agent had no toolchain): Coil's tighten step pushed a
+  nearly-finished wind back to the floor so it never released; Blight re-infected a player cleansed
+  in the same tick; Overlook's laser hit test compared the player's centre against a beam at the
+  enemy's height and could never hit.
+- Lead fix (seam): `content.rs::behavior_from_str` still mapped only the nine M3 ids, so all eleven
+  new enemies degraded to the pallbearer brain. All eleven arms added plus a test that every content
+  enemy maps to its own distinct brain.
+- Lead fix (seam): `hazards.rs` left the eleven brains in a no-op match arm on the assumption that
+  "the server steps them through Brain::step" — nothing did, so every new enemy was inert in a real
+  session. The hazard pass now routes them to `step_registry_brain`, which applies motion, teleport,
+  lethal hits, OVERTUNED, infection and Lure knockback. `PlayerSense` gained class, jump_launched,
+  used_ability, used_support_ability, gliding, overtuned_ticks and infected_ticks; `HazardEffect`
+  gained `Overtuned` and `Infect`; `Hazards::set_run_context` carries the phase and the run's
+  permanents. Two integration tests prove the brains are stepped (Rewind moves, Coil leaps, the Lure
+  shoves, Coil reports OVERTUNED, Peal never kills a clean player).
+- Lead fix (content): the eleven new entries carried their codenames as display names and
+  descriptions that did not match the implementations — `lure` was described as a false floor over
+  the void and `metronome` as a swinging safe half. Renamed to the plain-what-it-does convention
+  (Path Replayer, Gift Guard, Bell Ringer, Tether Tracker, Fog Dasher, Ground Infector, Beat Keeper,
+  Marking Eye, Choir Summoner, Spring Leaper, Fog Decoy) and rewrote `behavior` from the code.
+- T-076 ACCEPTED (retry 1): the first attempt produced an unused data module and changed no pixels.
+  The real gap was that the client rendered nine models while the server spawned twenty, so all
+  eleven new enemies drew as Pallbearers. `enemyLook.ts` and `EnemyBehaviorId` grow to twenty in
+  content order; eleven new model components under `web/src/scene/enemies/`; `MODEL_COMPONENTS`
+  grows to twenty and is exported; `Telegraphs.tsx` gains floor cues for the seven new enemies that
+  have one. 20 vitest cases.
+- T-077 ACCEPTED WITH PARKED FINDINGS: `tools/pattern-audit/` (Node built-ins, env-gated, skips in
+  `just verify`) plus the missing half — `server/crates/sim/examples/pattern_dump.rs`, which emits
+  the audit's NDJSON contract, and a `plan` field on `GeneratedLevel`. Baseline at 500 seeds /
+  7,500 level records: 9 of 13 metric lines pass. Parked with numbers: `mech:dead_end` is a dump
+  gap (dead-end sealers are not in the plan); near-duplicates 20.37% is a level-1 pool-size problem
+  (14 of 85 patterns are level-1 eligible); heights 14.63% outside [1,6] u are 0.5 u steps left in
+  the legacy chunks; reference scale 25.36% outside [10,20] u is legacy 8-30 u chunks plus ~8 new
+  patterns 1-3 u over the ceiling.
+- `just verify` green after each merge (T-072 → T-074 → T-075 → T-076 → T-077) and on the release
+  commit.
