@@ -1,0 +1,45 @@
+
+thread 'controller::m3_tests::bulwark_cooldown_scales_and_clamps' (12772) panicked at crates\sim\src\controller.rs:2008:9:
+assertion `left == right` failed
+  left: 240
+ right: 10
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+--
+
+thread 'controller::m3_tests::jump_pad_launches_once_per_contact' (19000) panicked at crates\sim\src\controller.rs:2172:9:
+the launch must not re-trigger while airborne, got 4
+
+---- controller::m3_tests::bulwark_rooted_mid_run stdout ----
+
+thread 'controller::m3_tests::bulwark_rooted_mid_run' (14836) panicked at crates\sim\src\controller.rs:2040:9:
+assertion `left == right` failed: the cast roots the player immediately
+  left: 9.0
+ right: 0.0
+
+--
+
+thread 'controller::m3_tests::bulwark_pulse_frame_only_on_first_ward_frame' (23576) panicked at crates\sim\src\controller.rs:2077:13:
+the pulse must not fire during the wind-up
+
+---- controller::m3_tests::jump_pad_launches_on_landing stdout ----
+
+thread 'controller::m3_tests::jump_pad_launches_on_landing' (15848) panicked at crates\sim\src\controller.rs:2130:9:
+the pad must launch the player
+
+---- controller::m3_tests::jump_pad_apex_is_four_units stdout ----
+
+thread 'controller::m3_tests::jump_pad_apex_is_four_units' (18316) panicked at crates\sim\src\controller.rs:2145:13:
+never launched
+
+---- controller::m3_tests::stagger_shove_carries_and_ignores_backward_input stdout ----
+
+thread 'controller::m3_tests::stagger_shove_carries_and_ignores_backward_input' (21788) panicked at crates\sim\src\controller.rs:2284:9:
+the shove carries the player, got x = 0.8493179
+
+---- controller::m3_tests::staircase_of_half_unit_risers_is_climbable_at_full_speed stdout ----
+
+thread 'controller::m3_tests::staircase_of_half_unit_risers_is_climbable_at_full_speed' (23092) panicked at crates\sim\src\controller.rs:2205:9:
+assertion `left == right` failed: the staircase must be climbed without jumping
+  left: -68.1667
+ right: 2.5
+

@@ -1,12 +1,20 @@
 //! Static collision world built from a [`LevelData`].
 
-use protocol::{Aabb, LevelData, Platform, TILE_GONE, TileState};
+use crate::tuning::GRID_CELL;
+use protocol::{Aabb, LevelData, Platform, TILE_FRETTED, TILE_GONE, TILE_WARN, TileState};
+use std::collections::BTreeMap;
 
 /// Collision geometry the controller moves through.
 ///
 /// `solids` always holds the currently solid platforms only: platforms whose
 /// snapshot tile state is `TILE_GONE` are excluded, everything else (including
-/// `TILE_WARN` and platforms absent from the tile list) is solid.
+/// `TILE_WARN`, `TILE_FRETTED` and platforms absent from the tile list) is solid.
+///
+/// A uniform spatial grid ([`GRID_CELL`] cells, XZ plane, integer cell
+/// coordinates) maps cells to the platform indices whose AABBs overlap them.
+/// Cells store indices in ascending platform order; candidate queries return
+/// them sorted and deduplicated, so results match brute-force iteration over
+/// platforms in platform order.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct World {
     pub solids: Vec<Aabb>,
@@ -16,27 +24,38 @@ pub struct World {
     pub platforms: Vec<Platform>,
     /// Ids of platforms that are currently not solid (`TILE_GONE`), sorted ascending.
     pub gone: Vec<u16>,
+    grid: SpatialGrid,
+    /// Per-platform solidity, parallel to [`World::platforms`].
+    solid: Vec<bool>,
+    /// Per-platform tile states, parallel to [`World::platforms`] (0 = normal/absent).
+    tile_states: Vec<u8>,
 }
 
 impl World {
     /// Build an all-solid world from level data.
     pub fn from_level(level: &LevelData) -> Self {
+        let platforms = level.platforms.clone();
+        let count = platforms.len();
         World {
-            solids: level.platforms.iter().map(|p| p.bounds.clone()).collect(),
+            solids: platforms.iter().map(|p| p.bounds.clone()).collect(),
             kill_y: level.kill_y,
-            platforms: level.platforms.clone(),
             gone: Vec::new(),
+            grid: SpatialGrid::build(&platforms),
+            solid: vec![true; count],
+            tile_states: vec![0; count],
+            platforms,
         }
     }
 
     /// Apply a snapshot's tile states.
     ///
     /// Every platform whose id appears with `state == TILE_GONE` stops being
-    /// solid; every other platform (including `TILE_WARN` and any id absent
-    /// from `tiles`) is solid again. Pass the full list of non-normal tiles,
-    /// or an empty slice to restore everything. Note: a world that was not
-    /// built from a level (empty [`World::platforms`]) rebuilds `solids` to
-    /// empty.
+    /// solid; every other platform (including `TILE_WARN`, `TILE_FRETTED` and
+    /// any id absent from `tiles`) is solid again. When several tile states
+    /// are listed for the same platform id, the first one in the list wins.
+    /// Pass the full list of non-normal tiles, or an empty slice to restore
+    /// everything. Note: a world that was not built from a level (empty
+    /// [`World::platforms`]) rebuilds `solids` to empty.
     pub fn set_tiles(&mut self, tiles: &[TileState]) {
         let mut gone: Vec<u16> = Vec::new();
         for tile in tiles {
@@ -45,14 +64,101 @@ impl World {
             }
         }
         gone.sort_unstable();
+        self.gone = gone;
+
+        self.tile_states.clear();
+        self.solid.clear();
+        for platform in &self.platforms {
+            let mut state = 0u8;
+            for tile in tiles {
+                if tile.id == platform.id {
+                    state = tile.state;
+                    break;
+                }
+            }
+            self.tile_states.push(state);
+            self.solid.push(state != TILE_GONE);
+        }
         self.solids = self
             .platforms
             .iter()
-            .filter(|p| !gone.contains(&p.id))
-            .map(|p| p.bounds.clone())
+            .zip(&self.solid)
+            .filter(|(_, solid)| **solid)
+            .map(|(p, _)| p.bounds.clone())
             .collect();
-        self.gone = gone;
     }
+
+    /// Tile state of the platform at `platform_index` (an index into
+    /// [`World::platforms`]); absent ids and out-of-range indices report 0
+    /// (normal). `TILE_FRETTED` platforms remain solid.
+    pub fn tile_state(&self, platform_index: usize) -> u8 {
+        self.tile_states.get(platform_index).copied().unwrap_or(0)
+    }
+
+    /// Solid platforms whose grid cells overlap the XZ box, as platform
+    /// indices, sorted ascending and deduplicated.
+    pub(crate) fn solid_candidates(&self, min_x: f32, min_z: f32, max_x: f32, max_z: f32) -> Vec<usize> {
+        self.grid
+            .candidates(min_x, min_z, max_x, max_z)
+            .into_iter()
+            .filter(|&index| self.solid.get(index).copied().unwrap_or(false))
+            .collect()
+    }
+
+    /// Bounds of the platform at `index`, or `None` when it is not solid.
+    pub(crate) fn solid_bounds(&self, index: usize) -> Option<&Aabb> {
+        if self.solid.get(index).copied().unwrap_or(false) {
+            self.platforms.get(index).map(|p| &p.bounds)
+        } else {
+            None
+        }
+    }
+}
+
+/// Uniform XZ grid over platform indices. Platforms are inserted in ascending
+/// index order, so each cell's index list is already sorted.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct SpatialGrid {
+    cells: BTreeMap<(i32, i32), Vec<usize>>,
+}
+
+impl SpatialGrid {
+    /// Insert every platform into the cells its AABB overlaps.
+    fn build(platforms: &[Platform]) -> Self {
+        let mut cells: BTreeMap<(i32, i32), Vec<usize>> = BTreeMap::new();
+        for (index, platform) in platforms.iter().enumerate() {
+            let (x0, z0) = cell_of(platform.bounds.min.x, platform.bounds.min.z);
+            let (x1, z1) = cell_of(platform.bounds.max.x, platform.bounds.max.z);
+            for cx in x0..=x1 {
+                for cz in z0..=z1 {
+                    cells.entry((cx, cz)).or_default().push(index);
+                }
+            }
+        }
+        SpatialGrid { cells }
+    }
+
+    /// Sorted, deduplicated platform indices of every cell the XZ box touches.
+    fn candidates(&self, min_x: f32, min_z: f32, max_x: f32, max_z: f32) -> Vec<usize> {
+        let (x0, z0) = cell_of(min_x, min_z);
+        let (x1, z1) = cell_of(max_x, max_z);
+        let mut out = Vec::new();
+        for cx in x0..=x1 {
+            for cz in z0..=z1 {
+                if let Some(ids) = self.cells.get(&(cx, cz)) {
+                    out.extend_from_slice(ids);
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+}
+
+/// Grid cell containing the point `x`/`z` (floor of position / cell size).
+fn cell_of(x: f32, z: f32) -> (i32, i32) {
+    ((x / GRID_CELL).floor() as i32, (z / GRID_CELL).floor() as i32)
 }
 
 /// Strict overlap test (touching faces do not overlap).
@@ -69,7 +175,7 @@ pub fn overlaps(a: &Aabb, b: &Aabb) -> bool {
 mod tests {
     use super::*;
     use crate::controller::{spawn_state, step};
-    use protocol::{EVENT_NONE, InputFrame, PLATFORM_NORMAL, TILE_WARN, Vec3};
+    use protocol::{EVENT_NONE, InputFrame, PLATFORM_NORMAL, Vec3};
 
     fn idle(seq: u32) -> InputFrame {
         InputFrame {
@@ -109,6 +215,83 @@ mod tests {
             event: EVENT_NONE,
             altars: vec![],
         }
+    }
+
+    fn next_u64(state: &mut u64) -> u64 {
+        // xorshift64*; deterministic, used only to build test geometry.
+        let mut x = *state;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        *state = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    fn next_f32(state: &mut u64, low: f32, high: f32) -> f32 {
+        let unit = ((next_u64(state) & 0xFF_FFFF) as f32) / ((1u64 << 24) as f32);
+        low + (high - low) * unit
+    }
+
+    /// 500 platforms with deterministic pseudo-random placement, including one
+    /// giant slab spanning many cells.
+    fn grid_test_level() -> LevelData {
+        let mut platforms = Vec::with_capacity(500);
+        let mut rng = 0x9E37_79B9_7F4A_7C15u64;
+        for i in 0..500u16 {
+            let cx = next_f32(&mut rng, -200.0, 200.0);
+            let cz = next_f32(&mut rng, -200.0, 200.0);
+            let w = 2.0 + next_f32(&mut rng, 0.0, 10.0);
+            let d = 2.0 + next_f32(&mut rng, 0.0, 10.0);
+            let h = 0.5 + next_f32(&mut rng, 0.0, 2.5);
+            let top = next_f32(&mut rng, -8.0, 8.0);
+            platforms.push(Platform {
+                id: i + 1,
+                kind: PLATFORM_NORMAL,
+                bounds: Aabb {
+                    min: Vec3::new(cx, top - h, cz),
+                    max: Vec3::new(cx + w, top, cz + d),
+                },
+            });
+        }
+        platforms[0] = Platform {
+            id: 1,
+            kind: PLATFORM_NORMAL,
+            bounds: Aabb {
+                min: Vec3::new(-300.0, -2.0, -300.0),
+                max: Vec3::new(300.0, 0.0, 300.0),
+            },
+        };
+        LevelData {
+            level: 3,
+            seed: 99,
+            spawn: Vec3::ZERO,
+            beacon: Vec3::new(0.0, 0.0, 30.0),
+            kill_y: -100.0,
+            platforms,
+            gifts: vec![],
+            event: EVENT_NONE,
+            altars: vec![],
+        }
+    }
+
+    /// Brute-force reference: solid platforms whose cell ranges intersect the
+    /// query's cell range, in platform index order.
+    fn brute_force_cells(world: &World, min_x: f32, min_z: f32, max_x: f32, max_z: f32) -> Vec<usize> {
+        let cell = |v: f32| (v / GRID_CELL).floor() as i32;
+        let (x0, z0, x1, z1) = (cell(min_x), cell(min_z), cell(max_x), cell(max_z));
+        let mut out = Vec::new();
+        for (i, platform) in world.platforms.iter().enumerate() {
+            if !world.solid[i] {
+                continue;
+            }
+            let (px0, pz0) = cell_of(platform.bounds.min.x, platform.bounds.min.z);
+            let (px1, pz1) = cell_of(platform.bounds.max.x, platform.bounds.max.z);
+            if px1 < x0 || px0 > x1 || pz1 < z0 || pz0 > z1 {
+                continue;
+            }
+            out.push(i);
+        }
+        out
     }
 
     #[test]
@@ -167,5 +350,65 @@ mod tests {
         let mut s = spawn_state(Vec3::new(0.0, 0.0, 0.0));
         step(&mut s, &idle(0), &w);
         assert!(s.grounded, "restored platform must be solid again");
+    }
+
+    #[test]
+    fn grid_candidates_match_brute_force() {
+        let level = grid_test_level();
+        let mut w = World::from_level(&level);
+        w.set_tiles(&[
+            TileState {
+                id: 3,
+                state: TILE_GONE,
+            },
+            TileState {
+                id: 9,
+                state: TILE_FRETTED,
+            },
+        ]);
+        let mut rng = 0x243F_6A88_85A3_08D3u64;
+        for _ in 0..300 {
+            let cx = next_f32(&mut rng, -250.0, 250.0);
+            let cz = next_f32(&mut rng, -250.0, 250.0);
+            let half_w = 0.5 + next_f32(&mut rng, 0.0, 25.0);
+            let half_d = 0.5 + next_f32(&mut rng, 0.0, 25.0);
+            let (x0, z0, x1, z1) = (cx - half_w, cz - half_d, cx + half_w, cz + half_d);
+            assert_eq!(
+                w.solid_candidates(x0, z0, x1, z1),
+                brute_force_cells(&w, x0, z0, x1, z1),
+                "grid and brute force disagree on box ({x0}, {z0})..({x1}, {z1})"
+            );
+        }
+    }
+
+    #[test]
+    fn tile_state_query_reports_all_cases() {
+        let level = test_level();
+        let mut w = World::from_level(&level);
+        assert_eq!(w.tile_state(0), 0, "absent from the list means normal");
+        assert_eq!(w.tile_state(1), 0);
+        assert_eq!(w.tile_state(999), 0, "out-of-range index reports normal");
+
+        w.set_tiles(&[TileState {
+            id: 7,
+            state: TILE_FRETTED,
+        }]);
+        assert_eq!(w.tile_state(0), TILE_FRETTED);
+        assert_eq!(w.solids.len(), 2, "TILE_FRETTED platforms stay solid");
+
+        w.set_tiles(&[TileState {
+            id: 7,
+            state: TILE_GONE,
+        }]);
+        assert_eq!(w.tile_state(0), TILE_GONE);
+
+        w.set_tiles(&[TileState {
+            id: 7,
+            state: TILE_WARN,
+        }]);
+        assert_eq!(w.tile_state(0), TILE_WARN);
+
+        w.set_tiles(&[]);
+        assert_eq!(w.tile_state(0), 0, "empty tile list restores normal");
     }
 }

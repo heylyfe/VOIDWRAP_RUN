@@ -1,102 +1,468 @@
-//! Pure, deterministic game rules: gift pickups, the beacon, and enemy behaviours.
+//! Pure, deterministic game rules: gift pickups, the beacon, enemy spawning and
+//! enemy data shared by the server and the client-side predictor.
 //!
-//! Everything here is a plain function over protocol data so the authoritative server
-//! and the client-side predictor can run the exact same code. Only `+ - * /` and
-//! `sqrt` are used, so results are bit-identical on every target.
+//! Everything here is a plain function over protocol data so the authoritative
+//! server and the client-side predictor can run the exact same code. Only
+//! `+ - * /`, `sqrt`, `abs`, `min`, `max` and `clamp` are used on floats, so
+//! results are bit-identical on every target.
 
-use protocol::{ENEMY_DISGUISED, ENEMY_DORMANT, ENEMY_HUNTING, Gift, TICK_HZ, Vec3};
+use protocol::{Aabb, Gift, TICK_HZ, Vec3};
 
 use crate::controller::player_box;
 
 /// A gift is collected when the player centre is within this distance of it.
 pub const GIFT_RADIUS: f32 = 1.1;
-
 /// Horizontal radius in which the beacon counts as reached.
 pub const BEACON_RADIUS: f32 = 1.5;
-
 /// Vertical tolerance for standing on the beacon's platform.
 pub const BEACON_HEIGHT: f32 = 1.0;
 
-/// Enemy kind tag for the flying chaser.
-pub const ENEMY_KIND_CHASER: u8 = 1;
+/// Behaviour tag: pallbearer (behaviour order 0..=8, one per enemy id).
+/// Legacy kind tag used by the hand-made test levels (kind is a content index now).
+pub const ENEMY_KIND_CHASER: u8 = 0;
 
-/// Chaser flight speed in units per second (the player runs at 9.0).
-pub const CHASER_SPEED: f32 = 5.5;
+pub const BEHAVIOR_PALLBEARER: u8 = 0;
+/// Behaviour tag: snapshrike.
+pub const BEHAVIOR_SNAPSHRIKE: u8 = 1;
+/// Behaviour tag: moteling.
+pub const BEHAVIOR_MOTELING: u8 = 2;
+/// Behaviour tag: rift warden.
+pub const BEHAVIOR_RIFT_WARDEN: u8 = 3;
+/// Behaviour tag: gale wight.
+pub const BEHAVIOR_GALE_WIGHT: u8 = 4;
+/// Behaviour tag: lantern leech.
+pub const BEHAVIOR_LANTERN_LEECH: u8 = 5;
+/// Behaviour tag: turret (bolt sentry).
+pub const BEHAVIOR_TURRET: u8 = 6;
+/// Behaviour tag: mimic (false gift).
+pub const BEHAVIOR_MIMIC: u8 = 7;
+/// Behaviour tag: corrupter (crumble wisp).
+pub const BEHAVIOR_CORRUPTER: u8 = 8;
 
-/// A chaser only pursues targets within this 3D distance.
-pub const CHASER_AGGRO_RADIUS: f32 = 22.0;
+/// Ticks a freshly spawned enemy stays dormant when spawned without explicit params (4 s at 20 Hz).
+pub const DEFAULT_GRACE_TICKS: u32 = 80;
+/// Pallbearer spawn dormancy (design: the lantern glows, wake at 4.5 s).
+pub const PALLBEARER_WAKE_TICKS: u32 = 90;
 
-/// Body radius of the default chaser (the hit sphere is this times [`ENEMY_HIT_FORGIVENESS`]).
-pub const CHASER_HALF_SIZE: f32 = 0.5;
+/// Fraction of the drawn body radius that actually shoves (and that `enemy_touches` uses).
+pub const ENEMY_HIT_FORGIVENESS: f32 = 0.85;
 
-/// Ticks a freshly spawned chaser stays dormant (3 s at 20 Hz).
-pub const CHASER_GRACE_TICKS: u32 = 60;
-
-/// Behaviour tag: flying chaser (the M1 default).
-pub const BEHAVIOR_CHASER: u8 = 0;
-
-/// Behaviour tag: stationary turret that fires projectiles at players in range.
-pub const BEHAVIOR_TURRET: u8 = 1;
-
-/// Behaviour tag: gift mimic that reveals itself when a player gets close.
-pub const BEHAVIOR_MIMIC: u8 = 2;
-
-/// Behaviour tag: chaser that corrupts the nearest valid platform to crumble.
-pub const BEHAVIOR_CORRUPTER: u8 = 3;
-
-/// Default turret firing cadence in ticks (1 s at 20 Hz).
-pub const TURRET_FIRE_INTERVAL_TICKS: u32 = 20;
-
-/// Default turret projectile speed in units per second.
-pub const TURRET_PROJECTILE_SPEED: f32 = 12.0;
-
-/// Default distance at which a mimic reveals itself.
-pub const MIMIC_REVEAL_RADIUS: f32 = 3.0;
-
-/// Default corrupter corruption cadence in ticks (2 s at 20 Hz).
-pub const CORRUPTER_INTERVAL_TICKS: u32 = 40;
-
-/// Height of the player's centre above their feet.
-const PLAYER_CENTRE_HEIGHT: f32 = 0.9;
-
-/// Per-enemy tuning: flight speed, aggro radius, body radius and grace ticks.
-///
-/// [`EnemyParams::default`] is exactly the M1 chaser, so an enemy spawned without
-/// explicit params behaves as it always did.
+/// Per-enemy tuning supplied at spawn (content + curses). Per-enemy design numbers live
+/// in `crate::hazards` as named constants.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnemyParams {
-    /// Flight speed in units per second.
-    pub speed: f32,
-    /// 3D distance within which the enemy pursues a target.
-    pub aggro: f32,
-    /// Body radius: the client draws the enemy this big; see [`enemy_hit_radius`].
-    pub size: f32,
-    /// Ticks the enemy stays dormant after spawning (does not apply to mimics).
-    pub grace_ticks: u32,
-    /// Which behaviour drives this enemy (`BEHAVIOR_*`).
+    /// Which state machine drives this enemy (`BEHAVIOR_*`).
     pub behavior: u8,
-    /// Ticks between shots for `BEHAVIOR_TURRET`.
-    pub fire_interval_ticks: u32,
-    /// Projectile speed in units per second for `BEHAVIOR_TURRET`.
-    pub projectile_speed: f32,
-    /// Distance within which a `BEHAVIOR_MIMIC` reveals itself.
-    pub reveal_radius: f32,
-    /// Ticks between platform corruption for `BEHAVIOR_CORRUPTER`.
-    pub corrupt_interval_ticks: u32,
+    /// Phase-2 / curse speed multiplier applied to the enemy's movement.
+    pub speed_mul: f32,
+    /// Drawn body radius, reported in `EnemyView.radius`.
+    pub size: f32,
+    /// Ticks the enemy stays dormant after spawning.
+    pub grace_ticks: u32,
 }
 
 impl Default for EnemyParams {
     fn default() -> Self {
         Self {
-            speed: CHASER_SPEED,
-            aggro: CHASER_AGGRO_RADIUS,
-            size: CHASER_HALF_SIZE,
-            grace_ticks: CHASER_GRACE_TICKS,
-            behavior: BEHAVIOR_CHASER,
-            fire_interval_ticks: TURRET_FIRE_INTERVAL_TICKS,
-            projectile_speed: TURRET_PROJECTILE_SPEED,
-            reveal_radius: MIMIC_REVEAL_RADIUS,
-            corrupt_interval_ticks: CORRUPTER_INTERVAL_TICKS,
+            behavior: BEHAVIOR_PALLBEARER,
+            speed_mul: 1.0,
+            size: 1.0,
+            grace_ticks: DEFAULT_GRACE_TICKS,
+        }
+    }
+}
+
+/// Pallbearer phases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PallbearerPhase {
+    /// Airborne drift toward the target's breadcrumb from 3 s ago.
+    Hunt,
+    /// Stops, rears back; the telegraph before the lunge.
+    Kneel,
+    /// Committed dash toward the locked point; lethal on contact.
+    Lunge,
+    /// 2 s of harmless drift after the lunge.
+    Recover,
+}
+
+/// Snapshrike phases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshrikePhase {
+    /// Orbits its nearest target at 4-7 u.
+    Stalk,
+    /// 0.75 s aim; tracks for the first 0.4 s, frozen for the last 0.35 s.
+    Lock,
+    /// Straight dash at 13.5 u/s; lethal on contact.
+    Dash,
+    /// 0.6 s stunned after its dash was blocked by a platform.
+    Stunned,
+    /// 1.3 s of harmless drift after the dash.
+    Recover,
+}
+
+/// Moteling phases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotelingPhase {
+    /// 3.6 u/s drift; engages when a player is within 20 u.
+    Wander,
+    /// Circles the marked player at 5 u radius.
+    Orbit,
+    /// 2.0 s collapsing ring (heavy); lethal unless the marked player stands still.
+    Inhale,
+    /// 4.0 s slow drift after an inhale cycle.
+    Cooldown,
+}
+
+/// Rift warden phases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RiftPhase {
+    /// 1.6 u/s hover toward the nearest player; shoves on contact.
+    Haunt,
+    /// 1.1 s rune telegraph.
+    Ignite,
+    /// Radial displacement pulse (3.5 u, 8 u/s + 2 u/s up, 0.9 s stagger).
+    Shove,
+    /// 3.5 s cooldown (slow creep).
+    Settle,
+}
+
+/// Gale wight phases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GalePhase {
+    /// Wanders at map-top + 6 u altitude; at least 4 s between volleys.
+    Cruise,
+    /// 0.9 s circle tracking the target with 0.35 s position lag (heavy).
+    Mark,
+    /// 0.6 s fixed circle (heavy).
+    Lock,
+    /// Shell is falling; 1.1 s flight time.
+    Fall,
+    /// 3.5 s between volleys.
+    Downtime,
+}
+
+/// Lantern leech phases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeechPhase {
+    /// 3.2 u/s drift within 24 u of any player; hunts gift-pickup events.
+    Prowl,
+    /// Locked onto the newest pickup point; accelerates to 9.5 u/s.
+    Siphon,
+    /// Sits on the gorge point; rear-back then sting (lethal 1.5 u).
+    Gorge,
+    /// Leaves the scene; 3.0 s minimum before the next siphon.
+    Slide,
+}
+
+/// Turret phases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurretPhase {
+    /// Rotates toward the nearest player with clear line of sight.
+    Seek,
+    /// 0.95 s charge; aim line to the predicted intercept.
+    Charge,
+    /// Bolt leaves the muzzle (2 ticks, for VFX).
+    Fire,
+    /// 1.4 s venting smoke; cannot fire.
+    Vent,
+}
+
+/// Mimic phases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MimicPhase {
+    /// Sits as a gift prop; shimmers every 3.0 s.
+    Cached,
+    /// 0.9 s reveal telegraph when a player comes within 4 u.
+    Hiss,
+    /// 8.5 u/s hop toward the triggering player; lethal on contact.
+    Lunge,
+    /// 2.5 s inert wobble after the lunge.
+    Spent,
+}
+
+/// Corrupter phases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CorrupterPhase {
+    /// 3.0 u/s drift toward the marked platform; aura frets it after 2 s.
+    Drift,
+    /// 1.5 s withdrawal after a platform is fretted.
+    ReForm,
+}
+
+/// Pallbearer brain state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PallbearerBrain {
+    pub phase: PallbearerPhase,
+    /// Phase countdown in ticks.
+    pub timer: u32,
+    /// Point locked at the start of the kneel; the lunge goes there.
+    pub locked: Vec3,
+}
+
+impl Default for PallbearerBrain {
+    fn default() -> Self {
+        Self {
+            phase: PallbearerPhase::Hunt,
+            timer: 0,
+            locked: Vec3::new(0.0, 0.0, 0.0),
+        }
+    }
+}
+
+/// Snapshrike brain state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SnapshrikeBrain {
+    pub phase: SnapshrikePhase,
+    /// Phase countdown in ticks.
+    pub timer: u32,
+    /// Dash-to-dash cooldown, ticks remaining.
+    pub dash_cooldown: u32,
+    /// Predicted intercept (telegraph anchor); frozen during the last 0.35 s of `Lock`.
+    pub aim: Vec3,
+    /// Locked dash direction.
+    pub dash_dir: Vec3,
+    /// Distance covered during the current dash, in units.
+    pub dash_dist: f32,
+    /// The player currently locked onto.
+    pub target_id: Option<u32>,
+}
+
+impl Default for SnapshrikeBrain {
+    fn default() -> Self {
+        Self {
+            phase: SnapshrikePhase::Stalk,
+            timer: 0,
+            dash_cooldown: 0,
+            aim: Vec3::new(0.0, 0.0, 0.0),
+            dash_dir: Vec3::new(1.0, 0.0, 0.0),
+            dash_dist: 0.0,
+            target_id: None,
+        }
+    }
+}
+
+/// Moteling brain state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MotelingBrain {
+    pub phase: MotelingPhase,
+    /// Phase countdown in ticks.
+    pub timer: u32,
+    /// Ticks spent in orbit (drives the 6.0 s inhale cadence).
+    pub orbit_ticks: u32,
+    /// The marked player id (re-marked after each inhale cycle).
+    pub marked: Option<u32>,
+    /// Ticks spent waiting for the heavy slot while frozen at the first frame.
+    pub heavy_wait: u32,
+    /// True once the heavy mutex has been granted for this inhale.
+    pub acquired: bool,
+    /// Last known position of the marked player (ring anchor).
+    pub anchor: Vec3,
+    /// Wander target while drifting.
+    pub wander_goal: Option<Vec3>,
+}
+
+impl Default for MotelingBrain {
+    fn default() -> Self {
+        Self {
+            phase: MotelingPhase::Wander,
+            timer: 0,
+            orbit_ticks: 0,
+            marked: None,
+            heavy_wait: 0,
+            acquired: false,
+            anchor: Vec3::new(0.0, 0.0, 0.0),
+            wander_goal: None,
+        }
+    }
+}
+
+/// Rift warden brain state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RiftWardenBrain {
+    pub phase: RiftPhase,
+    /// Phase countdown in ticks.
+    pub timer: u32,
+}
+
+impl Default for RiftWardenBrain {
+    fn default() -> Self {
+        Self {
+            phase: RiftPhase::Haunt,
+            timer: 0,
+        }
+    }
+}
+
+/// Gale wight brain state. One `Mark`/`Lock`/`Fall` pipeline per shell; the whole
+/// volley holds the heavy mutex.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GaleWightBrain {
+    pub phase: GalePhase,
+    /// Phase countdown in ticks.
+    pub timer: u32,
+    /// Shells still to be launched in this volley.
+    pub shells_left: u32,
+    /// The player this shell is tracking.
+    pub target_id: Option<u32>,
+    /// The (possibly tracking) circle anchor; fixed during `Lock`.
+    pub anchor: Vec3,
+    /// Recent target feet positions used for the 0.35 s position lag.
+    pub lag: Vec<Vec3>,
+    /// Cruise waypoint.
+    pub cruise_goal: Option<Vec3>,
+    /// Ticks spent cruising (must reach 4.0 s before the next volley).
+    pub cruise_elapsed: u32,
+    /// Ticks spent waiting for the heavy slot while frozen at the first frame.
+    pub heavy_wait: u32,
+    /// True once the heavy mutex has been granted for this volley.
+    pub acquired: bool,
+}
+
+impl Default for GaleWightBrain {
+    fn default() -> Self {
+        Self {
+            phase: GalePhase::Cruise,
+            timer: 0,
+            shells_left: 0,
+            target_id: None,
+            anchor: Vec3::new(0.0, 0.0, 0.0),
+            lag: Vec::new(),
+            cruise_goal: None,
+            cruise_elapsed: 0,
+            heavy_wait: 0,
+            acquired: false,
+        }
+    }
+}
+
+/// Lantern leech brain state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LanternLeechBrain {
+    pub phase: LeechPhase,
+    /// Phase countdown / ramp timer in ticks.
+    pub timer: u32,
+    /// The locked pickup point (siphon goal / gorge point).
+    pub goal: Vec3,
+    /// Direction the leech drifts away in during `Slide`.
+    pub away: Vec3,
+}
+
+impl Default for LanternLeechBrain {
+    fn default() -> Self {
+        Self {
+            phase: LeechPhase::Prowl,
+            timer: 0,
+            goal: Vec3::new(0.0, 0.0, 0.0),
+            away: Vec3::new(1.0, 0.0, 0.0),
+        }
+    }
+}
+
+/// Turret brain state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TurretBrain {
+    pub phase: TurretPhase,
+    /// Phase countdown in ticks.
+    pub timer: u32,
+    /// The player being tracked.
+    pub target_id: Option<u32>,
+    /// Predicted intercept (telegraph anchor); frozen if line of sight breaks.
+    pub aim: Vec3,
+}
+
+impl Default for TurretBrain {
+    fn default() -> Self {
+        Self {
+            phase: TurretPhase::Seek,
+            timer: 0,
+            target_id: None,
+            aim: Vec3::new(0.0, 0.0, 0.0),
+        }
+    }
+}
+
+/// Mimic brain state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MimicBrain {
+    pub phase: MimicPhase,
+    /// Phase countdown in ticks.
+    pub timer: u32,
+    /// Shimmer cycle counter (0..60; the last 10 ticks shimmer).
+    pub shimmer: u32,
+    /// The triggering player (locked during `Hiss`).
+    pub trigger: Option<u32>,
+    /// Last known position of the triggering player (telegraph anchor).
+    pub anchor: Vec3,
+    /// Locked lunge direction.
+    pub lunge_dir: Vec3,
+}
+
+impl Default for MimicBrain {
+    fn default() -> Self {
+        Self {
+            phase: MimicPhase::Cached,
+            timer: 0,
+            shimmer: 0,
+            trigger: None,
+            anchor: Vec3::new(0.0, 0.0, 0.0),
+            lunge_dir: Vec3::new(1.0, 0.0, 0.0),
+        }
+    }
+}
+
+/// Corrupter brain state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CorrupterBrain {
+    pub phase: CorrupterPhase,
+    /// Phase countdown in ticks.
+    pub timer: u32,
+    /// The platform currently inside the aura (fret target).
+    pub mark: Option<u16>,
+    /// Continuous ticks the marked platform has spent inside the aura.
+    pub fret_ticks: u32,
+    /// Direction the corrupter withdraws in during `ReForm`.
+    pub away: Vec3,
+}
+
+impl Default for CorrupterBrain {
+    fn default() -> Self {
+        Self {
+            phase: CorrupterPhase::Drift,
+            timer: 0,
+            mark: None,
+            fret_ticks: 0,
+            away: Vec3::new(1.0, 0.0, 0.0),
+        }
+    }
+}
+
+/// Per-enemy state machine payload; the variant matches `params.behavior`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Brain {
+    Pallbearer(PallbearerBrain),
+    Snapshrike(SnapshrikeBrain),
+    Moteling(MotelingBrain),
+    RiftWarden(RiftWardenBrain),
+    GaleWight(GaleWightBrain),
+    LanternLeech(LanternLeechBrain),
+    Turret(TurretBrain),
+    Mimic(MimicBrain),
+    Corrupter(CorrupterBrain),
+}
+
+impl Brain {
+    /// Default brain for a behaviour tag; unknown behaviours fall back to pallbearer.
+    pub fn for_behavior(behavior: u8) -> Self {
+        match behavior {
+            BEHAVIOR_SNAPSHRIKE => Brain::Snapshrike(SnapshrikeBrain::default()),
+            BEHAVIOR_MOTELING => Brain::Moteling(MotelingBrain::default()),
+            BEHAVIOR_RIFT_WARDEN => Brain::RiftWarden(RiftWardenBrain::default()),
+            BEHAVIOR_GALE_WIGHT => Brain::GaleWight(GaleWightBrain::default()),
+            BEHAVIOR_LANTERN_LEECH => Brain::LanternLeech(LanternLeechBrain::default()),
+            BEHAVIOR_TURRET => Brain::Turret(TurretBrain::default()),
+            BEHAVIOR_MIMIC => Brain::Mimic(MimicBrain::default()),
+            BEHAVIOR_CORRUPTER => Brain::Corrupter(CorrupterBrain::default()),
+            _ => Brain::Pallbearer(PallbearerBrain::default()),
         }
     }
 }
@@ -104,16 +470,24 @@ impl Default for EnemyParams {
 /// A single enemy. `home` is where it drifts back to when nothing is in range.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Enemy {
+    /// Unique enemy id chosen by the server.
     pub id: u32,
+    /// Content kind id (`design/content.json`); reported verbatim in `EnemyView.kind`.
     pub kind: u8,
+    /// World position of the enemy's centre.
     pub pos: Vec3,
+    /// Home position it drifts back to when idle.
     pub home: Vec3,
+    /// Ticks until the enemy becomes active (spawn grace); 0 = active.
     pub active_in: u32,
+    /// Spawn-time tuning (behaviour, speed multiplier, body radius, grace).
     pub params: EnemyParams,
-    /// Ticks until a turret may fire / a corrupter may corrupt again (counting down).
-    pub cooldown_ticks: u32,
-    /// Mimics only: set once a target has got close enough to reveal the enemy for good.
-    pub revealed: bool,
+    /// Knockback velocity (u/s) applied while `knock_ticks` lasts (Bulwark pulse, rift shove).
+    pub knock_vel: Vec3,
+    /// Ticks left of the knockback stagger; while set, the brain does not run.
+    pub knock_ticks: u8,
+    /// Per-enemy state machine payload.
+    pub brain: Brain,
 }
 
 /// Euclidean distance between two points.
@@ -124,12 +498,19 @@ pub(crate) fn distance(a: &Vec3, b: &Vec3) -> f32 {
     (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
-/// The player's centre point, derived from their feet position.
-pub(crate) fn player_centre(player_feet: &Vec3) -> Vec3 {
-    Vec3::new(player_feet.x, player_feet.y + PLAYER_CENTRE_HEIGHT, player_feet.z)
+/// Horizontal (XZ) distance between two points.
+pub(crate) fn horizontal_distance(a: &Vec3, b: &Vec3) -> f32 {
+    let dx = a.x - b.x;
+    let dz = a.z - b.z;
+    (dx * dx + dz * dz).sqrt()
 }
 
-/// Move `pos` toward `target` by at most `max_step`, never overshooting.
+/// The player's centre point, derived from their feet position.
+pub(crate) fn player_centre(player_feet: &Vec3) -> Vec3 {
+    Vec3::new(player_feet.x, player_feet.y + 0.9, player_feet.z)
+}
+
+/// Move `pos` toward `target` by at most `max_step` (3D), never overshooting.
 pub(crate) fn move_toward(pos: &mut Vec3, target: &Vec3, max_step: f32) {
     let dx = target.x - pos.x;
     let dy = target.y - pos.y;
@@ -139,79 +520,91 @@ pub(crate) fn move_toward(pos: &mut Vec3, target: &Vec3, max_step: f32) {
         *pos = target.clone();
         return;
     }
+    if d <= 1e-9 {
+        return;
+    }
     let scale = max_step / d;
     pos.x += dx * scale;
     pos.y += dy * scale;
     pos.z += dz * scale;
 }
 
-/// Index of the nearest target within `aggro`, or `None`. Ties go to the lowest index.
-pub(crate) fn nearest_target_within(pos: &Vec3, targets: &[Vec3], aggro: f32) -> Option<usize> {
-    let mut nearest: Option<(usize, f32)> = None;
-    for (index, target) in targets.iter().enumerate() {
-        let d = distance(pos, target);
-        if d > aggro {
-            continue;
-        }
-        match nearest {
-            Some((_, best)) if best <= d => {}
-            _ => nearest = Some((index, d)),
-        }
+/// Normalised 3D direction from `from` to `to`; falls back to +X when they coincide.
+pub(crate) fn dir_normalized(from: &Vec3, to: &Vec3) -> Vec3 {
+    let dx = to.x - from.x;
+    let dy = to.y - from.y;
+    let dz = to.z - from.z;
+    let d = (dx * dx + dy * dy + dz * dz).sqrt();
+    if d <= 1e-9 {
+        return Vec3::new(1.0, 0.0, 0.0);
     }
-    nearest.map(|(index, _)| index)
+    Vec3::new(dx / d, dy / d, dz / d)
 }
 
-/// True when any target is within `radius` of `pos`.
-pub(crate) fn target_within(pos: &Vec3, targets: &[Vec3], radius: f32) -> bool {
-    targets.iter().any(|target| distance(pos, target) <= radius)
+/// Normalised horizontal (XZ) direction from `from` to `to`; falls back to +X when coincident.
+pub(crate) fn flat_direction(from: &Vec3, to: &Vec3) -> Vec3 {
+    let dx = to.x - from.x;
+    let dz = to.z - from.z;
+    let d = (dx * dx + dz * dz).sqrt();
+    if d <= 1e-9 {
+        return Vec3::new(1.0, 0.0, 0.0);
+    }
+    Vec3::new(dx / d, 0.0, dz / d)
 }
 
-/// Chaser-family movement shared by chaser/mimic/corrupter: while grace lasts only
-/// count down; afterwards fly at the nearest target in aggro, else drift home at
-/// half speed.
-pub(crate) fn step_hunter(enemy: &mut Enemy, targets: &[Vec3]) {
-    if enemy.active_in > 0 {
-        enemy.active_in -= 1;
-        return;
-    }
-    let step = enemy.params.speed / TICK_HZ as f32;
-    let aggro = enemy.params.aggro;
-    match nearest_target_within(&enemy.pos, targets, aggro) {
-        Some(index) => {
-            let target = targets[index].clone();
-            move_toward(&mut enemy.pos, &target, step);
-        }
-        None => {
-            let home = enemy.home.clone();
-            move_toward(&mut enemy.pos, &home, step * 0.5);
-        }
-    }
+/// Squared distance from a point to an AABB (0 when the point is inside).
+pub(crate) fn aabb_distance(p: &Vec3, b: &Aabb) -> f32 {
+    let dx = (b.min.x - p.x).max(0.0).max(p.x - b.max.x);
+    let dy = (b.min.y - p.y).max(0.0).max(p.y - b.max.y);
+    let dz = (b.min.z - p.z).max(0.0).max(p.z - b.max.z);
+    (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
-/// Behaviour stepping shared by [`step_enemy`] and `crate::hazards`: turret grace
-/// countdown, mimic reveal and chaser-family movement. Firing turrets and
-/// corrupting corrupters need level context and are handled in `crate::hazards`.
-/// Unknown behaviours do nothing.
-pub(crate) fn step_behavior(enemy: &mut Enemy, targets: &[Vec3]) {
-    match enemy.params.behavior {
-        BEHAVIOR_TURRET => {
-            if enemy.active_in > 0 {
-                enemy.active_in -= 1;
-            }
-        }
-        BEHAVIOR_MIMIC => {
-            if !enemy.revealed {
-                if target_within(&enemy.pos, targets, enemy.params.reveal_radius) {
-                    enemy.revealed = true;
-                } else {
-                    return;
-                }
-            }
-            step_hunter(enemy, targets);
-        }
-        BEHAVIOR_CORRUPTER | BEHAVIOR_CHASER => step_hunter(enemy, targets),
-        _ => {}
+/// True when the segment `a`..`b` intersects (or touches) the AABB `bounds`.
+pub(crate) fn segment_intersects_aabb(a: &Vec3, b: &Vec3, bounds: &Aabb) -> bool {
+    let mut t_min = 0.0_f32;
+    let mut t_max = 1.0_f32;
+    if !clip_axis(a.x, b.x - a.x, bounds.min.x, bounds.max.x, &mut t_min, &mut t_max) {
+        return false;
     }
+    if !clip_axis(a.y, b.y - a.y, bounds.min.y, bounds.max.y, &mut t_min, &mut t_max) {
+        return false;
+    }
+    if !clip_axis(a.z, b.z - a.z, bounds.min.z, bounds.max.z, &mut t_min, &mut t_max) {
+        return false;
+    }
+    true
+}
+
+/// Clip the slab `[min, max]` on one axis into the `[t_min, t_max]` window; false = no hit.
+fn clip_axis(origin: f32, dir: f32, min: f32, max: f32, t_min: &mut f32, t_max: &mut f32) -> bool {
+    if dir.abs() <= 1e-9 {
+        return origin >= min && origin <= max;
+    }
+    let inv = 1.0 / dir;
+    let mut t0 = (min - origin) * inv;
+    let mut t1 = (max - origin) * inv;
+    if t0 > t1 {
+        let tmp = t0;
+        t0 = t1;
+        t1 = tmp;
+    }
+    if t0 > *t_min {
+        *t_min = t0;
+    }
+    if t1 < *t_max {
+        *t_max = t1;
+    }
+    *t_min <= *t_max
+}
+
+/// True when a sphere at `centre` with `radius` overlaps the player's collision box.
+pub(crate) fn sphere_hits_player_box(centre: &Vec3, radius: f32, feet: &Vec3) -> bool {
+    let b = player_box(feet);
+    let dx = centre.x - centre.x.clamp(b.min.x, b.max.x);
+    let dy = centre.y - centre.y.clamp(b.min.y, b.max.y);
+    let dz = centre.z - centre.z.clamp(b.min.z, b.max.z);
+    dx * dx + dy * dy + dz * dz <= radius * radius
 }
 
 /// True when the player's centre is within [`GIFT_RADIUS`] of the gift centre.
@@ -239,16 +632,16 @@ pub fn beacon_reached_within(player_feet: &Vec3, beacon: &Vec3, radius: f32) -> 
 }
 
 /// Create an enemy sitting at `pos`, with `pos` as its home, default params and a
-/// full grace period (mimics never get one).
+/// full default spawn grace (pallbearers wait 4.5 s).
 pub fn spawn_enemy(id: u32, kind: u8, pos: Vec3) -> Enemy {
     spawn_enemy_with(id, kind, pos, EnemyParams::default())
 }
 
 /// Create an enemy with explicit [`EnemyParams`]; `active_in` starts at
-/// `params.grace_ticks`, except for mimics which never wait.
+/// `params.grace_ticks`, with a 4.5 s floor for pallbearers.
 pub fn spawn_enemy_with(id: u32, kind: u8, pos: Vec3, params: EnemyParams) -> Enemy {
-    let active_in = if params.behavior == BEHAVIOR_MIMIC {
-        0
+    let active_in = if params.behavior == BEHAVIOR_PALLBEARER {
+        params.grace_ticks.max(PALLBEARER_WAKE_TICKS)
     } else {
         params.grace_ticks
     };
@@ -258,76 +651,27 @@ pub fn spawn_enemy_with(id: u32, kind: u8, pos: Vec3, params: EnemyParams) -> En
         home: pos.clone(),
         pos,
         active_in,
+        brain: Brain::for_behavior(params.behavior),
+        knock_vel: Vec3::new(0.0, 0.0, 0.0),
+        knock_ticks: 0,
         params,
-        cooldown_ticks: 0,
-        revealed: false,
     }
 }
 
-/// The protocol state to report for `enemy`: `ENEMY_DISGUISED` for an unrevealed
-/// mimic, `ENEMY_DORMANT` while grace lasts (and for unknown behaviours), else
-/// `ENEMY_HUNTING`.
-pub fn enemy_state(enemy: &Enemy) -> u8 {
-    match enemy.params.behavior {
-        BEHAVIOR_MIMIC => {
-            if enemy.revealed {
-                ENEMY_HUNTING
-            } else {
-                ENEMY_DISGUISED
-            }
-        }
-        BEHAVIOR_CHASER | BEHAVIOR_TURRET | BEHAVIOR_CORRUPTER => {
-            if enemy.active_in > 0 {
-                ENEMY_DORMANT
-            } else {
-                ENEMY_HUNTING
-            }
-        }
-        _ => ENEMY_DORMANT,
-    }
-}
-
-/// Advance one enemy by one server tick (`dt = 1 / TICK_HZ`).
-///
-/// `targets` are the centres of living players. While `active_in > 0` the enemy only
-/// counts down. Afterwards it flies straight at the nearest target inside
-/// `enemy.params.aggro` (ties go to the lowest index), or drifts home at half speed.
-/// Unknown kinds (and unknown behaviours) do nothing at all.
-///
-/// Turret firing and corrupter platform marking need level context; the server must
-/// call `crate::hazards::Hazards::step`, which dispatches behaviour for every enemy
-/// (regardless of `kind`) and replaces this function for all of them.
-pub fn step_enemy(enemy: &mut Enemy, targets: &[Vec3]) {
-    if enemy.kind != ENEMY_KIND_CHASER {
-        return;
-    }
-    step_behavior(enemy, targets);
-}
-
-/// Fraction of the drawn body radius that actually kills. Slightly under 1 so a hit
-/// always looks like a hit: grazing the glowing edge of the model is survivable.
-pub const ENEMY_HIT_FORGIVENESS: f32 = 0.85;
-
-/// Radius of the lethal sphere around the enemy centre.
+/// Fraction of the drawn body radius that actually kills for `enemy_touches`.
 pub fn enemy_hit_radius(enemy: &Enemy) -> f32 {
     enemy.params.size * ENEMY_HIT_FORGIVENESS
 }
 
-/// True when the enemy's hit sphere (see [`enemy_hit_radius`]) overlaps the player's
-/// collision box. The sphere matches the drawn body, so there are no invisible corners.
+/// True when the enemy's hit sphere overlaps the player's collision box.
 pub fn enemy_touches(enemy: &Enemy, player_feet: &Vec3) -> bool {
-    let b = player_box(player_feet);
-    let c = &enemy.pos;
-    let dx = c.x - c.x.clamp(b.min.x, b.max.x);
-    let dy = c.y - c.y.clamp(b.min.y, b.max.y);
-    let dz = c.z - c.z.clamp(b.min.z, b.max.z);
-    let r = enemy_hit_radius(enemy);
-    dx * dx + dy * dy + dz * dz <= r * r
+    sphere_hits_player_box(&enemy.pos, enemy_hit_radius(enemy), player_feet)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::controller::spawn_state;
 
     const EPS: f32 = 1e-4;
 
@@ -361,167 +705,6 @@ mod tests {
     }
 
     #[test]
-    fn chaser_waits_out_grace_ticks() {
-        let mut enemy = spawn_enemy(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0));
-        assert_eq!(enemy.active_in, CHASER_GRACE_TICKS);
-        let targets = [Vec3::new(10.0, 0.0, 0.0)];
-        for _ in 0..CHASER_GRACE_TICKS {
-            step_enemy(&mut enemy, &targets);
-        }
-        assert_eq!(enemy.active_in, 0);
-        assert!(enemy.pos.x.abs() < EPS);
-        assert!(enemy.pos.y.abs() < EPS);
-        assert!(enemy.pos.z.abs() < EPS);
-    }
-
-    #[test]
-    fn chaser_closes_exactly_one_step() {
-        let mut enemy = spawn_enemy(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0));
-        enemy.active_in = 0;
-        let targets = [Vec3::new(10.0, 0.0, 0.0)];
-        step_enemy(&mut enemy, &targets);
-        let step = CHASER_SPEED / TICK_HZ as f32;
-        assert!((enemy.pos.x - step).abs() < EPS);
-        assert!(enemy.pos.y.abs() < EPS);
-        assert!(enemy.pos.z.abs() < EPS);
-    }
-
-    #[test]
-    fn chaser_never_overshoots() {
-        let mut enemy = spawn_enemy(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0));
-        enemy.active_in = 0;
-        let targets = [Vec3::new(0.1, 0.0, 0.0)];
-        step_enemy(&mut enemy, &targets);
-        assert!((enemy.pos.x - 0.1).abs() < EPS);
-        assert!(enemy.pos.y.abs() < EPS);
-        assert!(enemy.pos.z.abs() < EPS);
-    }
-
-    #[test]
-    fn chaser_picks_nearest_target() {
-        let mut enemy = spawn_enemy(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0));
-        enemy.active_in = 0;
-        let targets = [Vec3::new(10.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 5.0)];
-        step_enemy(&mut enemy, &targets);
-        let step = CHASER_SPEED / TICK_HZ as f32;
-        assert!(enemy.pos.x.abs() < EPS);
-        assert!((enemy.pos.z - step).abs() < EPS);
-    }
-
-    #[test]
-    fn chaser_ignores_far_targets_and_returns_home() {
-        let mut enemy = spawn_enemy(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0));
-        enemy.active_in = 0;
-        enemy.pos = Vec3::new(2.0, 0.0, 0.0);
-        let targets = [Vec3::new(30.0, 0.0, 0.0)];
-        step_enemy(&mut enemy, &targets);
-        let half_step = CHASER_SPEED / TICK_HZ as f32 * 0.5;
-        assert!((enemy.pos.x - (2.0 - half_step)).abs() < EPS);
-        assert!(enemy.pos.y.abs() < EPS);
-        assert!(enemy.pos.z.abs() < EPS);
-    }
-
-    #[test]
-    fn unknown_kind_does_nothing() {
-        let mut enemy = spawn_enemy(0, 99, Vec3::new(0.0, 0.0, 0.0));
-        enemy.active_in = 0;
-        let targets = [Vec3::new(1.0, 0.0, 0.0)];
-        step_enemy(&mut enemy, &targets);
-        assert!(enemy.pos.x.abs() < EPS);
-        assert!(enemy.pos.y.abs() < EPS);
-        assert!(enemy.pos.z.abs() < EPS);
-    }
-
-    #[test]
-    fn enemy_touches_player_box() {
-        let mut enemy = spawn_enemy(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.9, 0.0));
-        let player = feet(0.0, 0.0, 0.0);
-        assert!(enemy_touches(&enemy, &player));
-        enemy.pos = Vec3::new(1.9, 0.9, 0.0);
-        assert!(!enemy_touches(&enemy, &player));
-    }
-
-    #[test]
-    fn hit_sphere_has_no_cube_corners() {
-        // A big enemy diagonal to the player: a cube of half size 1.3 would reach the
-        // player box here, the drawn sphere does not.
-        let params = EnemyParams {
-            size: 1.3,
-            ..EnemyParams::default()
-        };
-        let enemy = spawn_enemy_with(1, ENEMY_KIND_CHASER, Vec3::new(1.4, 2.9, 1.4), params);
-        assert!(!enemy_touches(&enemy, &feet(0.0, 0.0, 0.0)));
-    }
-
-    #[test]
-    fn grazing_the_body_edge_is_survivable() {
-        let params = EnemyParams {
-            size: 1.0,
-            ..EnemyParams::default()
-        };
-        // Player box edge at x = 0.4 (half width); the body surface (radius 1.0) overlaps it
-        // by 0.05, but the lethal sphere is 0.85.
-        let edge = 0.4 + 0.95;
-        let enemy = spawn_enemy_with(1, ENEMY_KIND_CHASER, Vec3::new(edge, 0.9, 0.0), params);
-        assert!(!enemy_touches(&enemy, &feet(0.0, 0.0, 0.0)));
-    }
-
-    #[test]
-    fn spawn_enemy_uses_default_params() {
-        let enemy = spawn_enemy(3, ENEMY_KIND_CHASER, Vec3::new(1.0, 2.0, 3.0));
-        assert_eq!(enemy.params, EnemyParams::default());
-        assert_eq!(enemy.params.speed, CHASER_SPEED);
-        assert_eq!(enemy.params.aggro, CHASER_AGGRO_RADIUS);
-        assert_eq!(enemy.params.size, CHASER_HALF_SIZE);
-        assert_eq!(enemy.params.grace_ticks, CHASER_GRACE_TICKS);
-        assert_eq!(enemy.active_in, CHASER_GRACE_TICKS);
-        assert_eq!(enemy.home, Vec3::new(1.0, 2.0, 3.0));
-        assert_eq!(enemy.pos, Vec3::new(1.0, 2.0, 3.0));
-    }
-
-    #[test]
-    fn tuned_enemy_params_change_speed_and_hit_size() {
-        let params = EnemyParams {
-            speed: 11.0,
-            aggro: 40.0,
-            size: 1.5,
-            grace_ticks: 0,
-            ..EnemyParams::default()
-        };
-        let mut enemy = spawn_enemy_with(7, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0), params.clone());
-        assert_eq!(enemy.active_in, 0, "grace_ticks comes from the params");
-        assert_eq!(enemy.params, params);
-
-        let targets = [Vec3::new(10.0, 0.0, 0.0)];
-        step_enemy(&mut enemy, &targets);
-        let step = 11.0 / TICK_HZ as f32;
-        assert!((enemy.pos.x - step).abs() < EPS, "tuned speed must be used");
-
-        // The same position is only a hit for the bigger box.
-        let player = feet(0.0, 0.0, 0.0);
-        let mut big = spawn_enemy_with(8, ENEMY_KIND_CHASER, Vec3::new(1.5, 0.9, 0.0), params);
-        assert!(enemy_touches(&big, &player));
-        big.params.size = CHASER_HALF_SIZE;
-        assert!(!enemy_touches(&big, &player));
-    }
-
-    #[test]
-    fn tuned_aggro_radius_is_used() {
-        let params = EnemyParams {
-            speed: CHASER_SPEED,
-            aggro: 4.0,
-            size: CHASER_HALF_SIZE,
-            grace_ticks: 0,
-            ..EnemyParams::default()
-        };
-        let mut enemy = spawn_enemy_with(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0), params);
-        // 10 units away: outside the tuned 4.0 aggro, so it drifts home instead.
-        let targets = [Vec3::new(10.0, 0.0, 0.0)];
-        step_enemy(&mut enemy, &targets);
-        assert!(enemy.pos.x.abs() < EPS, "target outside tuned aggro must be ignored");
-    }
-
-    #[test]
     fn radius_helpers_take_explicit_radii() {
         let player = feet(0.0, 0.0, 0.0);
         let gift = Gift {
@@ -539,124 +722,93 @@ mod tests {
         assert!(beacon_reached_within(&player, &beacon, BEACON_RADIUS));
         assert!(!beacon_reached_within(&feet(2.0, 0.0, 0.0), &beacon, BEACON_RADIUS));
         assert!(beacon_reached_within(&feet(2.0, 0.0, 0.0), &beacon, 2.5));
-        // The vertical tolerance is not part of the radius.
         assert!(!beacon_reached_within(&feet(0.0, 3.0, 0.0), &beacon, 100.0));
     }
 
     #[test]
-    fn default_params_are_m1_chaser_plus_new_fields() {
-        let d = EnemyParams::default();
-        assert_eq!(d.speed, CHASER_SPEED);
-        assert_eq!(d.aggro, CHASER_AGGRO_RADIUS);
-        assert_eq!(d.size, CHASER_HALF_SIZE);
-        assert_eq!(d.grace_ticks, CHASER_GRACE_TICKS);
-        assert_eq!(d.behavior, BEHAVIOR_CHASER);
-        assert_eq!(d.fire_interval_ticks, TURRET_FIRE_INTERVAL_TICKS);
-        assert_eq!(d.projectile_speed, TURRET_PROJECTILE_SPEED);
-        assert_eq!(d.reveal_radius, MIMIC_REVEAL_RADIUS);
-        assert_eq!(d.corrupt_interval_ticks, CORRUPTER_INTERVAL_TICKS);
+    fn enemy_touches_player_box() {
+        let mut enemy = spawn_enemy(0, 1, Vec3::new(0.0, 0.9, 0.0));
+        let player = feet(0.0, 0.0, 0.0);
+        assert!(enemy_touches(&enemy, &player));
+        enemy.pos = Vec3::new(2.4, 0.9, 0.0);
+        assert!(!enemy_touches(&enemy, &player));
     }
 
     #[test]
-    fn enemy_state_tracks_grace_for_chasers() {
-        let mut chaser = spawn_enemy(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0));
-        assert_eq!(enemy_state(&chaser), ENEMY_DORMANT);
-        chaser.active_in = 0;
-        assert_eq!(enemy_state(&chaser), ENEMY_HUNTING);
+    fn spawn_enemy_uses_default_params() {
+        let enemy = spawn_enemy(3, 7, Vec3::new(1.0, 2.0, 3.0));
+        assert_eq!(enemy.params, EnemyParams::default());
+        assert_eq!(enemy.params.speed_mul, 1.0);
+        assert_eq!(enemy.params.grace_ticks, DEFAULT_GRACE_TICKS);
+        assert_eq!(enemy.active_in, PALLBEARER_WAKE_TICKS, "pallbearer floor is 4.5 s");
+        assert_eq!(enemy.home, Vec3::new(1.0, 2.0, 3.0));
+        assert_eq!(enemy.pos, Vec3::new(1.0, 2.0, 3.0));
     }
 
     #[test]
-    fn enemy_state_tracks_turret_and_corrupter_grace() {
-        for behavior in [BEHAVIOR_TURRET, BEHAVIOR_CORRUPTER] {
-            let params = EnemyParams {
-                behavior,
-                ..EnemyParams::default()
-            };
-            let mut enemy = spawn_enemy_with(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0), params);
-            assert_eq!(enemy_state(&enemy), ENEMY_DORMANT);
-            enemy.active_in = 0;
-            assert_eq!(enemy_state(&enemy), ENEMY_HUNTING);
-        }
-    }
-
-    #[test]
-    fn unknown_behaviour_is_dormant() {
+    fn spawn_enemy_with_honours_grace_and_pallbearer_floor() {
         let params = EnemyParams {
-            behavior: 99,
-            grace_ticks: 0,
-            ..EnemyParams::default()
+            behavior: BEHAVIOR_SNAPSHRIKE,
+            speed_mul: 1.5,
+            size: 0.7,
+            grace_ticks: 20,
         };
-        let enemy = spawn_enemy_with(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0), params);
-        assert_eq!(enemy_state(&enemy), ENEMY_DORMANT);
+        let shrike = spawn_enemy_with(1, 2, Vec3::new(0.0, 0.0, 0.0), params);
+        assert_eq!(shrike.active_in, 20);
+        assert_eq!(shrike.params.speed_mul, 1.5);
+
+        let pallbearer = spawn_enemy_with(
+            2,
+            3,
+            Vec3::new(0.0, 0.0, 0.0),
+            EnemyParams {
+                behavior: BEHAVIOR_PALLBEARER,
+                speed_mul: 1.0,
+                size: 1.0,
+                grace_ticks: 10,
+            },
+        );
+        assert_eq!(pallbearer.active_in, PALLBEARER_WAKE_TICKS);
     }
 
     #[test]
-    fn mimics_never_spawn_in_grace_and_start_disguised() {
-        let params = EnemyParams {
-            behavior: BEHAVIOR_MIMIC,
-            grace_ticks: 100,
-            ..EnemyParams::default()
-        };
-        let enemy = spawn_enemy_with(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0), params);
-        assert_eq!(enemy.active_in, 0);
-        assert_eq!(enemy_state(&enemy), ENEMY_DISGUISED);
+    fn for_behavior_unknown_falls_back_to_pallbearer() {
+        assert!(matches!(Brain::for_behavior(99), Brain::Pallbearer(_)));
+        assert!(matches!(Brain::for_behavior(BEHAVIOR_CORRUPTER), Brain::Corrupter(_)));
     }
 
     #[test]
-    fn enemy_state_reports_revealed_mimic_as_hunting() {
-        let params = EnemyParams {
-            behavior: BEHAVIOR_MIMIC,
-            ..EnemyParams::default()
+    fn segment_intersects_aabb_basic_cases() {
+        let wall = Aabb {
+            min: Vec3::new(4.0, 0.0, -1.0),
+            max: Vec3::new(6.0, 1.0, 1.0),
         };
-        let mut enemy = spawn_enemy_with(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0), params);
-        assert_eq!(enemy_state(&enemy), ENEMY_DISGUISED);
-        enemy.revealed = true;
-        assert_eq!(enemy_state(&enemy), ENEMY_HUNTING);
+        let a = Vec3::new(0.0, 0.5, 0.0);
+        let b = Vec3::new(10.0, 0.5, 0.0);
+        assert!(segment_intersects_aabb(&a, &b, &wall));
+        let over = Vec3::new(10.0, 5.0, 0.0);
+        assert!(!segment_intersects_aabb(&Vec3::new(0.0, 5.0, 0.0), &over, &wall));
+        assert!(segment_intersects_aabb(&Vec3::new(5.0, 0.5, 0.0), &b, &wall), "start inside");
+        assert!(!segment_intersects_aabb(
+            &Vec3::new(0.0, 3.0, 0.0),
+            &Vec3::new(3.5, 3.0, 0.0),
+            &wall
+        ));
     }
 
     #[test]
-    fn step_enemy_turret_never_moves() {
-        let params = EnemyParams {
-            behavior: BEHAVIOR_TURRET,
-            grace_ticks: 0,
-            ..EnemyParams::default()
+    fn aabb_distance_is_zero_inside() {
+        let bounds = Aabb {
+            min: Vec3::new(0.0, 0.0, 0.0),
+            max: Vec3::new(2.0, 2.0, 2.0),
         };
-        let mut turret = spawn_enemy_with(0, ENEMY_KIND_CHASER, Vec3::new(1.0, 2.0, 3.0), params);
-        step_enemy(&mut turret, &[Vec3::new(0.0, 0.0, 0.0)]);
-        assert_eq!(turret.pos, Vec3::new(1.0, 2.0, 3.0));
+        assert!(aabb_distance(&Vec3::new(1.0, 1.0, 1.0), &bounds).abs() < EPS);
+        assert!((aabb_distance(&Vec3::new(5.0, 1.0, 1.0), &bounds) - 3.0).abs() < EPS);
     }
 
     #[test]
-    fn step_enemy_mimic_waits_disguised_until_close() {
-        let params = EnemyParams {
-            behavior: BEHAVIOR_MIMIC,
-            reveal_radius: 3.0,
-            speed: 5.0,
-            ..EnemyParams::default()
-        };
-        let mut mimic = spawn_enemy_with(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0), params);
-        // Far target: no reveal, no movement.
-        step_enemy(&mut mimic, &[Vec3::new(9.0, 0.0, 0.0)]);
-        assert_eq!(mimic.pos, Vec3::new(0.0, 0.0, 0.0));
-        assert_eq!(enemy_state(&mimic), ENEMY_DISGUISED);
-        // Close target: reveals and chases.
-        step_enemy(&mut mimic, &[Vec3::new(1.0, 0.0, 0.0)]);
-        assert_eq!(enemy_state(&mimic), ENEMY_HUNTING);
-        assert!(mimic.pos.x > 0.0);
-    }
-
-    #[test]
-    fn step_enemy_corrupter_chases_after_grace() {
-        let params = EnemyParams {
-            behavior: BEHAVIOR_CORRUPTER,
-            grace_ticks: 1,
-            speed: 5.0,
-            ..EnemyParams::default()
-        };
-        let mut corrupter = spawn_enemy_with(0, ENEMY_KIND_CHASER, Vec3::new(0.0, 0.0, 0.0), params);
-        step_enemy(&mut corrupter, &[Vec3::new(10.0, 0.0, 0.0)]);
-        assert!(corrupter.pos.x.abs() < EPS, "grace period: no movement");
-        step_enemy(&mut corrupter, &[Vec3::new(10.0, 0.0, 0.0)]);
-        assert!(corrupter.pos.x > 0.0, "grace over: chases");
+    fn spawn_state_is_usable() {
+        let s = spawn_state(feet(1.0, 0.0, 2.0));
+        assert_eq!(s.pos, feet(1.0, 0.0, 2.0));
     }
 }

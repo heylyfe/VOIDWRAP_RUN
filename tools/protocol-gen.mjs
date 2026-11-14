@@ -82,7 +82,9 @@ function genRust() {
   out.push("");
   for (const t of schema.types) {
     if (t.$comment) out.push(`/// ${t.$comment}`);
-    out.push("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]");
+    // Plain number structs are Copy (geometry code passes them around constantly).
+    const copy = ["Vec3", "Aabb"].includes(t.name) ? "Copy, " : "";
+    out.push(`#[derive(Debug, Clone, ${copy}PartialEq, Serialize, Deserialize)]`);
     if (t.struct) {
       out.push(`pub struct ${t.name} {`);
       for (const [f, ty] of t.struct) out.push(`    pub ${f}: ${rsType(ty)},`);

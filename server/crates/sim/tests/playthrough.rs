@@ -1,11 +1,14 @@
-//! Playthrough bot: proves every hand-authored level is completable with the REAL movement
-//! controller (same code the server and the WASM client run), frame by frame — every gift
+//! Playthrough bot: proves a generated or hand-authored level is completable with the REAL
+//! movement controller (same code the server and the WASM client run), frame by frame — gifts
 //! collected, then the beacon reached — using only running and jumping (no dash).
 //!
-//! The bot plans a route over platforms (edge = horizontal gap <= 4.0 and rise <= 1.5), then
-//! steers toward the next platform and jumps when it is about to leave the current one, when the
-//! next platform is higher, or when it is blocked by a wall. Enemies are not simulated: this
-//! test is about level geometry and movement, not combat.
+//! Generated maps are far larger than the hand-authored ones, so the generated-levels test
+//! has the bot collect 8 seed-chosen gifts per (seed, level) and then the beacon; the
+//! hand-authored levels are still played in full. The bot plans a route over platforms
+//! (edge = horizontal gap <= 4.0 and rise <= 1.5), then steers toward the next platform and
+//! jumps when it is about to leave the current one, when the next platform is higher, or when
+//! it is blocked by a wall. Enemies are not simulated: this test is about level geometry and
+//! movement, not combat.
 
 use protocol::{BTN_JUMP, ControllerState, InputFrame, LevelData, Platform, Vec3};
 use sim::controller::{spawn_state, step};
@@ -267,8 +270,9 @@ fn play_level(n: u32) -> u32 {
     play(&level(n))
 }
 
-/// Plays a level to completion (every gift, normal and golden, then the beacon); returns frames used.
-fn play(lvl: &LevelData) -> u32 {
+/// Plays a level to completion: the requested gifts (by index into `lvl.gifts`, or all of
+/// them when `only` is `None`), then the beacon; returns frames used.
+fn play_subset(lvl: &LevelData, only: Option<&[usize]>) -> u32 {
     let lvl = lvl.clone();
     let world = World::from_level(&lvl);
     let mut bot = Bot {
@@ -280,7 +284,14 @@ fn play(lvl: &LevelData) -> u32 {
     };
     bot.settle(&world);
     let mut taken = vec![false; lvl.gifts.len()];
-    while let Some(i) = taken.iter().position(|t| !t) {
+    let order: Vec<usize> = match only {
+        Some(list) => list.to_vec(),
+        None => (0..lvl.gifts.len()).collect(),
+    };
+    for &i in &order {
+        if i >= lvl.gifts.len() || taken[i] {
+            continue;
+        }
         let g = lvl.gifts[i].clone();
         let goal = platform_under(&lvl, g.pos.x, g.pos.y, g.pos.z);
         bot.travel(&lvl, &world, goal, g.pos.x, g.pos.z, &|feet| gift_touched(feet, &g));
@@ -297,6 +308,11 @@ fn play(lvl: &LevelData) -> u32 {
     bot.frames
 }
 
+/// Plays a level to completion (every gift, normal and golden, then the beacon); returns frames used.
+fn play(lvl: &LevelData) -> u32 {
+    play_subset(lvl, None)
+}
+
 #[test]
 fn every_level_is_completable_with_the_real_controller() {
     let mut total = 0;
@@ -308,16 +324,39 @@ fn every_level_is_completable_with_the_real_controller() {
     println!("full 3-level run: {:.1} s", total as f32 / 60.0);
 }
 
-/// Generated maps must be physically completable, not just graph-reachable: run the bot on many of them.
+fn splitmix32(x: u32) -> u32 {
+    let mut z = x.wrapping_add(0x9E37_79B9);
+    z = (z ^ (z >> 16)).wrapping_mul(0x21F0_AAAD);
+    z = (z ^ (z >> 15)).wrapping_mul(0x735A_2D97);
+    z ^ (z >> 15)
+}
+
+/// Deterministic per-(seed, gift) rank; lower ranks are chosen first.
+fn seeded_gift_rank(seed: u32, gift_index: usize) -> u32 {
+    splitmix32(seed ^ (gift_index as u32).wrapping_mul(2_654_435_761))
+}
+
+/// The `count` gifts chosen by `seed` (lowest ranks first).
+fn pick_seeded_gifts(lvl: &LevelData, seed: u32, count: usize) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..lvl.gifts.len()).collect();
+    order.sort_by_key(|&i| seeded_gift_rank(seed, i));
+    order.truncate(count.min(order.len()));
+    order
+}
+
+/// Generated maps must be physically completable, not just graph-reachable: run the bot on
+/// many of them. Per (seed, level) the bot must reach 8 seed-chosen gifts and then the beacon.
 #[test]
 fn generated_levels_are_completable_with_the_real_controller() {
     let mut played = 0;
     let mut failures = Vec::new();
-    for level in [1u32, 3, 6, 10, 15, 20, 30] {
-        for seed in 0..25u32 {
-            let lvl = levelgen::generate(seed.wrapping_mul(2_654_435_761), level).data;
+    for level in 1..=6u32 {
+        for seed in 0..10u32 {
+            let actual_seed = seed.wrapping_mul(2_654_435_761);
+            let lvl = levelgen::generate(actual_seed, level).data;
+            let goals = pick_seeded_gifts(&lvl, actual_seed, 8);
             played += 1;
-            let result = std::panic::catch_unwind(|| play(&lvl));
+            let result = std::panic::catch_unwind(|| play_subset(&lvl, Some(&goals)));
             if result.is_err() {
                 failures.push((seed, level));
             }

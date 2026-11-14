@@ -1,37 +1,43 @@
-import { describe, expect, it } from "vitest";
-import { ENEMY_DISGUISED, ENEMY_DORMANT, ENEMY_HUNTING } from "../protocol/generated";
+import { describe, it, expect } from "vitest";
+import {
+  ENEMY_ATTACK,
+  ENEMY_DISGUISED,
+  ENEMY_DORMANT,
+  ENEMY_HUNTING,
+  ENEMY_RECOVER,
+  ENEMY_TELEGRAPH,
+} from "../protocol/generated";
 import { enemyBehaviorFor, modeForState } from "./enemyBehavior";
 
 describe("enemyBehaviorFor", () => {
-  it("falls back to chaser for undefined kind", () => {
-    expect(enemyBehaviorFor(undefined)).toBe("chaser");
+  it("routes every roster kind to its behaviour id", () => {
+    const expected = [
+      "pallbearer", "snapshrike", "moteling", "rift_warden", "gale_wight",
+      "lantern_leech", "turret", "mimic", "corrupter",
+    ] as const;
+    expected.forEach((id, kind) => {
+      expect(enemyBehaviorFor(kind)).toBe(id);
+    });
   });
 
-  it("falls back to chaser for out-of-range kind", () => {
-    expect(enemyBehaviorFor(9999)).toBe("chaser");
-  });
-
-  it("returns a known archetype for every indexed kind", () => {
-    for (const kind of [0, 1, 2, 3, 4, 5, 6, 7]) {
-      expect(["chaser", "turret", "mimic", "corrupter"]).toContain(enemyBehaviorFor(kind));
-    }
+  it("falls back to pallbearer for unknown or missing kinds", () => {
+    expect(enemyBehaviorFor(undefined)).toBe("pallbearer");
+    expect(enemyBehaviorFor(99)).toBe("pallbearer");
+    expect(enemyBehaviorFor(-3)).toBe("pallbearer");
   });
 });
 
 describe("modeForState", () => {
-  it("maps dormant", () => {
+  it("maps dormant and disguised", () => {
     expect(modeForState(ENEMY_DORMANT)).toBe("dormant");
-  });
-
-  it("maps disguised", () => {
     expect(modeForState(ENEMY_DISGUISED)).toBe("disguised");
   });
 
-  it("maps hunting", () => {
+  it("reads everything else (including missing info) as hunting", () => {
     expect(modeForState(ENEMY_HUNTING)).toBe("hunting");
-  });
-
-  it("treats missing state as hunting", () => {
+    expect(modeForState(ENEMY_TELEGRAPH)).toBe("hunting");
+    expect(modeForState(ENEMY_ATTACK)).toBe("hunting");
+    expect(modeForState(ENEMY_RECOVER)).toBe("hunting");
     expect(modeForState(undefined)).toBe("hunting");
   });
 });

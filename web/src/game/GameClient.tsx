@@ -11,6 +11,7 @@ import {
   DEATH_PROJECTILE,
   EVENT_ICE,
   GIFT_GOLDEN,
+  LEVEL_COLLECT,
   PHASE_ENEMY_DRAFT,
   PHASE_PLAYING,
   PLAYER_ACTIVE,
@@ -18,6 +19,7 @@ import {
   type LevelData,
 } from "@/protocol/generated";
 import { gradeForTheme } from "@/content";
+import { CollapseHud } from "@/hud/CollapseHud";
 import { DraftScreen } from "@/hud/DraftScreen";
 import { GameHud } from "@/hud/GameHud";
 import { Notices } from "@/hud/Notices";
@@ -30,20 +32,21 @@ import type { DeathCause } from "@/hud/format";
 import { Altars } from "@/scene/Altar";
 import { Atmosphere } from "@/scene/Atmosphere";
 import { Beacon } from "@/scene/Beacon";
-import { BlinkFlash } from "@/scene/BlinkFlash";
 import { BlockyAvatar } from "@/scene/BlockyAvatar";
 import type { AvatarMotion } from "@/scene/avatarPose";
 import { Crystals } from "@/scene/Crystals";
 import { DashStreak } from "@/scene/DashStreak";
 import { Debris } from "@/scene/Debris";
+import { Decor } from "@/scene/Decor";
 import { Effects } from "@/scene/Effects";
 import { EnemyField } from "@/scene/EnemyField";
-import { GiftBox } from "@/scene/GiftBox";
+import { Gifts } from "@/scene/GiftBox";
 import { GliderWings } from "@/scene/GliderWings";
 import { GrappleLine } from "@/scene/GrappleLine";
 import { PALETTE } from "@/scene/palette";
 import { Platforms } from "@/scene/Platforms";
 import { Projectiles } from "@/scene/Projectiles";
+import { WardDome } from "@/scene/WardDome";
 import { themeForLevel } from "@/scene/theme";
 import { bindingFor } from "./input";
 import { defaultServerUrl } from "./net";
@@ -89,15 +92,13 @@ function World({ session, level, themeLevel }: { session: GameSession; level: Le
   const remoteLast = useRef<{ x: number; y: number; z: number; ok: boolean }[]>(
     Array.from({ length: MAX_REMOTE }, () => ({ x: 0, y: 0, z: 0, ok: false })),
   );
-  const giftsTaken = useGameStore((s) => s.giftsTaken);
   const fogMul = useGameStore((s) => s.runInfo?.fogDensityMul ?? 1);
   const tiles = useGameStore((s) => s.tiles);
   const altarsUsed = useGameStore((s) => s.altarsUsed);
+  const levelPhase = useGameStore((s) => s.levelPhase);
+  // The beacon ignites once every normal gift is collected (phase 2 starts).
+  const beaconOpen = levelPhase !== LEVEL_COLLECT;
   const icy = level.event === EVENT_ICE;
-  const normalGifts = useMemo(() => level.gifts.filter((g) => g.kind !== GIFT_GOLDEN), [level]);
-  const normalLeft = normalGifts.filter((g) => !giftsTaken.includes(g.id)).length;
-  // The beacon opens and golden (currency) gifts appear once every normal gift is collected.
-  const beaconOpen = normalGifts.length > 0 && normalLeft === 0;
   const baseTheme = themeForLevel(themeLevel);
   const theme = useMemo(
     () => ({ ...baseTheme, fog: { ...baseTheme.fog, near: baseTheme.fog.near / fogMul, far: baseTheme.fog.far / fogMul } }),
@@ -210,25 +211,18 @@ function World({ session, level, themeLevel }: { session: GameSession; level: Le
       <hemisphereLight args={[theme.sky.zenith, theme.sky.horizon, 1.1]} />
       <directionalLight position={[8, 20, 6]} intensity={1.6} />
       <Platforms platforms={level.platforms} theme={theme} tiles={tiles} icy={icy} />
+      <Decor platforms={level.platforms} seed={level.seed} tiles={tiles} />
       <Crystals platforms={level.platforms} theme={theme} seed={level.seed + 7} />
-      {level.gifts.map((gift) => {
-        const golden = gift.kind === GIFT_GOLDEN;
-        const hidden = giftsTaken.includes(gift.id) || (golden && !beaconOpen);
-        return (
-          <group key={gift.id} scale={golden ? 1.25 : 1}>
-            <GiftBox position={golden ? scaled(gift.pos, 1 / 1.25) : gift.pos} taken={hidden} />
-          </group>
-        );
-      })}
-      {normalGifts.length > 0 && <Beacon position={level.beacon} open={beaconOpen} />}
+      <Gifts level={level} tiles={tiles} />
+      <Beacon position={level.beacon} open={beaconOpen} />
       <Altars altars={level.altars} used={altarsUsed} session={session} />
       <group ref={player}>
         <BlockyAvatar motion={motion} />
         <DashStreak motion={motion} color={theme.accent} />
         <GliderWings session={session} />
       </group>
+      <WardDome session={session} />
       <GrappleLine session={session} />
-      <BlinkFlash session={session} />
       {Array.from({ length: MAX_REMOTE }, (_, i) => (
         <group key={i} ref={(g) => void (remotes.current[i] = g)} visible={false}>
           <BlockyAvatar bodyColor={PALETTE.edgeGlowCyan} motion={remoteMotion[i]} />
@@ -240,10 +234,6 @@ function World({ session, level, themeLevel }: { session: GameSession; level: Le
       <FpsProbe />
     </>
   );
-}
-
-function scaled(v: { x: number; y: number; z: number }, k: number) {
-  return { x: v.x * k, y: v.y * k, z: v.z * k };
 }
 
 /** Counts rendered frames and publishes fps to the store twice a second. */
@@ -283,7 +273,7 @@ function causeOf(cause: number): DeathCause {
 /** The ability hint for the bottom-of-screen controls line, by class. */
 function abilityHint(cls: number): string {
   if (cls === CLASS_GRAPPLER) return "Shift grapple";
-  if (cls === CLASS_BULWARK) return "Shift blink";
+  if (cls === CLASS_BULWARK) return "Shift Aegis Bloom";
   if (cls === CLASS_GLIDER) return "Space twice double jump · hold Shift glide";
   return "Shift dash";
 }
@@ -295,6 +285,9 @@ export default function GameClient() {
   const container = useRef<HTMLDivElement>(null);
   const { status, pointerLocked, runOver, giftsTaken, runInfo, draft, myMode, activeIds, shop, notices, myClass } =
     useGameStore();
+  const levelPhase = useGameStore((s) => s.levelPhase);
+  const goldenTaken = useGameStore((s) => s.goldenTaken);
+  const collapseMs = useGameStore((s) => s.collapseMs);
   const [following, setFollowing] = useState<number | null>(null);
   const drafting = !!draft && runInfo?.phase === PHASE_ENEMY_DRAFT;
   // The lobby hub is shown in the colours of the level about to be played.
@@ -303,6 +296,7 @@ export default function GameClient() {
   const normalTotal = normalIds.length;
   const normalLeft = normalIds.filter((id) => !giftsTaken.includes(id)).length;
   const playing = runInfo ? runInfo.phase === PHASE_PLAYING : true;
+  const phase2 = levelPhase !== LEVEL_COLLECT;
 
   useEffect(() => {
     let disposed = false;
@@ -412,7 +406,11 @@ export default function GameClient() {
       )}
       {level && playing && normalTotal > 0 && (
         <>
-          <GameHud level={runLevel} giftsRemaining={normalLeft} giftsTotal={normalTotal} />
+          {phase2 ? (
+            <CollapseHud golden={goldenTaken.length} goldenTotal={normalTotal} collapseMs={collapseMs} />
+          ) : (
+            <GameHud level={runLevel} giftsRemaining={normalLeft} giftsTotal={normalTotal} />
+          )}
           <LevelBanner level={runLevel} />
         </>
       )}

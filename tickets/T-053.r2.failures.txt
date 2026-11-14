@@ -1,0 +1,37 @@
+
+thread 'dormant_enemy_never_acts' (23952) panicked at crates\sim\tests\hazards.rs:172:9:
+assertion `left == right` failed
+  left: 1
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+--
+
+thread 'lantern_leech_gorge_rearback_telegraphs_the_sting' (20028) panicked at crates\sim\tests\hazards.rs:673:5:
+0.6 s rear-back precedes the sting
+
+---- pallbearer_targets_nearer_of_two_players stdout ----
+
+thread 'pallbearer_targets_nearer_of_two_players' (23264) panicked at crates\sim\tests\hazards.rs:246:5:
+moves toward the nearer player, got 0
+
+---- rift_warden_pulse_staggers_nearby_enemies stdout ----
+
+thread 'rift_warden_pulse_staggers_nearby_enemies' (9304) panicked at crates\sim\tests\hazards.rs:492:5:
+assertion `left == right` failed: nearby enemies are staggered too
+  left: 0
+ right: 18
+
+---- pulse_interrupt_releases_the_heavy_slot stdout ----
+
+thread 'pulse_interrupt_releases_the_heavy_slot' (6716) panicked at crates\sim\tests\hazards.rs:995:5:
+blown directly away at 7 u/s
+
+---- snapshrike_aim_is_frozen_for_final_035s_and_a_perpendicular_step_dodges stdout ----
+
+thread 'snapshrike_aim_is_frozen_for_final_035s_and_a_perpendicular_step_dodges' (15564) panicked at crates\sim\tests\hazards.rs:320:5:
+a perpendicular step dodges the frozen aim
+
+
+failures:
+    dormant_enemy_never_acts

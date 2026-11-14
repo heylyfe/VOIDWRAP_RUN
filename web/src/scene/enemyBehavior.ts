@@ -1,16 +1,16 @@
-// Pure routing logic shared by the enemy pool: which archetype a wire `kind` maps to,
-// and which "readability mode" an enemy is in (dormant / hunting / disguised).
+// Pure routing logic shared by the enemy pool: which roster model a wire `kind` maps
+// to, and which readability mode an enemy is in (dormant / hunting / disguised).
+// Behaviour ids now come from enemyLook.ts (single source of truth for the 9-kind roster).
 import { ENEMY_DISGUISED, ENEMY_DORMANT } from "../protocol/generated";
-import { ENEMIES } from "../content";
-import type { EnemyBehavior } from "../content";
+import { enemyLookFor } from "./enemyLook";
+import type { EnemyBehaviorId } from "./enemyLook";
 
 export type EnemyMode = "dormant" | "hunting" | "disguised";
+export type EnemyBehavior = EnemyBehaviorId;
 
-/** `kind` indexes design/content.json enemies; unknown/missing kinds behave as chasers. */
+/** `kind` indexes the roster order (see enemyLook.ENEMY_LOOKS); unknown kinds fall back to pallbearer. */
 export function enemyBehaviorFor(kind: number | undefined): EnemyBehavior {
-  if (kind === undefined) return "chaser";
-  const card = ENEMIES[kind];
-  return card?.params.behavior ?? "chaser";
+  return enemyLookFor(kind).behavior;
 }
 
 /** Map the wire ENEMY_* state to the visual readability mode. Missing info reads as hunting. */

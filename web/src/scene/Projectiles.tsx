@@ -6,32 +6,76 @@ import { useFrame } from "@react-three/fiber";
 import { AdditiveBlending, MeshBasicMaterial } from "three";
 import type { Group } from "three";
 import type { GameSession } from "@/game/session";
-import { COMMON } from "./theme";
 
 export const MAX_PROJECTILES = 64;
 
 /**
- * Pooled enemy bolts. Fixed-size pool of groups, toggled visible; positions come from
- * the newest server snapshot (lightly extrapolated), same policy as enemies.
- * Bright toneMapped=false materials so bloom picks them up.
+ * Pooled falling gale_wight shells (turret bolts share the same pool and visual):
+ * a hot glowing shell with a vertical ion streak trailing above it, since shells
+ * drop ~12 u onto their marked circle. Positions come from the newest server
+ * snapshot; the streak is static-length and always points up.
  */
 export function Projectiles({ session }: { session: GameSession }): JSX.Element {
   const slots = useRef<(Group | null)[]>(Array.from({ length: MAX_PROJECTILES }, () => null));
-  const coreMat = useMemo(() => new MeshBasicMaterial({ color: "#ffe0f4", toneMapped: false }), []);
-  const haloMat = useMemo(
+  const coreMat = useMemo(() => new MeshBasicMaterial({ color: "#fff2ff", toneMapped: false }), []);
+  const shellMat = useMemo(
     () =>
       new MeshBasicMaterial({
-        color: COMMON.enemy.glow,
+        color: "#d94fff",
         transparent: true,
-        opacity: 0.4,
+        opacity: 0.9,
         blending: AdditiveBlending,
         depthWrite: false,
         toneMapped: false,
       }),
     [],
   );
-  useEffect(() => () => coreMat.dispose(), [coreMat]);
-  useEffect(() => () => haloMat.dispose(), [haloMat]);
+  const haloMat = useMemo(
+    () =>
+      new MeshBasicMaterial({
+        color: "#b47aff",
+        transparent: true,
+        opacity: 0.42,
+        blending: AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    [],
+  );
+  const streakMat = useMemo(
+    () =>
+      new MeshBasicMaterial({
+        color: "#d94fff",
+        transparent: true,
+        opacity: 0.34,
+        blending: AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    [],
+  );
+  const streakCoreMat = useMemo(
+    () =>
+      new MeshBasicMaterial({
+        color: "#eec4ff",
+        transparent: true,
+        opacity: 0.62,
+        blending: AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    [],
+  );
+  useEffect(
+    () => () => {
+      coreMat.dispose();
+      shellMat.dispose();
+      haloMat.dispose();
+      streakMat.dispose();
+      streakCoreMat.dispose();
+    },
+    [coreMat, shellMat, haloMat, streakMat, streakCoreMat],
+  );
 
   useFrame(() => {
     const now = performance.now();
@@ -61,11 +105,22 @@ export function Projectiles({ session }: { session: GameSession }): JSX.Element 
           }}
           visible={false}
         >
+          {/* shell core + glow */}
           <mesh material={coreMat}>
-            <sphereGeometry args={[0.13, 8, 8]} />
+            <sphereGeometry args={[0.15, 10, 10]} />
+          </mesh>
+          <mesh material={shellMat}>
+            <sphereGeometry args={[0.25, 10, 10]} />
           </mesh>
           <mesh material={haloMat}>
-            <sphereGeometry args={[0.3, 8, 8]} />
+            <sphereGeometry args={[0.4, 8, 8]} />
+          </mesh>
+          {/* vertical streak above the falling shell */}
+          <mesh material={streakMat} position={[0, 0.95, 0]}>
+            <cylinderGeometry args={[0.06, 0.17, 1.7, 6, 1, true]} />
+          </mesh>
+          <mesh material={streakCoreMat} position={[0, 0.7, 0]}>
+            <cylinderGeometry args={[0.032, 0.09, 1.1, 6, 1, true]} />
           </mesh>
         </group>
       ))}

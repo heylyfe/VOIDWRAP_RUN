@@ -1,0 +1,12 @@
+      4 web/src\scene\GiftBox.tsx:172 react-hooks/refs | Error: Cannot access refs during render
+      3 web/src\scene\GiftBox.tsx:331 react-hooks/refs | Error: Cannot access refs during render
+      3 web/src\scene\GiftBox.tsx:325 react-hooks/refs | Error: Cannot access refs during render
+      3 web/src\scene\GiftBox.tsx:319 react-hooks/refs | Error: Cannot access refs during render
+      1 web/src\scene\decorPlacement.ts:120 @typescript-eslint/no-unused-vars | 'w' is assigned a value but never used.
+      1 web/src\scene\decorPlacement.ts:120 @typescript-eslint/no-unused-vars | 'd' is assigned a value but never used.
+      1 web/src\scene\decorPlacement.ts:12 @typescript-eslint/no-unused-vars | 'PLATFORM_CRUMBLE' is assigned a value but never used.
+      1 web/src\scene\Platforms.tsx:402 react-hooks/immutability | Error: This value cannot be modified
+      1 web/src\scene\Platforms.tsx:400 react-hooks/immutability | Error: Cannot modify local variables after render completes
+      1 web/src\scene\Platforms.tsx:32 @typescript-eslint/no-unused-vars | 'SIDE_ROUGHNESS' is assigned a value but never used.
+      1 web/src\scene\Decor.tsx:249 react-hooks/immutability | Error: This value cannot be modified
+      1 web/src\scene\Decor.tsx:23 @typescript-eslint/no-unused-vars | 'platformCenter' is defined but never used.

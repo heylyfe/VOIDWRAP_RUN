@@ -44,46 +44,33 @@ function checkMods(where, mods, greater) {
 }
 
 // --- enemies ---------------------------------------------------------------------------------------------------
-// "chaser" is the default when params.behavior is absent; the other three are the M2 archetypes.
-const ENEMY_BEHAVIORS = ["chaser", "turret", "mimic", "corrupter"];
-const REQUIRED_ENEMIES = ["turret", "mimic", "corrupter"];
+// M3 roster. The array order IS the network kind index, so the ids are pinned in place. `params.behavior` repeats
+// the id (one state machine per enemy); the M2 archetypes and their tuning fields (fire_interval_s,
+// projectile_speed, reveal_radius, corrupt_interval_s) are gone - those numbers live in the sim now.
+const ENEMY_IDS = ["pallbearer", "snapshrike", "moteling", "rift_warden", "gale_wight", "lantern_leech", "turret",
+  "mimic", "corrupter"];
+const ENEMY_PARAMS = ["speed", "aggro", "grace_s", "size", "behavior"];
+const STATIONARY = ["turret", "mimic"]; // the only two that never roam
 
-if (!Array.isArray(c.enemies) || c.enemies.length < 4) err("need >= 4 enemies");
+if (!Array.isArray(c.enemies) || c.enemies.length !== ENEMY_IDS.length) {
+  err(`enemies: need exactly ${ENEMY_IDS.length} (have ${Array.isArray(c.enemies) ? c.enemies.length : 0})`);
+}
 for (const [i, e] of (c.enemies ?? []).entries()) {
   const w = `enemies[${i}]`;
   checkId(w, e.id);
+  if (e.id !== ENEMY_IDS[i]) err(`${w}.id=${JSON.stringify(e.id)} must be ${ENEMY_IDS[i]} (array order is the network kind index)`);
   checkText(w, "name", e.name, 24);
   checkText(w, "flavor", e.flavor, 70);
   checkText(w, "behavior", e.behavior, 110);
   if (!Number.isInteger(e.threat) || e.threat < 1 || e.threat > 5) err(`${w}.threat`);
   const p = e.params ?? {};
-  const kind = p.behavior ?? "chaser";
-  if (!ENEMY_BEHAVIORS.includes(kind)) {
-    err(`${w}.params.behavior=${JSON.stringify(p.behavior)} not one of ${ENEMY_BEHAVIORS.join(", ")}`);
-  }
-  if (!(typeof p.speed === "number" && p.speed >= 0 && p.speed <= 8.5)) err(`${w}.params.speed=${p.speed} must be in [0, 8.5]`);
-  if (kind !== "turret" && !(p.speed > 0)) err(`${w}.params.speed=${p.speed} must be > 0 for behavior ${kind}`);
-  if (!(p.aggro >= 4 && p.aggro <= 40)) err(`${w}.params.aggro=${p.aggro}`);
-  if (!(p.grace_s >= 1.5 && p.grace_s <= 5)) err(`${w}.params.grace_s=${p.grace_s}`);
-  if (!(p.size >= 0.2 && p.size <= 1.5)) err(`${w}.params.size=${p.size}`);
-  if (kind === "turret") {
-    if (p.speed !== 0) err(`${w}.params.speed=${p.speed} must be 0 for a turret`);
-    if (!(p.fire_interval_s >= 1.2 && p.fire_interval_s <= 2.5)) err(`${w}.params.fire_interval_s=${p.fire_interval_s} outside [1.2, 2.5]`);
-    if (!(p.projectile_speed >= 7 && p.projectile_speed <= 11)) err(`${w}.params.projectile_speed=${p.projectile_speed} outside [7, 11]`);
-  }
-  if (kind === "mimic") {
-    if (!(p.speed >= 6 && p.speed <= 8)) err(`${w}.params.speed=${p.speed} outside [6, 8] for a mimic`);
-    if (!(p.reveal_radius >= 3 && p.reveal_radius <= 4.5)) err(`${w}.params.reveal_radius=${p.reveal_radius} outside [3, 4.5]`);
-  }
-  if (kind === "corrupter") {
-    if (!(p.speed >= 2 && p.speed <= 4)) err(`${w}.params.speed=${p.speed} outside [2, 4] for a corrupter`);
-    if (!(p.corrupt_interval_s >= 2 && p.corrupt_interval_s <= 4)) err(`${w}.params.corrupt_interval_s=${p.corrupt_interval_s} outside [2, 4]`);
-  }
-}
-for (const id of REQUIRED_ENEMIES) {
-  const e = (c.enemies ?? []).find((x) => x?.id === id);
-  if (!e) err(`enemies: missing required enemy ${id}`);
-  else if (e.params?.behavior !== id) err(`enemies[${id}].params.behavior=${JSON.stringify(e.params?.behavior)} must be ${id}`);
+  for (const k of Object.keys(p)) if (!ENEMY_PARAMS.includes(k)) err(`${w}.params.${k}: not an enemy param`);
+  if (p.behavior !== e.id) err(`${w}.params.behavior=${JSON.stringify(p.behavior)} must equal the enemy id ${JSON.stringify(e.id)}`);
+  if (!(typeof p.speed === "number" && p.speed >= 0 && p.speed <= 15)) err(`${w}.params.speed=${p.speed} must be in [0, 15]`);
+  else if (p.speed === 0 && !STATIONARY.includes(e.id)) err(`${w}.params.speed=0 is only for ${STATIONARY.join(" / ")}`);
+  if (!(typeof p.aggro === "number" && p.aggro >= 0 && p.aggro <= 40)) err(`${w}.params.aggro=${p.aggro} must be in [0, 40]`);
+  if (p.grace_s !== 4.0) err(`${w}.params.grace_s=${p.grace_s} must be 4.0 (nothing damages anyone in the first 4 s)`);
+  if (!(typeof p.size === "number" && p.size >= 0.3 && p.size <= 1.6)) err(`${w}.params.size=${p.size} must be in [0.3, 1.6]`);
 }
 
 // --- upgrades and curses ---------------------------------------------------------------------------------------
@@ -111,8 +98,9 @@ const worstMul = Math.max(1, ...(c.curses ?? []).map((k) => k.mods?.enemy_speed_
 if (fastest * worstMul > 14) err(`fastest enemy x worst curse = ${(fastest * worstMul).toFixed(1)} u/s > 14 (cap)`);
 
 // --- classes ---------------------------------------------------------------------------------------------------
-// Order is fixed: the client indexes classes by position on the select screen.
-const CLASS_IDS = ["striker", "grappler", "blinker", "glider"];
+// Order is fixed: the client indexes classes by position on the select screen. M3 replaced the Blinker with the
+// Bulwark in slot 2; the old id must not survive anywhere in the file.
+const CLASS_IDS = ["striker", "grappler", "bulwark", "glider"];
 if (!Array.isArray(c.classes)) err("classes: missing");
 else {
   if (c.classes.length !== CLASS_IDS.length) err(`classes: need exactly ${CLASS_IDS.length} (have ${c.classes.length})`);
@@ -126,8 +114,10 @@ else {
     checkText(w, "controls", k.controls, 80);
   }
 }
+if (JSON.stringify(c).includes("blinker")) err('content: "blinker" must not appear anywhere (removed in M3, replaced by bulwark)');
 
 // --- shop ------------------------------------------------------------------------------------------------------
+// M3 doubled every price (golden gifts are worth 1 g each), so the cost ceiling moved with them.
 const SHOP_KINDS = ["life", "reroll", "mods"];
 if (!Array.isArray(c.shop)) err("shop: missing");
 else {
@@ -141,9 +131,9 @@ else {
     checkText(w, "effect", s.effect, 60);
     if (!SHOP_KINDS.includes(s.kind)) err(`${w}.kind=${JSON.stringify(s.kind)} not one of ${SHOP_KINDS.join(", ")}`);
     else counts[s.kind] += 1;
-    if (!Number.isInteger(s.cost) || s.cost < 5 || s.cost > 40) err(`${w}.cost=${s.cost} must be an integer 5..40`);
+    if (!Number.isInteger(s.cost) || s.cost < 5 || s.cost > 80) err(`${w}.cost=${s.cost} must be an integer 5..80`);
     if (!Number.isInteger(s.stock) || s.stock < 1 || s.stock > 3) err(`${w}.stock=${s.stock} must be an integer 1..3`);
-    if (s.kind === "life" && !(s.cost >= 25 && s.cost <= 35)) err(`${w}.cost=${s.cost} must be 25..35 for a life`);
+    if (s.kind === "life" && !(s.cost >= 50 && s.cost <= 70)) err(`${w}.cost=${s.cost} must be 50..70 for a life`);
     if (s.kind === "mods") {
       checkMods(w, s.mods, false);
       for (const key of Object.keys(s.mods ?? {})) {

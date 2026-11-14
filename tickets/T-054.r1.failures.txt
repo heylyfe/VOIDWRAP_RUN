@@ -1,0 +1,41 @@
+ch01_sundered_gate: size=20x20u, sockets=4, gift_slots=8, height=-0.5..0.5u
+ch02_hollow_market: size=16x16u, sockets=4, gift_slots=7, height=-1.5..0u
+ch03_grand_span_junction: size=18x10u, sockets=3, gift_slots=6, height=-0.5..2.5u
+ch04_twin_terrace: size=22x12u, sockets=4, gift_slots=9, height=-0.5..4.5u
+ch05_stair_of_embers: size=14x15u, sockets=2, gift_slots=5, height=-0.5..6u
+ch06_descent_of_sighs: size=30x8u, sockets=2, gift_slots=5, height=-5.5..0u
+ch07_the_coil: size=15x15u, sockets=2, gift_slots=8, height=-1..9.5u
+ch08_twin_span_bridge: size=18x9u, sockets=4, gift_slots=7, height=-0.5..4.5u
+ch09_jump_pad_lift: size=8x8u, sockets=2, gift_slots=4, height=-0.5..8u
+ch10_high_silo: size=10x10u, sockets=2, gift_slots=6, height=-0.5..12u
+ch11_long_drop: size=16x9u, sockets=2, gift_slots=6, height=-10.5..0u
+ch12_chute_of_bells: size=12x8u, sockets=2, gift_slots=5, height=-6.5..0u
+ch13_fork_of_tongues: size=16x14u, sockets=3, gift_slots=5, height=-0.5..2.5u
+ch14_split_howl: size=14x10u, sockets=3, gift_slots=5, height=-0.5..2.5u
+ch15_tri_crown: size=25x13u, sockets=4, gift_slots=6, height=-3.5..3u
+ch16_misers_loft: size=8x8u, sockets=1, gift_slots=8, height=-0.5..1.5u
+ch17_briar_cache: size=12x11u, sockets=1, gift_slots=9, height=-0.5..0u
+ch18_gilded_nook: size=17x9u, sockets=1, gift_slots=6, height=-0.5..4.5u
+ch19_ashen_crossing: size=17x5u, sockets=2, gift_slots=4, height=-0.5..0u
+ch20_rotting_switchback: size=18x8u, sockets=2, gift_slots=5, height=-0.5..0u
+ch21_high_road: size=18x6u, sockets=2, gift_slots=6, height=-0.5..4.5u
+ch22_widows_catwalk: size=18x6u, sockets=2, gift_slots=7, height=-0.5..6.5u
+ch23_gift_meadow: size=18x18u, sockets=4, gift_slots=9, height=-0.5..0.5u
+ch24_cinder_switchyard: size=18x10u, sockets=2, gift_slots=6, height=-0.5..0.5u
+ch25_hanging_gallery: size=21x12u, sockets=2, gift_slots=7, height=-0.5..5.5u
+
+VALIDATION FAILED: 14 error(s)
+  - [ch04_twin_terrace] socket 'n_hi': pos is not on the N footprint edge
+  - [ch04_twin_terrace] socket 'n_hi': no platform touches the N edge across the full 4 u width at y=4.5
+  - [ch04_twin_terrace] socket 's_hi': pos is not on the S footprint edge
+  - [ch04_twin_terrace] socket 's_hi': no platform touches the S edge across the full 4 u width at y=4.5
+  - [ch07_the_coil] gift slots #0 and #7: 0 u apart (< 2.0 u)
+  - [ch08_twin_span_bridge] gift slots #1 and #5: 1.5 u apart (< 2.0 u)
+  - [ch10_high_silo] platforms #2 and #4: only 0.5 u vertical clearance (< 4.0 u)
+  - [ch10_high_silo] platforms #5 and #7: only 0.5 u vertical clearance (< 4.0 u)
+  - [ch11_long_drop] platforms #5 and #8: only 3.5 u vertical clearance (< 4.0 u)
+  - [ch11_long_drop] gift slots #3 and #5: 0.9 u apart (< 2.0 u)
+  - [ch12_chute_of_bells] platform #4: larger horizontal extent 2.6 u < 3.0 u
+  - [ch12_chute_of_bells] platforms #3 and #5: only 1.5 u vertical clearance (< 4.0 u)
+  - [ch22_widows_catwalk] gift slots #1 and #4: 2 u apart (< 2.0 u)
+  - [ch22_widows_catwalk] gift slots #2 and #5: 1.95 u apart (< 2.0 u)

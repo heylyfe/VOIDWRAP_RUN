@@ -5,379 +5,460 @@ import type { JSX } from "react";
 import { useFrame } from "@react-three/fiber";
 import {
   BoxGeometry,
-  CanvasTexture,
   Color,
+  DynamicDrawUsage,
+  Group,
+  InstancedBufferAttribute,
+  InstancedMesh,
+  Matrix4,
   MeshStandardMaterial,
-  RepeatWrapping,
-  SRGBColorSpace,
 } from "three";
-import type { Group, Material, MeshStandardMaterial as MeshStandardMaterialType, Texture } from "three";
-import { PLATFORM_CRUMBLE, TILE_GONE, TILE_WARN } from "@/protocol/generated";
+import {
+  PLATFORM_CRUMBLE,
+  PLATFORM_JUMP_PAD,
+  PLATFORM_NORMAL,
+  TILE_FRETTED,
+  TILE_GONE,
+  TILE_WARN,
+} from "@/protocol/generated";
 import type { Platform, TileState } from "@/protocol/generated";
-import { themeTextures, worldScaledBoxGeometry } from "./checker";
 import { iceTint } from "./iceTint";
+import { isPillar, platformCenter, platformSize } from "./platformUtils";
+import type { Vec3Tuple } from "./platformUtils";
 import type { Theme } from "./theme";
 
-interface EdgeBarData {
-  size: [number, number, number];
-  position: [number, number, number];
-}
-
-interface PlatformBoxData {
-  id: number;
-  kind: number;
-  center: [number, number, number];
-  size: [number, number, number];
-  edgeBars: EdgeBarData[];
-}
-
-interface ThemeMaterials {
-  /** One material per BoxGeometry face, in face order: +x, -x, +y, -y, +z, -z. */
-  byFace: [Material, Material, Material, Material, Material, Material];
-  /** Materials broken out so crumble platforms can reuse them per-platform. */
-  side: Material;
-  bottom: Material;
-  /** Glowing perimeter trim material. */
-  edgeTrim: Material;
-  /** Base (already ice-tinted when applicable) hex colour for crumble tops. */
-  crumbleBase: string;
-  ghostColor: string;
-  /** Every material created for the current theme, for disposal. */
-  all: readonly Material[];
-}
-
-const EDGE_BAR_THICKNESS = 0.08;
-const EDGE_BAR_HEIGHT = 0.08;
-const EDGE_BAR_OVERHANG = 0.04;
-const EDGE_BAR_EMISSIVE = 1.4;
-const SIDE_TINT = "#9a9a9a";
+const CHECKER_CELL = 1.5;
 const TOP_ROUGHNESS = 0.85;
-const SIDE_ROUGHNESS = 0.9;
-const BOTTOM_ROUGHNESS = 1;
+const PAD_ROUGHNESS = 0.55;
 const ICE_ROUGHNESS = 0.16;
 const ICE_EMISSIVE = "#33506b";
 const ICE_EMISSIVE_INTENSITY = 0.3;
-const CRUMBLE_SHADE = 0.55;
-const CRUMBLE_ROUGHNESS = 0.8;
-const CRUMBLE_IDLE_EMISSIVE = 0.14;
-const WARN_EMISSIVE = "#ff5a2a";
+const SIDE_TINT = "#9a9a9a";
+const CHECKER_B_SHADE = 0.6;
+const CRUMBLE_SHADE = 0.72;
+const CRUMBLE_IDLE_EMISSIVE = 0.22;
+const WARN_AMBER = "#ffb13c";
+const WARN_RED = "#ff4436";
+const GONE_SINK_TIME = 1.2;
+const GONE_SINK_DEPTH = 14;
 const SHAKE_AMP = 0.055;
-const GONE_GHOST_OPACITY = 0.07;
+const EDGE_WIDTH = 0.11;
+const EDGE_INTENSITY = 1.5;
 
-// Four thin bars along the top perimeter. The bars along X straddle the
-// top edge (overhang EDGE_BAR_OVERHANG on each side); the bars along Z
-// span exactly the gap between them so nothing overlaps at the corners.
-function toEdgeBars(size: readonly [number, number, number]): EdgeBarData[] {
-  const [width, height, depth] = size;
-  const halfWidth = width / 2;
-  const halfDepth = depth / 2;
-  const barY = height / 2 + EDGE_BAR_HEIGHT / 2;
-  const longLength = width + EDGE_BAR_OVERHANG * 2;
-  const shortLength = depth - EDGE_BAR_OVERHANG * 2;
-  return [
-    {
-      size: [longLength, EDGE_BAR_HEIGHT, EDGE_BAR_THICKNESS],
-      position: [0, barY, halfDepth],
-    },
-    {
-      size: [longLength, EDGE_BAR_HEIGHT, EDGE_BAR_THICKNESS],
-      position: [0, barY, -halfDepth],
-    },
-    {
-      size: [EDGE_BAR_THICKNESS, EDGE_BAR_HEIGHT, shortLength],
-      position: [halfWidth, barY, 0],
-    },
-    {
-      size: [EDGE_BAR_THICKNESS, EDGE_BAR_HEIGHT, shortLength],
-      position: [-halfWidth, barY, 0],
-    },
-  ];
-}
+const scratchMatrix = new Matrix4();
 
-function toBoxData(platform: Platform): PlatformBoxData {
-  const { min, max } = platform.bounds;
-  const size: [number, number, number] = [
-    max.x - min.x,
-    max.y - min.y,
-    max.z - min.z,
-  ];
-  const center: [number, number, number] = [
-    (min.x + max.x) / 2,
-    (min.y + max.y) / 2,
-    (min.z + max.z) / 2,
-  ];
-  return {
-    id: platform.id,
-    kind: platform.kind,
-    center,
-    size,
-    edgeBars: toEdgeBars(size),
-  };
-}
-
-/** Multiply a hex colour by `factor` (used to darken crumble tops so they read as fragile). */
 function shadeColor(hex: string, factor: number): string {
   const c = new Color(hex);
   c.multiplyScalar(factor);
   return `#${c.getHexString()}`;
 }
 
-function makeTopMaterial(baseHex: string, map: Texture | null, icy: boolean): MeshStandardMaterial {
-  if (map) {
-    return new MeshStandardMaterial({
-      map,
-      color: icy ? iceTint("#ffffff") : "#ffffff",
-      roughness: icy ? ICE_ROUGHNESS : TOP_ROUGHNESS,
-      emissive: icy ? ICE_EMISSIVE : "#000000",
-      emissiveIntensity: icy ? ICE_EMISSIVE_INTENSITY : 0,
-    });
-  }
-  return new MeshStandardMaterial({
-    color: icy ? iceTint(baseHex) : baseHex,
-    roughness: icy ? ICE_ROUGHNESS : TOP_ROUGHNESS,
-    emissive: icy ? ICE_EMISSIVE : "#000000",
-    emissiveIntensity: icy ? ICE_EMISSIVE_INTENSITY : 0,
-  });
+/** Phase offset per platform id so shakes/blinks do not line up. */
+function phaseForId(id: number): number {
+  return (id * 1.61803398875) % (Math.PI * 2);
 }
 
-/** Deterministic cracked-stone canvas texture for crumbling platform tops (built once). */
-function createCrackTexture(baseHex: string): CanvasTexture | null {
-  if (typeof document === "undefined") return null;
-  const size = 256;
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-  // Deterministic LCG so every client sees the same cracks.
-  let seed = 9001;
-  const rnd = (): number => {
-    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-    return seed / 4294967296;
-  };
-  ctx.fillStyle = baseHex;
-  ctx.fillRect(0, 0, size, size);
-  for (let i = 0; i < 40; i += 1) {
-    ctx.fillStyle = `rgba(0, 0, 0, ${0.08 + rnd() * 0.12})`;
-    ctx.beginPath();
-    ctx.arc(rnd() * size, rnd() * size, 12 + rnd() * 42, 0, Math.PI * 2);
-    ctx.fill();
+interface InstanceRecord {
+  id: number;
+  center: Vec3Tuple;
+  size: Vec3Tuple;
+  phase: number;
+  pillar: boolean;
+  mesh: InstancedMesh;
+  attr: InstancedBufferAttribute;
+  index: number;
+  touched: boolean;
+  activeFrame: boolean;
+}
+
+interface BuiltPlatforms {
+  holder: Group;
+  records: InstanceRecord[];
+  timeUniform: { value: number };
+}
+
+// ---------------------------------------------------------------------------
+// Shared vertex injection: world position, unit-box local pos, instance scale,
+// axis normal and the per-instance state vector (warn, fretted, fade, pillar).
+// ---------------------------------------------------------------------------
+const VERTEX_COMMON = `#include <common>
+attribute vec4 aState;
+varying vec4 vStateF;
+varying vec3 vWorldPos;
+varying vec3 vLocalPos;
+varying vec3 vScaleW;
+varying vec3 vNrmW;`;
+
+const VERTEX_BEGIN = `#include <begin_vertex>
+vStateF = aState;
+vLocalPos = position;
+vec4 vwIp = vec4(transformed, 1.0);
+vec3 vwScale = vec3(1.0);
+#ifdef USE_INSTANCING
+vwIp = instanceMatrix * vwIp;
+vwScale = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
+#endif
+vScaleW = vwScale;
+vWorldPos = (modelMatrix * vwIp).xyz;
+vec3 vwN = objectNormal;
+#ifdef USE_INSTANCING
+vwN = mat3(instanceMatrix) * vwN;
+#endif
+vNrmW = normalize(mat3(modelMatrix) * vwN);`;
+
+const FRAGMENT_COMMON = `#include <common>
+uniform float uTime;
+varying vec4 vStateF;
+varying vec3 vWorldPos;
+varying vec3 vLocalPos;
+varying vec3 vScaleW;
+varying vec3 vNrmW;`;
+
+/** Warn-flash (amber->red) + fretted-vein blocks shared by surface and pad shaders. */
+const GLSL_WARN_FRET = `
+{
+  float fade = vStateF.z;
+  float topF = step(0.5, vNrmW.y);
+  float warn = vStateF.x;
+  float fret = vStateF.y;
+  if (warn > 0.5) {
+    float b = 0.5 + 0.5 * sin(uTime * 9.0);
+    totalEmissiveRadiance += mix(uWarnAmber, uWarnRed, b) * (1.1 + 1.6 * b);
   }
-  for (let i = 0; i < 14; i += 1) {
-    ctx.strokeStyle = "rgba(12, 9, 8, 0.9)";
-    ctx.lineWidth = 1.5 + rnd() * 2.5;
-    ctx.beginPath();
-    let x = rnd() * size;
-    let y = rnd() * size;
-    let angle = rnd() * Math.PI * 2;
-    ctx.moveTo(x, y);
-    const segments = 5 + Math.floor(rnd() * 5);
-    for (let j = 0; j < segments; j += 1) {
-      angle += (rnd() - 0.5) * 1.4;
-      const len = 18 + rnd() * 30;
-      x += Math.cos(angle) * len;
-      y += Math.sin(angle) * len;
-      ctx.lineTo(x, y);
+  if (fret > 0.5) {
+    vec2 fp = vWorldPos.xz * 2.6;
+    float v1 = 1.0 - smoothstep(0.0, 0.16, abs(sin(fp.x + sin(fp.y * 1.7) * 1.6)));
+    float v2 = 1.0 - smoothstep(0.0, 0.16, abs(sin(fp.y * 1.3 + sin(fp.x * 1.9) * 1.6)));
+    float vein = clamp(v1 + v2, 0.0, 1.0);
+    float crawl = 0.65 + 0.35 * sin(uTime * 0.9 + fp.x * 0.6 + fp.y * 0.4);
+    totalEmissiveRadiance += vec3(0.10, 1.0, 0.55) * vein * (0.5 + 0.5 * crawl) * 0.9;
+  }
+  if (uIce > 0.5 && topF > 0.5) {
+    totalEmissiveRadiance += uIceEmissive * ${ICE_EMISSIVE_INTENSITY};
+  }
+  totalEmissiveRadiance *= fade;
+}`;
+
+const SURFACE_FRAGMENT_COLOR = `#include <color_fragment>
+{
+  float fade = vStateF.z;
+  float topF = step(0.5, vNrmW.y);
+  float botF = step(0.5, -vNrmW.y);
+  vec3 base;
+  if (vStateF.w > 0.5) {
+    // Tall dark stone pillar: no checker, subtle streaks and horizontal bands.
+    float s = sin(vWorldPos.x * 4.7 + vWorldPos.y * 0.9) * sin(vWorldPos.z * 4.3 - vWorldPos.y * 0.8);
+    float bands = sin(vWorldPos.y * 2.6);
+    base = uPillarColor * (0.82 + 0.18 * s + 0.08 * bands);
+  } else if (topF > 0.5) {
+    // World-space checkerboard: instances tile seamlessly without per-platform UVs.
+    vec2 cell = floor(vWorldPos.xz / ${CHECKER_CELL});
+    float chk = mod(cell.x + cell.y, 2.0);
+    base = mix(uCheckerA, uCheckerB, chk);
+    if (uCrumble > 0.5) {
+      base *= ${CRUMBLE_SHADE};
+      float r1 = abs(sin(vWorldPos.x * 1.9 + sin(vWorldPos.z * 2.3) * 1.7));
+      float r2 = abs(sin(vWorldPos.z * 1.7 + sin(vWorldPos.x * 2.1) * 1.9));
+      float crack = (1.0 - smoothstep(0.0, 0.09, r1)) + (1.0 - smoothstep(0.0, 0.09, r2));
+      base *= 1.0 - clamp(crack, 0.0, 1.0) * 0.5;
     }
-    ctx.stroke();
+  } else if (botF > 0.5) {
+    base = uBottomColor;
+  } else {
+    base = uSideColor;
   }
-  const tex = new CanvasTexture(canvas);
-  tex.wrapS = RepeatWrapping;
-  tex.wrapT = RepeatWrapping;
-  tex.colorSpace = SRGBColorSpace;
-  tex.anisotropy = 4;
-  return tex;
-}
+  if (vStateF.y > 0.5) {
+    base = mix(base, vec3(0.03, 0.10, 0.055), 0.8);
+  }
+  diffuseColor.rgb = base * fade;
+}`;
 
-/** Materials shared by every platform of a theme (textures are module-cached). */
-function createThemeMaterials(theme: Theme, icy: boolean): ThemeMaterials {
-  const textures = themeTextures(theme);
-  const top = makeTopMaterial(theme.tile.light, textures.top ?? null, icy);
-  const side = new MeshStandardMaterial(
-    textures.side
-      ? { map: textures.side, color: icy ? iceTint(SIDE_TINT) : SIDE_TINT, roughness: SIDE_ROUGHNESS }
-      : { color: icy ? iceTint(theme.tile.side) : theme.tile.side, roughness: SIDE_ROUGHNESS },
-  );
-  const bottom = new MeshStandardMaterial({
-    color: icy ? iceTint(theme.tile.dark) : theme.tile.dark,
-    roughness: BOTTOM_ROUGHNESS,
-  });
-  const edgeTrim = new MeshStandardMaterial({
-    color: icy ? iceTint(theme.tile.edge) : theme.tile.edge,
-    emissive: icy ? iceTint(theme.tile.edge) : theme.tile.edge,
-    emissiveIntensity: EDGE_BAR_EMISSIVE,
-    roughness: icy ? 0.2 : 0.4,
-  });
+const SURFACE_FRAGMENT_EMISSIVE = `#include <emissivemap_fragment>
+{
+  float fade = vStateF.z;
+  float topF = step(0.5, vNrmW.y);
+  if (topF > 0.5 && vStateF.w <= 0.5) {
+    vec2 off = vLocalPos.xz * vScaleW.xz;
+    vec2 halfE = vScaleW.xz * 0.5;
+    vec2 dvec = halfE - abs(off);
+    float dEdge = min(dvec.x, dvec.y);
+    float edgeMask = 1.0 - smoothstep(0.0, ${EDGE_WIDTH}, dEdge);
+    totalEmissiveRadiance += uEdgeColor * edgeMask * ${EDGE_INTENSITY};
+  }
+  if (uCrumble > 0.5) {
+    totalEmissiveRadiance += uWarnAmber * ${CRUMBLE_IDLE_EMISSIVE};
+  }
+  ${GLSL_WARN_FRET}
+}`;
+
+const PAD_FRAGMENT_COLOR = `#include <color_fragment>
+{
+  float fade = vStateF.z;
+  vec3 base = uPadBase;
+  if (vStateF.y > 0.5) {
+    base = mix(base, vec3(0.03, 0.10, 0.055), 0.8);
+  }
+  diffuseColor.rgb = base * fade;
+}`;
+
+const PAD_FRAGMENT_EMISSIVE = `#include <emissivemap_fragment>
+{
+  float fade = vStateF.z;
+  float topF = step(0.5, vNrmW.y);
+  if (topF > 0.5) {
+    float pulse = 0.5 + 0.5 * sin(uTime * 2.6);
+    float r = length(vLocalPos.xz);
+    float ringR = 0.26 + 0.05 * pulse;
+    float ring = 1.0 - smoothstep(0.0, 0.035, abs(r - ringR));
+    // Upward chevron (points toward local +Z), bobbing with the pulse.
+    vec2 cp = vec2(vLocalPos.x, vLocalPos.z + 0.06 * sin(uTime * 2.6));
+    float chevD = abs(cp.y + abs(cp.x) * 0.85 - 0.04);
+    float chev = (1.0 - smoothstep(0.02, 0.055, chevD))
+      * (1.0 - smoothstep(0.12, 0.2, abs(cp.x)))
+      * step(-0.24, cp.y) * (1.0 - step(0.14, cp.y));
+    totalEmissiveRadiance += uPadGlow * (ring * (1.3 + 1.4 * pulse) + chev * (2.0 + 0.8 * pulse) + 0.08);
+  }
+  ${GLSL_WARN_FRET}
+}`;
+
+function commonUniforms(theme: Theme, icy: boolean) {
+  const light = icy ? iceTint(theme.tile.light) : theme.tile.light;
+  const side = icy ? iceTint(theme.tile.side || SIDE_TINT) : theme.tile.side || SIDE_TINT;
   return {
-    // BoxGeometry face order: +x, -x, +y, -y, +z, -z.
-    byFace: [side, side, top, bottom, side, side],
-    side,
-    bottom,
-    edgeTrim,
-    crumbleBase: shadeColor(theme.tile.light, CRUMBLE_SHADE),
-    ghostColor: theme.tile.edge,
-    all: [top, side, bottom, edgeTrim],
+    uCheckerA: { value: new Color(light) },
+    uCheckerB: { value: new Color(shadeColor(light, CHECKER_B_SHADE)) },
+    uSideColor: { value: new Color(side) },
+    uBottomColor: { value: new Color(icy ? iceTint(theme.tile.dark) : theme.tile.dark) },
+    uPillarColor: { value: new Color(shadeColor(side, 0.5)) },
+    uEdgeColor: { value: new Color(icy ? iceTint(theme.tile.edge) : theme.tile.edge) },
+    uWarnAmber: { value: new Color(WARN_AMBER) },
+    uWarnRed: { value: new Color(WARN_RED) },
+    uIceEmissive: { value: new Color(ICE_EMISSIVE) },
+    uIce: { value: icy ? 1 : 0 },
   };
 }
 
-function disposeMaterials(materials: ThemeMaterials): void {
-  for (const material of materials.all) {
-    material.dispose();
-  }
+function injectVertex(shader: { vertexShader: string }): void {
+  shader.vertexShader = shader.vertexShader
+    .replace("#include <common>", VERTEX_COMMON)
+    .replace("#include <begin_vertex>", VERTEX_BEGIN);
 }
 
-function PlatformMesh(props: {
-  box: PlatformBoxData;
-  materials: ThemeMaterials;
-  tileState: number | null;
-  icy: boolean;
-}): JSX.Element {
-  const { box, materials, tileState, icy } = props;
-  const crumble = box.kind === PLATFORM_CRUMBLE;
-  const warn = tileState === TILE_WARN;
-  const gone = tileState === TILE_GONE;
-  // World-scaled UVs are memoised per platform box; disposed on change/unmount.
-  const geometry = useMemo(
-    () => worldScaledBoxGeometry(box.size[0], box.size[1], box.size[2]),
-    [box.size],
-  );
-  useEffect(() => () => geometry.dispose(), [geometry]);
+function createSurfaceMaterial(
+  kind: number,
+  theme: Theme,
+  icy: boolean,
+  timeUniform: { value: number },
+): MeshStandardMaterial {
+  const isCrumble = kind === PLATFORM_CRUMBLE;
+  const mat = new MeshStandardMaterial({
+    color: "#ffffff",
+    roughness: icy ? ICE_ROUGHNESS : TOP_ROUGHNESS,
+    metalness: 0,
+    emissive: "#000000",
+  });
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uTime = timeUniform;
+    Object.assign(shader.uniforms, commonUniforms(theme, icy));
+    shader.uniforms.uCrumble = { value: isCrumble ? 1 : 0 };
+    injectVertex(shader);
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", FRAGMENT_COMMON)
+      .replace("#include <color_fragment>", SURFACE_FRAGMENT_COLOR)
+      .replace("#include <emissivemap_fragment>", SURFACE_FRAGMENT_EMISSIVE);
+  };
+  mat.customProgramCacheKey = () => (isCrumble ? "vw-platform-crumble" : "vw-platform-normal");
+  return mat;
+}
 
-  // Crumble platforms get their own cracked top material so TILE_WARN can flash it.
-  const ownTop = useMemo(() => {
-    if (!crumble) return null;
-    const base = icy ? iceTint(materials.crumbleBase) : materials.crumbleBase;
-    const map = createCrackTexture(base);
-    const mat = new MeshStandardMaterial({
-      color: map ? "#ffffff" : base,
-      map,
-      roughness: icy ? ICE_ROUGHNESS : CRUMBLE_ROUGHNESS,
-      emissive: WARN_EMISSIVE,
-      emissiveIntensity: CRUMBLE_IDLE_EMISSIVE,
+function createPadMaterial(timeUniform: { value: number }): MeshStandardMaterial {
+  const mat = new MeshStandardMaterial({
+    color: "#ffffff",
+    roughness: PAD_ROUGHNESS,
+    metalness: 0.35,
+    emissive: "#000000",
+  });
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uTime = timeUniform;
+    shader.uniforms.uPadBase = { value: new Color("#20242c") };
+    shader.uniforms.uPadGlow = { value: new Color("#ffc24b") };
+    shader.uniforms.uWarnAmber = { value: new Color(WARN_AMBER) };
+    shader.uniforms.uWarnRed = { value: new Color(WARN_RED) };
+    shader.uniforms.uIce = { value: 0 };
+    shader.uniforms.uIceEmissive = { value: new Color(ICE_EMISSIVE) };
+    injectVertex(shader);
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", FRAGMENT_COMMON)
+      .replace("#include <color_fragment>", PAD_FRAGMENT_COLOR)
+      .replace("#include <emissivemap_fragment>", PAD_FRAGMENT_EMISSIVE);
+  };
+  mat.customProgramCacheKey = () => "vw-platform-pad";
+  return mat;
+}
+
+function buildGroups(platforms: readonly Platform[], theme: Theme, icy: boolean): BuiltPlatforms {
+  const timeUniform = { value: 0 };
+  const holder = new Group();
+  const records: InstanceRecord[] = [];
+
+  for (const kind of [PLATFORM_NORMAL, PLATFORM_CRUMBLE, PLATFORM_JUMP_PAD]) {
+    const list = platforms.filter((p) => p.kind === kind);
+    const geometry = new BoxGeometry(1, 1, 1);
+    const material =
+      kind === PLATFORM_JUMP_PAD
+        ? createPadMaterial(timeUniform)
+        : createSurfaceMaterial(kind, theme, icy, timeUniform);
+    const count = Math.max(list.length, 1);
+    const mesh = new InstancedMesh(geometry, material, count);
+    mesh.count = list.length;
+    mesh.frustumCulled = false; // instances are spread across the map; bounding sphere of a unit box is wrong
+    mesh.instanceMatrix.setUsage(DynamicDrawUsage);
+    const attr = new InstancedBufferAttribute(new Float32Array(count * 4), 4);
+    attr.setUsage(DynamicDrawUsage);
+    geometry.setAttribute("aState", attr);
+
+    list.forEach((p, i) => {
+      const size = platformSize(p);
+      const center = platformCenter(p);
+      scratchMatrix.makeScale(size[0], size[1], size[2]);
+      scratchMatrix.setPosition(center[0], center[1], center[2]);
+      mesh.setMatrixAt(i, scratchMatrix);
+      const pillar = isPillar(size);
+      attr.setXYZW(i, 0, 0, 1, pillar ? 1 : 0);
+      records.push({
+        id: p.id,
+        center,
+        size,
+        phase: phaseForId(p.id),
+        pillar,
+        mesh,
+        attr,
+        index: i,
+        touched: false,
+        activeFrame: false,
+      });
     });
-    return { mat, map };
-  }, [crumble, icy, materials.crumbleBase]);
-  useEffect(
-    () => () => {
-      ownTop?.mat.dispose();
-      ownTop?.map?.dispose();
-    },
-    [ownTop],
-  );
-  // The crack material is hook-created once per identity change; relay it through a
-  // ref (assigned in an effect) so per-frame emissive tweaks never touch a hook value.
-  const ownTopMatRef = useRef<MeshStandardMaterialType | null>(null);
-  useEffect(() => {
-    ownTopMatRef.current = ownTop?.mat ?? null;
-    return () => {
-      ownTopMatRef.current = null;
-    };
-  }, [ownTop]);
-  const byFace = useMemo(() => {
-    if (!ownTop) return materials.byFace;
-    const faces: [Material, Material, Material, Material, Material, Material] = [
-      materials.side,
-      materials.side,
-      ownTop.mat,
-      materials.bottom,
-      materials.side,
-      materials.side,
-    ];
-    return faces;
-  }, [ownTop, materials]);
+    mesh.instanceMatrix.needsUpdate = true;
+    attr.needsUpdate = true;
+    holder.add(mesh);
+  }
 
-  const innerRef = useRef<Group>(null);
-  const phase = useMemo(() => (box.id * 1.61803398875) % (Math.PI * 2), [box.id]);
+  return { holder, records, timeUniform };
+}
 
-  useFrame((state) => {
-    if (!crumble && !warn) return;
-    const t = state.clock.elapsedTime;
-    const group = innerRef.current;
-    if (group) {
-      if (warn) {
-        group.position.set(
-          box.center[0] + Math.sin(t * 34 + phase) * SHAKE_AMP,
-          box.center[1],
-          box.center[2] + Math.cos(t * 27 + phase) * SHAKE_AMP,
-        );
-      } else if (
-        group.position.x !== box.center[0] ||
-        group.position.y !== box.center[1] ||
-        group.position.z !== box.center[2]
-      ) {
-        group.position.set(box.center[0], box.center[1], box.center[2]);
+function disposeBuilt(built: BuiltPlatforms): void {
+  for (const child of [...built.holder.children]) {
+    if (child instanceof InstancedMesh) {
+      child.geometry.dispose();
+      const material = child.material;
+      if (Array.isArray(material)) {
+        for (const m of material) m.dispose();
+      } else {
+        material.dispose();
       }
     }
-    const ownTopMat = ownTopMatRef.current;
-    if (ownTopMat) {
-      ownTopMat.emissiveIntensity = warn
-        ? 1.05 + Math.sin(t * 9 + phase) * 0.9
-        : CRUMBLE_IDLE_EMISSIVE;
-    }
-  });
-
-  return (
-    <>
-      <group ref={innerRef} position={box.center} visible={!gone}>
-        <mesh geometry={geometry} material={byFace} />
-        {box.edgeBars.map((bar, index) => (
-          <EdgeTrimBar key={index} bar={bar} material={materials.edgeTrim} />
-        ))}
-      </group>
-      {/* Faint ghost outline where a crumbled platform used to be. */}
-      <mesh geometry={geometry} position={box.center} visible={gone}>
-        <meshBasicMaterial
-          color={materials.ghostColor}
-          wireframe
-          transparent
-          opacity={GONE_GHOST_OPACITY}
-          depthWrite={false}
-        />
-      </mesh>
-    </>
-  );
+  }
 }
 
-function EdgeTrimBar(props: { bar: EdgeBarData; material: Material }): JSX.Element {
-  const [x, y, z] = props.bar.size;
-  // World-scaled UVs do not matter for the flat trim bars, so a plain box does.
-  const geometry = useMemo(() => new BoxGeometry(x, y, z), [x, y, z]);
-  useEffect(() => () => geometry.dispose(), [geometry]);
-  return (
-    <mesh geometry={geometry} position={props.bar.position} material={props.material} />
-  );
+function resetRecord(rec: InstanceRecord): void {
+  scratchMatrix.makeScale(rec.size[0], rec.size[1], rec.size[2]);
+  scratchMatrix.setPosition(rec.center[0], rec.center[1], rec.center[2]);
+  rec.mesh.setMatrixAt(rec.index, scratchMatrix);
+  rec.attr.setXYZW(rec.index, 0, 0, 1, rec.pillar ? 1 : 0);
+  rec.mesh.instanceMatrix.needsUpdate = true;
+  rec.attr.needsUpdate = true;
+  rec.touched = false;
 }
 
+/**
+ * Platforms at scale: three InstancedMeshes (one per kind), world-space procedural
+ * checkerboard tops, glowing rim on the top face, dark-stone shader path for tall
+ * thin platforms (pillars). Tile states animate via per-instance matrix/attribute
+ * writes — no geometry rebuilds.
+ */
 export function Platforms(props: {
   platforms: readonly Platform[];
   theme: Theme;
   tiles: readonly TileState[];
   icy: boolean;
 }): JSX.Element {
-  const boxes = useMemo(() => props.platforms.map(toBoxData), [props.platforms]);
-  const tileById = useMemo(() => {
-    const m = new Map<number, number>();
-    for (const tile of props.tiles) m.set(tile.id, tile.state);
-    return m;
-  }, [props.tiles]);
-  // Materials are shared between all platforms and memoised per theme.
-  const materials = useMemo(
-    () => createThemeMaterials(props.theme, props.icy),
-    [props.theme, props.icy],
-  );
-  useEffect(() => () => disposeMaterials(materials), [materials]);
+  const { platforms, theme, tiles, icy } = props;
+  const built = useMemo(() => buildGroups(platforms, theme, icy), [platforms, theme, icy]);
+  const builtRef = useRef<BuiltPlatforms | null>(null);
+  useEffect(() => {
+    builtRef.current = built;
+  }, [built]);
+  useEffect(() => () => disposeBuilt(built), [built]);
 
-  return (
-    <group>
-      {boxes.map((box) => (
-        <PlatformMesh
-          key={box.id}
-          box={box}
-          materials={materials}
-          tileState={tileById.get(box.id) ?? null}
-          icy={props.icy}
-        />
-      ))}
-    </group>
-  );
+  const tilesRef = useRef(tiles);
+  const tileMapRef = useRef(new Map<number, number>());
+  const goneStartRef = useRef(new Map<number, number>());
+  useEffect(() => {
+    tilesRef.current = tiles;
+  }, [tiles]);
+  useEffect(() => {
+    goneStartRef.current.clear();
+  }, [built]);
+
+  useFrame((state) => {
+    const current = builtRef.current;
+    if (!current) return;
+    const now = state.clock.elapsedTime;
+    current.timeUniform.value = now;
+    const tileMap = tileMapRef.current;
+    tileMap.clear();
+    for (const t of tilesRef.current) {
+      tileMap.set(t.id, t.state);
+      if (t.state === TILE_GONE && !goneStartRef.current.has(t.id)) {
+        goneStartRef.current.set(t.id, now);
+      }
+    }
+
+    for (const rec of current.records) {
+      // Per-instance animation bookkeeping on the three.js records built once per level; mutated only here in
+      // useFrame (never during render), which is the intended R3F pattern.
+      // eslint-disable-next-line react-hooks/immutability
+      rec.activeFrame = false;
+      const t = tileMap.get(rec.id);
+      if (t !== TILE_WARN && t !== TILE_FRETTED && t !== TILE_GONE) continue;
+
+      let ox = 0;
+      let oz = 0;
+      let sink = 0;
+      let fade = 1;
+      let hide = false;
+      if (t === TILE_WARN) {
+        ox = Math.sin(now * 34 + rec.phase) * SHAKE_AMP;
+        oz = Math.cos(now * 27 + rec.phase) * SHAKE_AMP;
+      }
+      if (t === TILE_GONE) {
+        const start = goneStartRef.current.get(rec.id) ?? now;
+        const k = Math.min(1, Math.max(0, (now - start) / GONE_SINK_TIME));
+        sink = k * k * (GONE_SINK_DEPTH + rec.size[1]);
+        fade = 1 - k;
+        if (k >= 1) {
+          fade = 0;
+          hide = true;
+        }
+      }
+
+      if (hide) {
+        scratchMatrix.makeScale(0.0001, 0.0001, 0.0001);
+      } else {
+        scratchMatrix.makeScale(rec.size[0], rec.size[1], rec.size[2]);
+      }
+      scratchMatrix.setPosition(rec.center[0] + ox, rec.center[1] - sink, rec.center[2] + oz);
+      rec.mesh.setMatrixAt(rec.index, scratchMatrix);
+      rec.attr.setXYZW(rec.index, t === TILE_WARN ? 1 : 0, t === TILE_FRETTED ? 1 : 0, fade, rec.pillar ? 1 : 0);
+      rec.mesh.instanceMatrix.needsUpdate = true;
+      rec.attr.needsUpdate = true;
+      rec.touched = true;
+      rec.activeFrame = true;
+    }
+    for (const rec of current.records) {
+      if (rec.touched && !rec.activeFrame) resetRecord(rec);
+    }
+  });
+
+  return <primitive object={built.holder} />;
 }

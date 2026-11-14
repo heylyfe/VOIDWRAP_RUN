@@ -56,12 +56,27 @@ pub const GLIDE_FALL_SPEED: f32 = 3.0;
 /// CLASS_GLIDER: multiplier applied to the horizontal air-speed limit while gliding.
 pub const GLIDE_AIR_SPEED_MUL: f32 = 1.15;
 
-/// CLASS_BULWARK: horizontal teleport distance (units).
-pub const BLINK_DISTANCE: f32 = 6.0;
-/// CLASS_BULWARK: sweep step while searching for a free position (units of travel per sample).
-pub const BLINK_SWEEP_STEP: f32 = 0.25;
-/// CLASS_BULWARK: frames the visual flash lasts after a blink.
-pub const BLINK_FLASH_FRAMES: u8 = 6;
+/// CLASS_BULWARK: braced wind-up frames before the ward goes active (~0.13 s at 60 Hz).
+pub const BULWARK_WINDUP_FRAMES: u8 = 8;
+/// CLASS_BULWARK: frames the ward lasts once active (1.6 s at 60 Hz).
+pub const BULWARK_WARD_FRAMES: u16 = 96;
+/// CLASS_BULWARK: total ability cooldown counted from cast start (16.0 s at 60 Hz).
+pub const BULWARK_COOLDOWN_FRAMES: u16 = 960;
+/// CLASS_BULWARK: highest cooldown a tuned multiplier may produce (base * TUNING_MUL_MAX).
+pub const BULWARK_COOLDOWN_MAX_FRAMES: u16 = 2880;
+
+/// PLATFORM_JUMP_PAD: vertical launch velocity applied on contact (units/s).
+pub const PAD_LAUNCH_VEL: f32 = 16.0;
+/// PLATFORM_JUMP_PAD: multiplier applied to horizontal velocity on launch.
+pub const PAD_HORIZONTAL_VEL_MUL: f32 = 0.6;
+
+/// TILE_FRETTED: multiplier applied to the ground run speed while standing on a fretted platform.
+pub const FRETTED_SPEED_MUL: f32 = 0.6;
+
+/// Amendment A2: maximum height of a ledge the controller steps up automatically (units).
+pub const STEP_HEIGHT: f32 = 0.55;
+/// Amendment A7: spatial grid cell size for collision queries (units, XZ plane).
+pub const GRID_CELL: f32 = 8.0;
 
 /// CLASS_GRAPPLER: maximum distance from the feet to a grapple target (units).
 pub const GRAPPLE_RANGE: f32 = 14.0;

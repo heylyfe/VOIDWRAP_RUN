@@ -118,8 +118,31 @@ fn effective_class(class: u8) -> u8 {
 /// malformed tuning can never produce a non-finite or absurd step. `friction_mul`
 /// is clamped to [`FRICTION_MUL_MIN`]..=[`TUNING_MUL_MAX`] (NaN becomes 1.0).
 ///
-/// On a frame in which a blink actually happens, gravity and normal horizontal
-/// movement are not applied; the teleport is the frame's only horizontal movement.
+/// M3 additions (see the module docs):
+/// - CLASS_BULWARK no longer blinks. A grounded BTN_ABILITY press starts an
+///   8-frame wind-up (immobile); when the wind-up counter reaches zero the ward
+///   begins: `ward_frames` is set to [`BULWARK_WARD_FRAMES`] and counts down one
+///   frame per step. During the ward the player is rooted (horizontal velocity
+///   held at zero, `vel.y` pinned to 0, gravity off, no jump/dash/ability).
+///   `ward_frames > 0` is read by the server for the radial pulse and immunity;
+///   [`bulwark_pulse_frame`] reports the frame the ward begins. The ability
+///   cooldown ([`BULWARK_COOLDOWN_FRAMES`], scaled by the dash-cooldown
+///   multiplier and clamped) starts at cast start.
+/// - While `stagger_frames > 0` (set by the server together with a knockback
+///   velocity) move input, jump, ability and dash are ignored, gravity and
+///   collision apply normally and the current velocity is kept (ground friction
+///   still applies, approaching zero); the counter decrements each frame.
+/// - PLATFORM_JUMP_PAD platforms stay solid; landing on (or resting on) one
+///   sets `vel.y = PAD_LAUNCH_VEL` and scales horizontal velocity by
+///   [`PAD_HORIZONTAL_VEL_MUL`], once per contact.
+/// - Step-up (amendment A2): a horizontal move blocked by a solid platform
+///   whose top is at most [`STEP_HEIGHT`] above the feet is turned into a step
+///   up onto it (horizontal motion is kept), only when grounded or within
+///   coyote frames and only if the player box fits at the new height.
+/// - TILE_FRETTED platforms stay solid; while standing on one the ground run
+///   speed is multiplied by [`FRETTED_SPEED_MUL`] and BTN_ABILITY is ignored.
+/// - Collision and ground queries only test platforms in the grid cells
+///   overlapped by the (swept) player box; results are identical to brute force.
 pub fn step_with(state: &mut ControllerState, input: &InputFrame, world: &World, tuning: &Tuning) {
     let was_grounded = state.grounded;
     let class = effective_class(state.class);
@@ -132,6 +155,7 @@ pub fn step_with(state: &mut ControllerState, input: &InputFrame, world: &World,
     let gravity = GRAVITY * clamp_mul(tuning.gravity_mul);
     let dash_speed = DASH_SPEED * clamp_mul(tuning.dash_speed_mul);
     let ability_cooldown = tuned_dash_cooldown(clamp_mul(tuning.dash_cooldown_mul));
+    let bulwark_cooldown = tuned_bulwark_cooldown(tuning.dash_cooldown_mul);
     let tuning_air_jumps = tuning.air_jumps.min(TUNING_AIR_JUMPS_MAX);
     let air_jumps = if class == CLASS_GLIDER {
         (tuning_air_jumps + GLIDER_BONUS_AIR_JUMPS).min(TUNING_AIR_JUMPS_MAX + GLIDER_BONUS_AIR_JUMPS)
@@ -142,42 +166,79 @@ pub fn step_with(state: &mut ControllerState, input: &InputFrame, world: &World,
 
     // 1. Timers and button edges.
     state.ability_cooldown_frames = state.ability_cooldown_frames.saturating_sub(1);
+    let staggered = state.stagger_frames > 0;
+    state.stagger_frames = state.stagger_frames.saturating_sub(1);
+    // CLASS_BULWARK: `ability_active_frames` is the wind-up counter; `ward_frames`
+    // is the ward countdown. They are disjoint (the ward starts when the wind-up
+    // reaches zero; see section 7).
+    let warding = state.ward_frames > 0;
+    let winding_up = class == CLASS_BULWARK && !warding && state.ability_active_frames > 0;
+    let rooted = warding || winding_up;
+    let jump_locked = rooted || staggered;
     let jump_pressed = input.buttons & BTN_JUMP != 0 && state.prev_buttons & BTN_JUMP == 0;
     let ability_pressed = input.buttons & BTN_ABILITY != 0 && state.prev_buttons & BTN_ABILITY == 0;
-    if jump_pressed {
+    if jump_pressed && !jump_locked {
         state.jump_buffer_frames = JUMP_BUFFER_FRAMES;
     }
-    let (wx, wz) = wish_dir(input);
+    let (mut wx, mut wz) = wish_dir(input);
+    if staggered {
+        // A knockback shove: the wish direction is ignored entirely.
+        wx = 0.0;
+        wz = 0.0;
+    }
+
+    // Fretted-tile lock: computed from the feet as they were at the end of the
+    // previous frame (same convention as `state.grounded`).
+    let fretted_standing = standing_on_fretted(state, world);
 
     // A BTN_JUMP rising edge ends an active grapple. The normal jump path below
     // still runs, so the same press performs a jump if one is available.
-    if jump_pressed && class == CLASS_GRAPPLER && state.ability_active_frames > 0 {
+    if jump_pressed && !jump_locked && class == CLASS_GRAPPLER && state.ability_active_frames > 0 {
         state.ability_active_frames = 0;
     }
 
-    // 2. Ability start (class-dependent).
-    let mut blinked = false;
-    if ability_pressed && state.ability_cooldown_frames == 0 && state.ability_active_frames == 0 {
+    // 2. Ability start (class-dependent). Stagger, the ward/wind-up and a
+    // fretted platform all swallow BTN_ABILITY (no ability starts, no cooldown).
+    let ability_locked = rooted || staggered || fretted_standing;
+    if ability_pressed && !ability_locked && state.ability_cooldown_frames == 0 && state.ability_active_frames == 0 {
         match class {
             CLASS_STRIKER => {
                 state.ability_dir = dash_dir(wx, wz, &state.vel);
                 state.ability_active_frames = DASH_FRAMES;
                 state.ability_cooldown_frames = ability_cooldown;
             }
-            CLASS_BULWARK => blinked = blink(state, input, world, ability_cooldown),
+            CLASS_BULWARK => {
+                // Grounded-only cast: a braced wind-up starts, the cooldown
+                // counts from cast start. Airborne presses do nothing.
+                if state.grounded {
+                    state.ability_active_frames = BULWARK_WINDUP_FRAMES;
+                    state.ability_cooldown_frames = bulwark_cooldown;
+                }
+            }
             CLASS_GRAPPLER => try_grapple(state, input, world, ability_cooldown),
             _ => {} // CLASS_GLIDER: BTN_ABILITY is a hold-to-glide, not a press action
         }
     }
 
+    // Recompute the rooted/wind-up state AFTER the ability start so a cast that
+    // started this frame already roots the player for the rest of the step
+    // (jump, vertical and horizontal velocity, collision), instead of one frame
+    // later. A cast cannot be locked out by the state it sets up (the
+    // ability-lock above deliberately uses the pre-cast state); from here on the
+    // cast frame is an immobile wind-up frame like any other.
+    let warding = state.ward_frames > 0;
+    let winding_up = class == CLASS_BULWARK && !warding && state.ability_active_frames > 0;
+    let rooted = warding || winding_up;
+    let jump_locked = rooted || staggered;
+
     // 3. Jump: consume the buffer on the first step a jump is allowed.
-    if state.jump_buffer_frames > 0 && (state.grounded || state.coyote_frames > 0) {
+    if !jump_locked && state.jump_buffer_frames > 0 && (state.grounded || state.coyote_frames > 0) {
         state.vel.y = jump_velocity;
         state.grounded = false;
         state.coyote_frames = 0;
         state.jump_buffer_frames = 0;
         state.ability_active_frames = 0; // jumping cancels a dash/grapple
-    } else if state.jump_buffer_frames > 0 && state.air_jumps_used < air_jumps {
+    } else if !jump_locked && state.jump_buffer_frames > 0 && state.air_jumps_used < air_jumps {
         // Air jump: only reachable when the ground/coyote rules said no. Coyote
         // jumps take the branch above and therefore never spend an air jump.
         state.vel.y = jump_velocity;
@@ -194,8 +255,10 @@ pub fn step_with(state: &mut ControllerState, input: &InputFrame, world: &World,
 
     // Grapple pull: decide whether a grapple in flight keeps driving velocity
     // this frame. The stored `ability_dir` is the target POINT, not a unit axis.
+    // A shove (stagger) or the ward takes the velocity away from the grapple.
+    let grapple_locked = rooted || staggered;
     let mut grappling = false;
-    if class == CLASS_GRAPPLER && state.ability_active_frames > 0 {
+    if !grapple_locked && class == CLASS_GRAPPLER && state.ability_active_frames > 0 {
         let target = state.ability_dir.clone();
         let dx = target.x - state.pos.x;
         let dy = target.y - state.pos.y;
@@ -210,26 +273,29 @@ pub fn step_with(state: &mut ControllerState, input: &InputFrame, world: &World,
         }
     }
 
-    let dashing = class == CLASS_STRIKER && state.ability_active_frames > 0;
+    // A stagger interrupts the dash's velocity override; the counter still
+    // ticks down in section 7 and simply expires.
+    let dashing = class == CLASS_STRIKER && state.ability_active_frames > 0 && !staggered;
 
     // 4. Vertical velocity. Terminal fall speed is deliberately not tuned.
     if grappling {
         // Velocity was fully set by the grapple; no gravity or jump cut applies.
+    } else if rooted {
+        // The ward hovers in place: gravity is off.
+        state.vel.y = 0.0;
     } else if dashing {
         state.vel.y = 0.0;
-    } else if blinked {
-        // The blink already set vel.y = max(vel.y, 0.0); gravity must not be
-        // applied in the frame of the blink.
     } else {
         state.vel.y = (state.vel.y - gravity * DT).max(-MAX_FALL_SPEED);
-        if class == CLASS_GLIDER
+        if !jump_locked
+            && class == CLASS_GLIDER
             && !state.grounded
             && input.buttons & BTN_ABILITY != 0
             && state.vel.y < -GLIDE_FALL_SPEED
         {
             state.vel.y = -GLIDE_FALL_SPEED;
         }
-        if input.buttons & BTN_JUMP == 0 && state.vel.y > 0.0 {
+        if !jump_locked && input.buttons & BTN_JUMP == 0 && state.vel.y > 0.0 {
             state.vel.y = state.vel.y.min(JUMP_CUT_VELOCITY);
         }
     }
@@ -237,14 +303,28 @@ pub fn step_with(state: &mut ControllerState, input: &InputFrame, world: &World,
     // 5. Horizontal velocity (instant, ground and air; friction scales ground response).
     if grappling {
         // Velocity was fully set by the grapple.
+    } else if rooted {
+        // The ward/wind-up holds the player in place horizontally.
+        state.vel.x = 0.0;
+        state.vel.z = 0.0;
     } else if dashing {
         state.vel.x = state.ability_dir.x * dash_speed;
         state.vel.z = state.ability_dir.z * dash_speed;
-    } else if blinked {
-        // The blink is the frame's only horizontal movement.
+    } else if staggered {
+        if state.grounded {
+            // Only ground friction remains, approaching a full stop.
+            state.vel.x = approach_ground(state.vel.x, 0.0, friction);
+            state.vel.z = approach_ground(state.vel.z, 0.0, friction);
+        }
+        // Airborne: the shove velocity is kept untouched.
     } else if state.grounded {
-        state.vel.x = approach_ground(state.vel.x, wx * run_speed, friction);
-        state.vel.z = approach_ground(state.vel.z, wz * run_speed, friction);
+        let max_speed = if fretted_standing {
+            run_speed * FRETTED_SPEED_MUL
+        } else {
+            run_speed
+        };
+        state.vel.x = approach_ground(state.vel.x, wx * max_speed, friction);
+        state.vel.z = approach_ground(state.vel.z, wz * max_speed, friction);
     } else {
         let mut target_x = wx * run_speed;
         let mut target_z = wz * run_speed;
@@ -256,12 +336,10 @@ pub fn step_with(state: &mut ControllerState, input: &InputFrame, world: &World,
         state.vel.z = target_z;
     }
 
-    // 6. Collide, one axis at a time. A blink frame performs no normal horizontal movement.
+    // 6. Collide, one axis at a time. Jump pads never block movement.
     let landed = move_axis(state, world, Axis::Y, state.vel.y * DT);
-    if !blinked {
-        move_axis(state, world, Axis::X, state.vel.x * DT);
-        move_axis(state, world, Axis::Z, state.vel.z * DT);
-    }
+    move_axis(state, world, Axis::X, state.vel.x * DT);
+    move_axis(state, world, Axis::Z, state.vel.z * DT);
 
     // 7. Grounded & coyote refresh.
     state.grounded = landed || resting_on_solid(state, world);
@@ -273,7 +351,24 @@ pub fn step_with(state: &mut ControllerState, input: &InputFrame, world: &World,
         // walks off a ledge still leaves the whole window available.
         state.coyote_frames = state.coyote_frames.saturating_sub(1);
     }
+    // Jump pads: launching overrides the grounded state for this frame.
+    // Once per contact: after the launch the player is airborne (vel.y > 0),
+    // so the launch cannot re-trigger until the next landing.
+    if launch_pad_if_contact(state, world, dashing || grappling || rooted) {
+        state.grounded = false;
+        state.coyote_frames = 0;
+    }
+    // CLASS_BULWARK: the frame the wind-up counter reaches zero the ward begins
+    // (this is the frame `bulwark_pulse_frame` reports). Afterwards the ward
+    // counts down one frame per step.
+    let windup_done =
+        class == CLASS_BULWARK && state.ward_frames == 0 && state.ability_active_frames == 1;
     state.ability_active_frames = state.ability_active_frames.saturating_sub(1);
+    if windup_done {
+        state.ward_frames = BULWARK_WARD_FRAMES;
+    } else if state.ward_frames > 0 {
+        state.ward_frames = state.ward_frames.saturating_sub(1);
+    }
 
     // 8. Remember buttons for edge detection.
     state.prev_buttons = input.buttons;
@@ -371,41 +466,21 @@ fn aim_dir(wx: f32, wz: f32, vel: &Vec3) -> Option<Vec3> {
     None
 }
 
-/// True when `bounds` overlap any currently solid platform.
+/// True when `bounds` overlap any currently solid platform. Only the platforms
+/// in the grid cells overlapped by `bounds` are tested.
 fn overlaps_any_solid(world: &World, bounds: &Aabb) -> bool {
-    world.solids.iter().any(|solid| overlaps(bounds, solid))
+    world
+        .solid_candidates(bounds.min.x, bounds.min.z, bounds.max.x, bounds.max.z)
+        .into_iter()
+        .any(|index| match world.solid_bounds(index) {
+            Some(solid) => overlaps(bounds, solid),
+            None => false,
+        })
 }
 
-/// CLASS_BULWARK: teleport up to `BLINK_DISTANCE` horizontally in the input
-/// direction (or the horizontal velocity) sweeping in [`BLINK_SWEEP_STEP`]
-/// increments. Stops at the last position whose player box overlaps no solid
-/// platform. With no direction nothing happens and no cooldown starts.
-///
-/// Returns `true` when a blink happened. The caller skips gravity and normal
-/// horizontal movement for that frame, so the teleport distance is exact.
-fn blink(state: &mut ControllerState, input: &InputFrame, world: &World, cooldown: u16) -> bool {
-    let (wx, wz) = wish_dir(input);
-    let Some(dir) = aim_dir(wx, wz, &state.vel) else {
-        return false; // no direction: nothing happens, no cooldown
-    };
-    // BLINK_DISTANCE and BLINK_SWEEP_STEP are exact multiples (24 steps of 0.25).
-    let steps = (BLINK_DISTANCE / BLINK_SWEEP_STEP) as u32;
-    let mut last = state.pos.clone();
-    for i in 1..=steps {
-        let d = BLINK_SWEEP_STEP * i as f32;
-        let candidate = Vec3::new(state.pos.x + dir.x * d, state.pos.y, state.pos.z + dir.z * d);
-        if overlaps_any_solid(world, &player_box(&candidate)) {
-            break; // never tunnel through walls
-        }
-        last = candidate;
-    }
-    state.pos = last;
-    state.vel.y = state.vel.y.max(0.0);
-    state.ability_active_frames = BLINK_FLASH_FRAMES;
-    state.ability_dir = dir;
-    state.ability_cooldown_frames = cooldown;
-    true
-}
+// CLASS_BULWARK no longer blinks (M3): the blink was replaced by the braced
+// wind-up and the ward. Intentionally deleted; see `bulwark_pulse_frame` and
+// the CLASS_BULWARK arm in `step_with`.
 
 /// CLASS_GRAPPLER: pick a grapple target automatically and begin the pull.
 ///
@@ -488,7 +563,10 @@ fn resting_on_solid(state: &ControllerState, world: &World) -> bool {
         return false;
     }
     let b = player_box(&state.pos);
-    for solid in &world.solids {
+    for index in world.solid_candidates(b.min.x, b.min.z, b.max.x, b.max.z) {
+        let Some(solid) = world.solid_bounds(index) else {
+            continue;
+        };
         let overlaps_xz =
             b.min.x < solid.max.x && b.max.x > solid.min.x && b.min.z < solid.max.z && b.max.z > solid.min.z;
         if overlaps_xz && (state.pos.y - solid.max.y).abs() <= GROUND_EPSILON {
@@ -523,6 +601,16 @@ fn set(v: &mut Vec3, a: Axis, value: f32) {
 
 /// Moves along one axis, stopping flush against the first solid hit.
 /// Returns true if the move was a downward move that landed on something.
+///
+/// Amendment A2 (step-up): a horizontal move blocked by a solid platform whose
+/// top is at most [`STEP_HEIGHT`] above the feet is turned into a step up onto
+/// that platform (the player is raised so the feet rest on the top), keeping
+/// horizontal motion. This happens only when the player is grounded or within
+/// coyote frames and only when the player box fits at the new height.
+///
+/// Only platforms in the grid cells overlapped by the swept player box are
+/// tested; the iteration order matches platform order, so the result is
+/// identical to brute force.
 fn move_axis(state: &mut ControllerState, world: &World, axis: Axis, delta: f32) -> bool {
     if delta == 0.0 {
         return false;
@@ -530,11 +618,33 @@ fn move_axis(state: &mut ControllerState, world: &World, axis: Axis, delta: f32)
     let mut pos = state.pos.clone();
     let target = get(&pos, axis) + delta;
     set(&mut pos, axis, target);
+    // Swept box (XZ) used to pick candidate platforms from the spatial grid.
+    let start_box = player_box(&state.pos);
+    let end_box = player_box(&pos);
+    let min_x = start_box.min.x.min(end_box.min.x);
+    let max_x = start_box.max.x.max(end_box.max.x);
+    let min_z = start_box.min.z.min(end_box.min.z);
+    let max_z = start_box.max.z.max(end_box.max.z);
     let mut hit = false;
-    for solid in &world.solids {
+    for index in world.solid_candidates(min_x, min_z, max_x, max_z) {
+        let Some(solid) = world.solid_bounds(index) else {
+            continue;
+        };
         let b = player_box(&pos);
         if !overlaps(&b, solid) {
             continue;
+        }
+        // Step-up attempt for horizontal moves only.
+        if matches!(axis, Axis::X | Axis::Z) && (state.grounded || state.coyote_frames > 0) {
+            let feet = pos.y;
+            let top = solid.max.y;
+            if top > feet && top - feet <= STEP_HEIGHT {
+                let stepped = Vec3::new(pos.x, top, pos.z);
+                if !overlaps_any_solid(world, &player_box(&stepped)) {
+                    pos = stepped; // step up; horizontal motion is kept
+                    continue;
+                }
+            }
         }
         hit = true;
         // Push back flush against the face we entered through.
@@ -584,16 +694,25 @@ mod tests {
     }
 
     /// A large flat slab with no edges, for tests that must not fall off.
-    fn flat_world() -> World {
-        World {
-            solids: vec![Aabb {
-                min: Vec3::new(-100.0, -1.0, -100.0),
-                max: Vec3::new(100.0, 0.0, 100.0),
-            }],
+    pub(super) fn flat_world() -> World {
+        World::from_level(&LevelData {
+            level: 1,
+            seed: 1,
+            spawn: Vec3::ZERO,
+            beacon: Vec3::new(0.0, 0.0, 30.0),
             kill_y: -200.0,
-            platforms: vec![],
-            gone: vec![],
-        }
+            platforms: vec![Platform {
+                id: 1,
+                kind: PLATFORM_NORMAL,
+                bounds: Aabb {
+                    min: Vec3::new(-100.0, -1.0, -100.0),
+                    max: Vec3::new(100.0, 0.0, 100.0),
+                },
+            }],
+            gifts: vec![],
+            event: EVENT_NONE,
+            altars: vec![],
+        })
     }
 
     /// Two candidate grapple platforms over a void, id 3 above id 5.
@@ -928,16 +1047,25 @@ mod tests {
 
     #[test]
     fn terminal_fall_lands_on_thin_slab() {
-        let slab = Aabb {
-            min: Vec3::new(-10.0, -1.0, -10.0),
-            max: Vec3::new(10.0, 0.0, 10.0),
-        };
-        let w = World {
-            solids: vec![slab],
+        let level = LevelData {
+            level: 1,
+            seed: 1,
+            spawn: Vec3::ZERO,
+            beacon: Vec3::new(0.0, 0.0, 30.0),
             kill_y: -30.0,
-            platforms: vec![],
-            gone: vec![],
+            platforms: vec![Platform {
+                id: 1,
+                kind: PLATFORM_NORMAL,
+                bounds: Aabb {
+                    min: Vec3::new(-10.0, -1.0, -10.0),
+                    max: Vec3::new(10.0, 0.0, 10.0),
+                },
+            }],
+            gifts: vec![],
+            event: EVENT_NONE,
+            altars: vec![],
         };
+        let w = World::from_level(&level);
         let mut s = spawn_state(Vec3::new(0.0, 40.0, 0.0));
         for i in 0..400 {
             step(&mut s, &idle(i), &w);
@@ -949,21 +1077,31 @@ mod tests {
 
     #[test]
     fn wall_stops_flush_and_does_not_ground() {
-        let wall = Aabb {
-            min: Vec3::new(5.0, -10.0, -5.0),
-            max: Vec3::new(6.0, 10.0, 5.0),
-        };
-        let w = World {
-            solids: vec![wall.clone()],
+        let level = LevelData {
+            level: 1,
+            seed: 1,
+            spawn: Vec3::ZERO,
+            beacon: Vec3::new(0.0, 0.0, 30.0),
             kill_y: -100.0,
-            platforms: vec![],
-            gone: vec![],
+            platforms: vec![Platform {
+                id: 1,
+                kind: PLATFORM_NORMAL,
+                bounds: Aabb {
+                    min: Vec3::new(5.0, -10.0, -5.0),
+                    max: Vec3::new(6.0, 10.0, 5.0),
+                },
+            }],
+            gifts: vec![],
+            event: EVENT_NONE,
+            altars: vec![],
         };
+        let w = World::from_level(&level);
+        let wall_min_x = 5.0;
         let mut s = spawn_state(Vec3::new(0.0, 5.0, 0.0));
         for i in 0..40 {
             step(&mut s, &run_x(i, 0), &w);
         }
-        assert_eq!(s.pos.x, wall.min.x - PLAYER_HALF_WIDTH);
+        assert_eq!(s.pos.x, wall_min_x - PLAYER_HALF_WIDTH);
         assert!(!s.grounded);
     }
 
@@ -1244,97 +1382,20 @@ mod tests {
         assert_eq!(striker, unknown, "unknown class must behave exactly like CLASS_STRIKER");
     }
 
-    #[test]
-    fn blinker_teleports_up_to_blink_distance() {
-        let w = flat_world();
-        let mut s = spawn_state(Vec3::ZERO);
-        s.class = CLASS_BULWARK;
-        step_with(&mut s, &idle(0), &w, &Tuning::default());
-        assert!(s.grounded);
-        step_with(&mut s, &run_x(1, BTN_ABILITY), &w, &Tuning::default());
-        assert!(
-            (s.pos.x - BLINK_DISTANCE).abs() < 1e-4,
-            "blink must teleport BLINK_DISTANCE, got {}",
-            s.pos.x
-        );
-        // The counter is set and then decremented within the same step.
-        assert_eq!(s.ability_active_frames, BLINK_FLASH_FRAMES - 1);
-        assert_eq!(s.ability_dir, Vec3::new(1.0, 0.0, 0.0));
-        assert_eq!(s.ability_cooldown_frames, DASH_COOLDOWN_FRAMES);
-    }
+// Deleted in M3: CLASS_BULWARK no longer blinks. Replaced by the bulwark tests
+// in `m3_tests`.
 
-    #[test]
-    fn blink_stops_at_last_free_position() {
-        let floor = Aabb {
-            min: Vec3::new(-50.0, -1.0, -50.0),
-            max: Vec3::new(50.0, 0.0, 50.0),
-        };
-        let wall = Aabb {
-            min: Vec3::new(3.0, -10.0, -5.0),
-            max: Vec3::new(4.0, 10.0, 5.0),
-        };
-        let w = World {
-            solids: vec![floor, wall],
-            kill_y: -100.0,
-            platforms: vec![],
-            gone: vec![],
-        };
-        let mut s = spawn_state(Vec3::ZERO);
-        s.class = CLASS_BULWARK;
-        step_with(&mut s, &idle(0), &w, &Tuning::default());
-        assert!(s.grounded);
-        step_with(&mut s, &run_x(1, BTN_ABILITY), &w, &Tuning::default());
-        // Box half-width 0.4; wall starts at x = 3.0 → last free sample is 2.5.
-        assert!(
-            (s.pos.x - 2.5).abs() < 1e-4,
-            "blink must stop before the wall, got {}",
-            s.pos.x
-        );
-        assert_eq!(s.ability_active_frames, BLINK_FLASH_FRAMES - 1);
-        assert_eq!(s.ability_cooldown_frames, DASH_COOLDOWN_FRAMES);
-    }
+// Deleted in M3: CLASS_BULWARK no longer blinks. Replaced by the bulwark tests
+// in `m3_tests`.
 
-    #[test]
-    fn blinker_with_no_direction_does_nothing() {
-        let w = flat_world();
-        let mut s = spawn_state(Vec3::ZERO);
-        s.class = CLASS_BULWARK;
-        step_with(&mut s, &idle(0), &w, &Tuning::default());
-        let before = s.pos.clone();
-        step_with(&mut s, &input(1, 0, 0, BTN_ABILITY), &w, &Tuning::default());
-        assert_eq!(s.pos, before, "no input and no velocity means no blink");
-        assert_eq!(s.ability_cooldown_frames, 0, "no cooldown starts without a direction");
-        assert_eq!(s.ability_active_frames, 0);
-    }
+// Deleted in M3: CLASS_BULWARK no longer blinks. Replaced by the bulwark tests
+// in `m3_tests`.
 
-    #[test]
-    fn blink_uses_horizontal_velocity_when_no_input() {
-        let w = flat_world();
-        let mut s = spawn_state(Vec3::ZERO);
-        s.class = CLASS_BULWARK;
-        for i in 0..3 {
-            step_with(&mut s, &run_x(i, 0), &w, &Tuning::default());
-        }
-        assert!(s.vel.x > 0.0);
-        step_with(&mut s, &input(3, 0, 0, BTN_ABILITY), &w, &Tuning::default());
-        assert_eq!(s.ability_dir, Vec3::new(1.0, 0.0, 0.0));
-        // The counter is set and then decremented within the same step.
-        assert_eq!(s.ability_active_frames, BLINK_FLASH_FRAMES - 1);
-        assert_eq!(s.ability_cooldown_frames, DASH_COOLDOWN_FRAMES);
-    }
+// Deleted in M3: CLASS_BULWARK no longer blinks. Replaced by the bulwark tests
+// in `m3_tests`.
 
-    #[test]
-    fn blink_clamps_negative_fall_speed_to_zero() {
-        let w = flat_world();
-        let mut s = spawn_state(Vec3::new(0.0, 30.0, 0.0));
-        s.class = CLASS_BULWARK;
-        for i in 0..5 {
-            step_with(&mut s, &idle(i), &w, &Tuning::default());
-        }
-        assert!(s.vel.y < 0.0);
-        step_with(&mut s, &input(5, 127, 0, BTN_ABILITY), &w, &Tuning::default());
-        assert_eq!(s.vel.y, 0.0, "a blink must not leave the player falling");
-    }
+// Deleted in M3: CLASS_BULWARK no longer blinks. Replaced by the bulwark tests
+// in `m3_tests`.
 
     #[test]
     fn grapple_picks_nearest_valid_platform_and_lands_on_it() {
@@ -1663,5 +1724,771 @@ mod tests {
         assert_eq!(base, DASH_COOLDOWN_FRAMES);
         // 45 * 0.5 = 22.5 rounds half-up to 23.
         assert_eq!(halved, DASH_COOLDOWN_FRAMES.div_ceil(2));
+    }
+}
+
+
+/// CLASS_BULWARK: true on the frame the ward begins.
+///
+/// The wind-up runs `BULWARK_WINDUP_FRAMES` frames after a grounded cast; on
+/// the frame it completes (`ward_frames` set to `BULWARK_WARD_FRAMES` at the end
+/// of the step) this function returns true. The rooted ward physics apply from
+/// the following frame for exactly `BULWARK_WARD_FRAMES` frames. The server
+/// calls this after each step to trigger the radial pulse; the immunity applies
+/// while `ward_frames > 0`.
+pub fn bulwark_pulse_frame(state: &ControllerState) -> bool {
+    state.ward_frames == BULWARK_WARD_FRAMES
+}
+
+/// Ability cooldown in frames for the RAW `Tuning::dash_cooldown_mul`
+/// (*not* pre-clamped to [`TUNING_MUL_MIN`] like [`tuned_dash_cooldown`]).
+///
+/// The cooldown is scaled by the raw multiplier (NaN maps to the neutral 1.0,
+/// a negative multiplier clamps to 0.0 and the upper bound is
+/// [`TUNING_MUL_MAX`]); only the *result* is clamped to
+/// [`DASH_COOLDOWN_MIN_FRAMES`]..=[`BULWARK_COOLDOWN_MAX_FRAMES`]. Same
+/// round-half-up rule as [`tuned_dash_cooldown`]. With a multiplier of 0.0 the
+/// result is therefore [`DASH_COOLDOWN_MIN_FRAMES`], not 960 * TUNING_MUL_MIN.
+fn tuned_bulwark_cooldown(mul: f32) -> u16 {
+    let mul = if mul >= 0.0 {
+        mul.clamp(0.0, TUNING_MUL_MAX)
+    } else if mul <= TUNING_MUL_MAX {
+        0.0
+    } else {
+        1.0 // NaN
+    };
+    let scaled = BULWARK_COOLDOWN_FRAMES as f32 * mul;
+    let rounded = (scaled + 0.5) as u16;
+    rounded.clamp(DASH_COOLDOWN_MIN_FRAMES, BULWARK_COOLDOWN_MAX_FRAMES)
+}
+
+/// Index of the solid platform the player is standing on (feet within
+/// [`GROUND_EPSILON`] of its top and overlapping it in x/z), or `None` when not
+/// standing. Returns `None` while moving upwards.
+fn standing_platform(state: &ControllerState, world: &World) -> Option<usize> {
+    if state.vel.y > 0.0 {
+        return None;
+    }
+    let b = player_box(&state.pos);
+    for index in world.solid_candidates(b.min.x, b.min.z, b.max.x, b.max.z) {
+        let Some(solid) = world.solid_bounds(index) else {
+            continue;
+        };
+        let overlaps_xz =
+            b.min.x < solid.max.x && b.max.x > solid.min.x && b.min.z < solid.max.z && b.max.z > solid.min.z;
+        if overlaps_xz && (state.pos.y - solid.max.y).abs() <= GROUND_EPSILON {
+            return Some(index);
+        }
+    }
+    None
+}
+
+/// True while standing on a TILE_FRETTED platform (which stays solid).
+fn standing_on_fretted(state: &ControllerState, world: &World) -> bool {
+    match standing_platform(state, world) {
+        Some(index) => world.tile_state(index) == protocol::TILE_FRETTED,
+        None => false,
+    }
+}
+
+/// PLATFORM_JUMP_PAD: launch once when (or while) standing on a pad.
+///
+/// Sets `vel.y = PAD_LAUNCH_VEL` and multiplies horizontal velocity by
+/// [`PAD_HORIZONTAL_VEL_MUL`]. After the launch the player is airborne
+/// (`vel.y > 0`), which makes a repeated launch on the same contact impossible;
+/// a new landing is a new contact. Pads stay solid. `movement_locked` (dash /
+/// grapple / ward in flight) suppresses the launch; it fires on the first
+/// physics frame afterwards instead.
+fn launch_pad_if_contact(state: &mut ControllerState, world: &World, movement_locked: bool) -> bool {
+    if movement_locked {
+        return false;
+    }
+    let Some(index) = standing_platform(state, world) else {
+        return false;
+    };
+    let is_pad = world
+        .platforms
+        .get(index)
+        .map(|p| p.kind == protocol::PLATFORM_JUMP_PAD)
+        .unwrap_or(false);
+    if !is_pad {
+        return false;
+    }
+    state.vel.y = PAD_LAUNCH_VEL;
+    state.vel.x *= PAD_HORIZONTAL_VEL_MUL;
+    state.vel.z *= PAD_HORIZONTAL_VEL_MUL;
+    true
+}
+
+#[cfg(test)]
+mod m3_tests {
+    use super::*;
+    use super::tests::flat_world;
+    use crate::tuning::{
+        BULWARK_COOLDOWN_MAX_FRAMES, BULWARK_WARD_FRAMES, BULWARK_WINDUP_FRAMES, DASH_COOLDOWN_MIN_FRAMES,
+        FRETTED_SPEED_MUL, PAD_LAUNCH_VEL,
+    };
+    use protocol::{EVENT_NONE, LevelData, PLATFORM_JUMP_PAD, PLATFORM_NORMAL, Platform, TILE_FRETTED, TileState};
+
+    fn input(seq: u32, move_x: i8, move_z: i8, buttons: u8) -> InputFrame {
+        InputFrame {
+            seq,
+            move_x,
+            move_z,
+            buttons,
+        }
+    }
+
+    fn idle(seq: u32) -> InputFrame {
+        input(seq, 0, 0, 0)
+    }
+
+    fn run_x(seq: u32, buttons: u8) -> InputFrame {
+        input(seq, 127, 0, buttons)
+    }
+
+    fn run_x_jump(seq: u32) -> InputFrame {
+        input(seq, 127, 0, BTN_JUMP)
+    }
+
+    fn staircase_world() -> World {
+        let mut platforms = vec![Platform {
+            id: 1,
+            kind: PLATFORM_NORMAL,
+            bounds: Aabb {
+                min: Vec3::new(-10.0, -1.0, -2.0),
+                max: Vec3::new(0.0, 0.0, 2.0),
+            },
+        }];
+        for k in 0..5u16 {
+            let top = 0.5 * (f32::from(k) + 1.0);
+            platforms.push(Platform {
+                id: k + 2,
+                kind: PLATFORM_NORMAL,
+                bounds: Aabb {
+                    min: Vec3::new(f32::from(k), -1.0, -2.0),
+                    max: Vec3::new(f32::from(k) + 1.0, top, 2.0),
+                },
+            });
+        }
+        // Top plateau.
+        platforms.push(Platform {
+            id: 8,
+            kind: PLATFORM_NORMAL,
+            bounds: Aabb {
+                min: Vec3::new(5.0, -1.0, -2.0),
+                max: Vec3::new(20.0, 2.5, 2.0),
+            },
+        });
+        World::from_level(&LevelData {
+            level: 1,
+            seed: 3,
+            spawn: Vec3::ZERO,
+            beacon: Vec3::new(10.0, 0.0, 0.0),
+            kill_y: -50.0,
+            platforms,
+            gifts: vec![],
+            event: EVENT_NONE,
+            altars: vec![],
+        })
+    }
+
+    fn ledge_world(top: f32, ceiling: Option<(f32, f32)>) -> World {
+        // Flat approach with a single ledge at x = 4.0. `ceiling` is
+        // (min_y, max_y) for an overhead slab spanning the ledge.
+        let mut platforms = vec![
+            Platform {
+                id: 1,
+                kind: PLATFORM_NORMAL,
+                bounds: Aabb {
+                    min: Vec3::new(-10.0, -1.0, -2.0),
+                    max: Vec3::new(4.0, 0.0, 2.0),
+                },
+            },
+            Platform {
+                id: 2,
+                kind: PLATFORM_NORMAL,
+                bounds: Aabb {
+                    min: Vec3::new(4.0, -1.0, -2.0),
+                    max: Vec3::new(8.0, top, 2.0),
+                },
+            },
+        ];
+        if let Some((ceil_min_y, ceil_max_y)) = ceiling {
+            platforms.push(Platform {
+                id: 3,
+                kind: PLATFORM_NORMAL,
+                bounds: Aabb {
+                    min: Vec3::new(3.8, ceil_min_y, -2.0),
+                    max: Vec3::new(8.0, ceil_max_y, 2.0),
+                },
+            });
+        }
+        World::from_level(&LevelData {
+            level: 1,
+            seed: 3,
+            spawn: Vec3::ZERO,
+            beacon: Vec3::new(0.0, 0.0, 30.0),
+            kill_y: -50.0,
+            platforms,
+            gifts: vec![],
+            event: EVENT_NONE,
+            altars: vec![],
+        })
+    }
+
+    fn pad_world() -> World {
+        World::from_level(&LevelData {
+            level: 1,
+            seed: 4,
+            spawn: Vec3::ZERO,
+            beacon: Vec3::new(0.0, 0.0, 30.0),
+            kill_y: -50.0,
+            platforms: vec![Platform {
+                id: 1,
+                kind: PLATFORM_JUMP_PAD,
+                bounds: Aabb {
+                    min: Vec3::new(-2.0, -1.0, -2.0),
+                    max: Vec3::new(2.0, 0.0, 2.0),
+                },
+            }],
+            gifts: vec![],
+            event: EVENT_NONE,
+            altars: vec![],
+        })
+    }
+
+    fn fretted_world() -> World {
+        let level = LevelData {
+            level: 1,
+            seed: 5,
+            spawn: Vec3::ZERO,
+            beacon: Vec3::new(0.0, 0.0, 30.0),
+            kill_y: -50.0,
+            platforms: vec![Platform {
+                id: 5,
+                kind: PLATFORM_NORMAL,
+                bounds: Aabb {
+                    min: Vec3::new(-5.0, -1.0, -5.0),
+                    max: Vec3::new(5.0, 0.0, 5.0),
+                },
+            }],
+            gifts: vec![],
+            event: EVENT_NONE,
+            altars: vec![],
+        };
+        let mut w = World::from_level(&level);
+        w.set_tiles(&[TileState {
+            id: 5,
+            state: TILE_FRETTED,
+        }]);
+        w
+    }
+
+    // ---------- Bulwark ----------
+
+    #[test]
+    fn bulwark_cast_requires_grounded() {
+        let w = flat_world();
+        let mut s = spawn_state(Vec3::new(0.0, 10.0, 0.0));
+        s.class = CLASS_BULWARK;
+        step_with(&mut s, &run_x(0, BTN_ABILITY), &w, &Tuning::default());
+        assert_eq!(s.ability_active_frames, 0, "an airborne press must not cast");
+        assert_eq!(s.ability_cooldown_frames, 0);
+        assert_eq!(s.ward_frames, 0);
+    }
+
+    #[test]
+    fn bulwark_grounded_cast_starts_windup_and_cooldown() {
+        let w = flat_world();
+        let mut s = spawn_state(Vec3::ZERO);
+        s.class = CLASS_BULWARK;
+        step_with(&mut s, &idle(0), &w, &Tuning::default());
+        assert!(s.grounded);
+        step_with(&mut s, &run_x(1, BTN_ABILITY), &w, &Tuning::default());
+        assert_eq!(s.ability_active_frames, BULWARK_WINDUP_FRAMES - 1);
+        assert_eq!(s.ability_cooldown_frames, BULWARK_COOLDOWN_FRAMES);
+        assert_eq!(s.ward_frames, 0);
+        assert!(!bulwark_pulse_frame(&s));
+    }
+
+    #[test]
+    fn bulwark_cooldown_scales_and_clamps() {
+        let w = flat_world();
+        let cooldown = |mul: f32| -> u16 {
+            let tuning = Tuning {
+                dash_cooldown_mul: mul,
+                ..Tuning::default()
+            };
+            let mut s = spawn_state(Vec3::ZERO);
+            s.class = CLASS_BULWARK;
+            step_with(&mut s, &idle(0), &w, &tuning);
+            step_with(&mut s, &run_x(1, BTN_ABILITY), &w, &tuning);
+            s.ability_cooldown_frames
+        };
+        assert_eq!(cooldown(1.0), BULWARK_COOLDOWN_FRAMES);
+        assert_eq!(cooldown(0.5), 480);
+        assert_eq!(cooldown(0.0), DASH_COOLDOWN_MIN_FRAMES);
+        assert_eq!(cooldown(100.0), BULWARK_COOLDOWN_MAX_FRAMES);
+    }
+
+    #[test]
+    fn bulwark_windup_is_immobile() {
+        let w = flat_world();
+        let mut s = spawn_state(Vec3::ZERO);
+        s.class = CLASS_BULWARK;
+        step_with(&mut s, &run_x(0, 0), &w, &Tuning::default());
+        assert!(s.vel.x > 0.0);
+        step_with(&mut s, &run_x(1, BTN_ABILITY), &w, &Tuning::default());
+        for i in 0..(BULWARK_WINDUP_FRAMES - 1) {
+            step_with(&mut s, &run_x(2 + u32::from(i), 0), &w, &Tuning::default());
+            assert_eq!(s.vel.x, 0.0, "the wind-up holds horizontal speed at zero");
+        }
+    }
+
+    #[test]
+    fn bulwark_rooted_mid_run() {
+        let w = flat_world();
+        let mut s = spawn_state(Vec3::ZERO);
+        s.class = CLASS_BULWARK;
+        let mut seq = 0u32;
+        for i in 0..4 {
+            step_with(&mut s, &run_x(seq + i, 0), &w, &Tuning::default());
+        }
+        assert!(s.vel.x > 0.0);
+        seq += 4;
+        // Cast mid-run.
+        step_with(&mut s, &run_x(seq, BTN_ABILITY), &w, &Tuning::default());
+        seq += 1;
+        assert_eq!(s.vel.x, 0.0, "the cast roots the player immediately");
+        // Wind up, then reach the ward.
+        for _ in 0..(BULWARK_WINDUP_FRAMES - 1) {
+            step_with(&mut s, &run_x(seq, 0), &w, &Tuning::default());
+            seq += 1;
+        }
+        assert_eq!(s.ward_frames, BULWARK_WARD_FRAMES);
+        let frozen_x = s.pos.x;
+        let frozen_y = s.pos.y;
+        // Mid-ward: rooted, BTN_JUMP and BTN_ABILITY are ignored.
+        for i in 0..20u32 {
+            let buttons = match i {
+                3 => BTN_JUMP,
+                6 => BTN_ABILITY,
+                _ => 0,
+            };
+            step_with(&mut s, &run_x(seq + i, buttons), &w, &Tuning::default());
+            assert_eq!(s.vel.x, 0.0);
+            assert_eq!(s.pos.y, frozen_y, "the ward hovers in place");
+        }
+        assert_eq!(s.pos.x, frozen_x, "the rooted player does not advance");
+        assert!(s.vel.y == 0.0);
+    }
+
+    #[test]
+    fn bulwark_pulse_frame_only_on_first_ward_frame() {
+        let w = flat_world();
+        let mut s = spawn_state(Vec3::ZERO);
+        s.class = CLASS_BULWARK;
+        step_with(&mut s, &idle(0), &w, &Tuning::default());
+        assert!(!bulwark_pulse_frame(&s));
+        step_with(&mut s, &run_x(1, BTN_ABILITY), &w, &Tuning::default());
+        assert!(!bulwark_pulse_frame(&s));
+        let mut seq = 2u32;
+        // Wind-up is the cast frame plus (BULWARK_WINDUP_FRAMES - 1) frames;
+        // the ward begins at the end of the last of those frames.
+        for _ in 0..(BULWARK_WINDUP_FRAMES - 2) {
+            step_with(&mut s, &run_x(seq, 0), &w, &Tuning::default());
+            seq += 1;
+            assert!(!bulwark_pulse_frame(&s), "the pulse must not fire during the wind-up");
+        }
+        // The last wind-up step ends with the ward beginning.
+        step_with(&mut s, &run_x(seq, 0), &w, &Tuning::default());
+        seq += 1;
+        assert_eq!(s.ward_frames, BULWARK_WARD_FRAMES);
+        assert!(bulwark_pulse_frame(&s), "the pulse fires on the frame the ward begins");
+        step_with(&mut s, &run_x(seq, 0), &w, &Tuning::default());
+        assert!(!bulwark_pulse_frame(&s));
+        assert_eq!(s.ward_frames, BULWARK_WARD_FRAMES - 1);
+    }
+
+    #[test]
+    fn bulwark_ward_lasts_exactly_96_frames() {
+        let w = flat_world();
+        let mut s = spawn_state(Vec3::ZERO);
+        s.class = CLASS_BULWARK;
+        let mut seq = 0u32;
+        step_with(&mut s, &idle(seq), &w, &Tuning::default());
+        seq += 1;
+        step_with(&mut s, &run_x(seq, BTN_ABILITY), &w, &Tuning::default());
+        seq += 1;
+        while s.ward_frames == 0 {
+            step_with(&mut s, &run_x(seq, 0), &w, &Tuning::default());
+            seq += 1;
+        }
+        let mut rooted = 0u32;
+        while s.ward_frames > 0 {
+            step_with(&mut s, &run_x(seq, 0), &w, &Tuning::default());
+            seq += 1;
+            rooted += 1;
+        }
+        assert_eq!(rooted, 96, "the ward lasts exactly BULWARK_WARD_FRAMES frames");
+        // The player can act again afterwards (subject to the ability cooldown).
+        assert_eq!(s.ward_frames, 0);
+        step_with(&mut s, &run_x(seq, 0), &w, &Tuning::default());
+        assert_eq!(s.vel.x, RUN_SPEED);
+    }
+
+    // ---------- Jump pads ----------
+
+    #[test]
+    fn jump_pad_launches_on_landing() {
+        let w = pad_world();
+        // Spawn to the left of the pad and hold +X: the ~4 unit fall takes
+        // about 30 frames, which is the time needed to reach the pad at run
+        // speed. Spawning above the pad and running would leave the pad
+        // (x > 2) before touchdown, so no landing occurs.
+        let mut s = spawn_state(Vec3::new(-4.5, 4.0, 0.0));
+        let mut seq = 0u32;
+        let mut launched = false;
+        for _ in 0..200 {
+            step_with(&mut s, &run_x(seq, 0), &w, &Tuning::default());
+            seq += 1;
+            if s.vel.y == PAD_LAUNCH_VEL {
+                launched = true;
+                break;
+            }
+        }
+        assert!(launched, "the pad must launch the player");
+        assert_eq!(s.vel.x, RUN_SPEED * PAD_HORIZONTAL_VEL_MUL, "horizontal speed is multiplied");
+        assert!(!s.grounded, "the launch leaves the ground");
+    }
+
+    #[test]
+    fn jump_pad_apex_is_four_units() {
+        let w = pad_world();
+        // Hold BTN_JUMP through the arc (otherwise the variable-jump rule caps
+        // any un-held ascent at JUMP_CUT_VELOCITY). Spawn to the left of the
+        // pad and hold +X so the fall lands on it.
+        let mut s = spawn_state(Vec3::new(-4.5, 4.0, 0.0));
+        let mut seq = 0u32;
+        while s.vel.y != PAD_LAUNCH_VEL {
+            step_with(&mut s, &run_x_jump(seq), &w, &Tuning::default());
+            seq += 1;
+            assert!(seq < 200, "never launched");
+        }
+        let launch_y = s.pos.y;
+        let mut max_y = s.pos.y;
+        for i in 0..90u32 {
+            step_with(&mut s, &run_x_jump(seq + i), &w, &Tuning::default());
+            if s.pos.y > max_y {
+                max_y = s.pos.y;
+            }
+        }
+        let apex = max_y - launch_y;
+        // v^2/2g = 4.0 exactly; the 60 Hz semi-implicit step lands about 0.13 lower.
+        assert!((apex - 4.0).abs() <= 0.2, "apex {apex} must be ~4.0 units");
+    }
+
+    #[test]
+    fn jump_pad_launches_once_per_contact() {
+        let w = pad_world();
+        let mut s = spawn_state(Vec3::new(0.0, 4.0, 0.0));
+        let mut seq = 0u32;
+        while s.vel.y != PAD_LAUNCH_VEL {
+            step_with(&mut s, &idle(seq), &w, &Tuning::default());
+            seq += 1;
+            assert!(seq < 200, "never launched");
+        }
+        // One frame with BTN_JUMP held: gravity acts, the pad does not
+        // re-trigger. Holding BTN_JUMP matters: an un-held ascent is capped at
+        // JUMP_CUT_VELOCITY by the variable-jump rule, which would mask the
+        // ballistic expectation (the apex test holds it for the same reason).
+        let expected = PAD_LAUNCH_VEL - GRAVITY * DT;
+        step_with(&mut s, &input(seq, 0, 0, BTN_JUMP), &w, &Tuning::default());
+        assert!(
+            (s.vel.y - expected).abs() < 1e-4,
+            "the launch must not re-trigger while airborne, got {}",
+            s.vel.y
+        );
+    }
+
+    #[test]
+    fn jump_pad_stays_solid() {
+        let w = pad_world();
+        assert_eq!(w.solids.len(), 1, "the pad is solid");
+        let mut s = spawn_state(Vec3::ZERO);
+        // A standing frame on the pad launches instead of sinking through it.
+        s.vel.y = PAD_LAUNCH_VEL;
+        let _ = s; // state sanity only
+        let mut s = spawn_state(Vec3::new(0.0, 2.0, 0.0));
+        for i in 0..120u32 {
+            step_with(&mut s, &idle(i), &w, &Tuning::default());
+        }
+        assert!(s.pos.y >= -1.0, "the pad remains solid ground");
+    }
+
+    // ---------- Step-up ----------
+
+    #[test]
+    fn staircase_of_half_unit_risers_is_climbable_at_full_speed() {
+        let w = staircase_world();
+        let mut s = spawn_state(Vec3::new(-3.0, 0.0, 0.0));
+        let mut seq = 0u32;
+        for _ in 0..300 {
+            step_with(&mut s, &run_x(seq, 0), &w, &Tuning::default());
+            seq += 1;
+            if s.pos.y == 2.5 && s.pos.x > 5.0 {
+                // On the top plateau; stop before its far edge at x = 20.
+                break;
+            }
+        }
+        assert_eq!(s.pos.y, 2.5, "the staircase must be climbed without jumping");
+        assert!(s.pos.x > 5.0, "must be on the top plateau, got x = {}", s.pos.x);
+        assert!(s.grounded);
+    }
+
+    #[test]
+    fn ledge_above_step_height_still_blocks() {
+        let w = ledge_world(0.6, None);
+        let mut s = spawn_state(Vec3::ZERO);
+        let mut seq = 0u32;
+        for _ in 0..150 {
+            step_with(&mut s, &run_x(seq, 0), &w, &Tuning::default());
+            seq += 1;
+        }
+        assert!(
+            (s.pos.x - (4.0 - PLAYER_HALF_WIDTH)).abs() < 1e-4,
+            "a 0.6 unit ledge must block, got x = {}",
+            s.pos.x
+        );
+        assert_eq!(s.vel.x, 0.0);
+        assert_eq!(s.pos.y, 0.0);
+    }
+
+    #[test]
+    fn step_up_requires_room_to_fit() {
+        // A 0.5 unit riser with a ceiling 2.3 units above the feet of someone
+        // standing on the tread: the box does not fit, so no step-up.
+        let w = ledge_world(0.5, Some((2.0, 4.0)));
+        let mut s = spawn_state(Vec3::ZERO);
+        let mut seq = 0u32;
+        for _ in 0..150 {
+            step_with(&mut s, &run_x(seq, 0), &w, &Tuning::default());
+            seq += 1;
+        }
+        assert_eq!(s.pos.y, 0.0, "no step-up when the box cannot fit at the new height");
+        assert!(
+            (s.pos.x - (4.0 - PLAYER_HALF_WIDTH)).abs() < 1e-4,
+            "the riser must block instead, got x = {}",
+            s.pos.x
+        );
+    }
+
+    #[test]
+    fn step_up_keeps_horizontal_motion() {
+        // Same riser without a ceiling: stepped onto it at speed.
+        let w = ledge_world(0.5, None);
+        let mut s = spawn_state(Vec3::ZERO);
+        let mut seq = 0u32;
+        let mut stepped = false;
+        for _ in 0..120 {
+            step_with(&mut s, &run_x(seq, 0), &w, &Tuning::default());
+            seq += 1;
+            if s.pos.y == 0.5 {
+                assert!(s.vel.x > 0.0, "horizontal motion is kept through a step-up");
+                stepped = true;
+                break;
+            }
+        }
+        assert!(stepped, "the 0.5 unit riser must be stepped onto");
+    }
+
+    // ---------- Stagger ----------
+
+    #[test]
+    fn stagger_shove_carries_and_ignores_backward_input() {
+        let w = flat_world();
+        let tuning = Tuning {
+            friction_mul: 0.25, // low friction so the slide is visible
+            ..Tuning::default()
+        };
+        let mut s = spawn_state(Vec3::ZERO);
+        step_with(&mut s, &idle(0), &w, &tuning);
+        assert!(s.grounded);
+        s.vel = Vec3::new(18.0, 0.0, 0.0);
+        s.stagger_frames = 30;
+        let start_x = s.pos.x;
+        for i in 0..10u32 {
+            step_with(&mut s, &input(1 + i, -127, 0, 0), &w, &tuning);
+        }
+        // Each ground frame keeps 75% of the remaining error against a zero
+        // target: slide = 18 * 0.75 * (1 - 0.75^10) / (1 - 0.75) * DT ~= 0.85.
+        assert!(
+            s.pos.x > start_x + 0.5,
+            "the shove carries the player, got x = {}",
+            s.pos.x
+        );
+        assert!(s.vel.x > 0.0, "backward input must not reverse a staggered shove");
+    }
+
+    #[test]
+    fn stagger_ignores_jump_ability_dash_and_decrements() {
+        let w = flat_world();
+        let mut s = spawn_state(Vec3::ZERO);
+        step(&mut s, &idle(0), &w);
+        assert!(s.grounded);
+        s.stagger_frames = 5;
+        // Jump is swallowed.
+        step(&mut s, &input(1, 0, 0, BTN_JUMP), &w);
+        assert_eq!(s.vel.y, 0.0);
+        assert_eq!(s.stagger_frames, 4);
+        assert_eq!(s.jump_buffer_frames, 0, "no jump may be buffered during a stagger");
+        // Ability (dash, for the default striker) is swallowed.
+        step(&mut s, &input(2, 127, 0, BTN_ABILITY), &w);
+        assert_eq!(s.ability_active_frames, 0, "no dash may start during a stagger");
+        assert_eq!(s.ability_cooldown_frames, 0);
+        assert_eq!(s.stagger_frames, 3);
+    }
+
+    #[test]
+    fn stagger_keeps_air_velocity_and_applies_gravity() {
+        let w = flat_world();
+        let mut s = spawn_state(Vec3::new(0.0, 20.0, 0.0));
+        s.vel = Vec3::new(12.0, 0.0, 0.0);
+        s.stagger_frames = 10;
+        step(&mut s, &run_x(0, 0), &w);
+        assert_eq!(s.vel.x, 12.0, "air velocity is kept during a stagger");
+        assert!(s.vel.y < 0.0, "gravity still applies");
+    }
+
+    // ---------- Fretted tiles ----------
+
+    #[test]
+    fn fretted_platform_slows_run_and_locks_ability() {
+        let w = fretted_world();
+        assert_eq!(w.tile_state(0), TILE_FRETTED);
+        assert_eq!(w.solids.len(), 1, "TILE_FRETTED platforms stay solid");
+        let mut s = spawn_state(Vec3::ZERO);
+        step_with(&mut s, &idle(0), &w, &Tuning::default());
+        assert!(s.grounded);
+        step_with(&mut s, &run_x(1, 0), &w, &Tuning::default());
+        assert_eq!(s.vel.x, RUN_SPEED * FRETTED_SPEED_MUL, "fretted ground caps run speed x0.6");
+        // BTN_ABILITY is ignored on fretted ground (striker dash must not fire).
+        step_with(&mut s, &run_x(2, BTN_ABILITY), &w, &Tuning::default());
+        assert_eq!(s.ability_active_frames, 0);
+        assert_eq!(s.ability_cooldown_frames, 0);
+        // Jump still works.
+        step_with(&mut s, &idle(3), &w, &Tuning::default());
+        step_with(&mut s, &input(4, 127, 0, BTN_JUMP), &w, &Tuning::default());
+        assert!(s.vel.y > 0.0, "jump is not blocked by fretted ground");
+    }
+
+    // ---------- Spatial grid equivalence ----------
+
+    fn next_u64(state: &mut u64) -> u64 {
+        let mut x = *state;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        *state = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    fn next_f32(state: &mut u64, low: f32, high: f32) -> f32 {
+        let unit = ((next_u64(state) & 0xFF_FFFF) as f32) / ((1u64 << 24) as f32);
+        low + (high - low) * unit
+    }
+
+    /// 500 pseudo-random platforms including one giant slab spanning many cells.
+    fn grid_test_level() -> LevelData {
+        let mut platforms = Vec::with_capacity(500);
+        let mut rng = 0x9E37_79B9_7F4A_7C15u64;
+        for i in 0..500u16 {
+            let cx = next_f32(&mut rng, -200.0, 200.0);
+            let cz = next_f32(&mut rng, -200.0, 200.0);
+            let w = 2.0 + next_f32(&mut rng, 0.0, 10.0);
+            let d = 2.0 + next_f32(&mut rng, 0.0, 10.0);
+            let h = 0.5 + next_f32(&mut rng, 0.0, 2.5);
+            let top = next_f32(&mut rng, -8.0, 8.0);
+            platforms.push(Platform {
+                id: i + 1,
+                kind: PLATFORM_NORMAL,
+                bounds: Aabb {
+                    min: Vec3::new(cx, top - h, cz),
+                    max: Vec3::new(cx + w, top, cz + d),
+                },
+            });
+        }
+        platforms[0] = Platform {
+            id: 1,
+            kind: PLATFORM_NORMAL,
+            bounds: Aabb {
+                min: Vec3::new(-300.0, -2.0, -300.0),
+                max: Vec3::new(300.0, 0.0, 300.0),
+            },
+        };
+        LevelData {
+            level: 3,
+            seed: 99,
+            spawn: Vec3::ZERO,
+            beacon: Vec3::new(0.0, 0.0, 30.0),
+            kill_y: -100.0,
+            platforms,
+            gifts: vec![],
+            event: EVENT_NONE,
+            altars: vec![],
+        }
+    }
+
+    #[test]
+    fn grid_fast_path_matches_brute_force() {
+        let mut w = World::from_level(&grid_test_level());
+        w.set_tiles(&[
+            TileState { id: 3, state: protocol::TILE_GONE },
+            TileState {
+                id: 9,
+                state: TILE_FRETTED,
+            },
+        ]);
+        let mut rng = 0x243F_6A88_85A3_08D3u64;
+        for i in 0..200u32 {
+            let cx = next_f32(&mut rng, -250.0, 250.0);
+            let cz = next_f32(&mut rng, -250.0, 250.0);
+            let half_w = 0.5 + next_f32(&mut rng, 0.0, 25.0);
+            let half_d = 0.5 + next_f32(&mut rng, 0.0, 25.0);
+            let y0 = next_f32(&mut rng, -12.0, 8.0);
+            let y1 = y0 + 0.5 + next_f32(&mut rng, 0.0, 4.0);
+            let b = Aabb {
+                min: Vec3::new(cx - half_w, y0, cz - half_d),
+                max: Vec3::new(cx + half_w, y1, cz + half_d),
+            };
+            assert_eq!(
+                overlaps_any_solid(&w, &b),
+                w.solids.iter().any(|s| overlaps(&b, s)),
+                "grid and brute force disagree on box {b:?}"
+            );
+            // Resting-on-solid equivalence (half the cases pin the feet to a
+            // random solid top so the check is non-trivial).
+            let mut st = spawn_state(Vec3::ZERO);
+            if i % 2 == 0 && !w.solids.is_empty() {
+                let solid = &w.solids[(next_u64(&mut rng) as usize) % w.solids.len()];
+                st.pos = Vec3::new(
+                    (solid.min.x + solid.max.x) * 0.5,
+                    solid.max.y,
+                    (solid.min.z + solid.max.z) * 0.5,
+                );
+            } else {
+                st.pos = Vec3::new(next_f32(&mut rng, -200.0, 200.0), next_f32(&mut rng, -12.0, 12.0), next_f32(&mut rng, -200.0, 200.0));
+            }
+            st.vel = Vec3::ZERO; // vel.y <= 0, as resting_on_solid requires
+            let fast = resting_on_solid(&st, &w);
+            let bb = player_box(&st.pos);
+            let brute = w.solids.iter().any(|s| {
+                let overlaps_xz =
+                    bb.min.x < s.max.x && bb.max.x > s.min.x && bb.min.z < s.max.z && bb.max.z > s.min.z;
+                overlaps_xz && (st.pos.y - s.max.y).abs() <= GROUND_EPSILON
+            });
+            assert_eq!(fast, brute, "grid and brute force disagree when resting at {st:?}");
+        }
     }
 }
