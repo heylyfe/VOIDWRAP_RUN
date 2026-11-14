@@ -259,8 +259,7 @@ impl Run {
             }
         }
         for (slot, (id, pos)) in roster.iter().zip(generated.enemy_spawns.iter()).enumerate() {
-            if let Some(index) = content.enemies.iter().position(|e| e.id == *id) {
-                let def = &content.enemies[index];
+            if let Some((index, def)) = content.enemy(id) {
                 let params = self.mods.enemy_params(&def.params);
                 let id = u32::try_from(slot).unwrap_or(u32::MAX - 1) + 1;
                 // kind = index into content.json enemies, so the client draws the right model.

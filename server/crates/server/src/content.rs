@@ -50,8 +50,9 @@ impl Content {
         Ok(c)
     }
 
-    pub fn enemy(&self, id: &str) -> Option<&EnemyDef> {
-        self.enemies.iter().find(|e| e.id == id)
+    /// Index of an enemy in content order (sent to clients as `EnemyView.kind`) and its definition.
+    pub fn enemy(&self, id: &str) -> Option<(usize, &EnemyDef)> {
+        self.enemies.iter().enumerate().find(|(_, e)| e.id == id)
     }
 
     pub fn upgrade(&self, id: &str) -> Option<&ModCard> {
