@@ -1,0 +1,11 @@
+ FAIL  src/hud/join.test.ts > parseJoinAddress > accepts the port boundaries
+AssertionError: expected null to be 'http://host.com:1' // Object.is equality
+
+- Expected:
+"http://host.com:1"
+
++ Received:
+null
+
+ ❯ src/hud/join.test.ts:36:44
+     34|

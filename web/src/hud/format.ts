@@ -1,8 +1,9 @@
-export type DeathCause = "void" | "enemy" | "disconnect";
+export type DeathCause = "void" | "enemy" | "projectile" | "disconnect";
 
 const CAUSE_TEXT: Record<DeathCause, string> = {
   void: "Fell into the void",
   enemy: "Caught by an enemy",
+  projectile: "Hit by a bolt",
   disconnect: "Lost connection",
 };
 

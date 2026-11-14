@@ -4,7 +4,12 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Group } from "three";
 import {
+  CLASS_BLINKER,
+  CLASS_GLIDER,
+  CLASS_GRAPPLER,
   DEATH_ENEMY,
+  DEATH_PROJECTILE,
+  EVENT_ICE,
   GIFT_GOLDEN,
   PHASE_ENEMY_DRAFT,
   PHASE_PLAYING,
@@ -15,24 +20,30 @@ import {
 import { gradeForTheme } from "@/content";
 import { DraftScreen } from "@/hud/DraftScreen";
 import { GameHud } from "@/hud/GameHud";
+import { Notices } from "@/hud/Notices";
 import { RunStatus } from "@/hud/RunStatus";
 import { LevelBanner } from "@/hud/LevelBanner";
 import { RunSummary } from "@/hud/RunSummary";
 import { SpectatorHud } from "@/hud/SpectatorHud";
 import { flyStep, followCamera, nextFollow } from "./spectator";
 import type { DeathCause } from "@/hud/format";
+import { Altars } from "@/scene/Altar";
 import { Atmosphere } from "@/scene/Atmosphere";
 import { Beacon } from "@/scene/Beacon";
+import { BlinkFlash } from "@/scene/BlinkFlash";
 import { BlockyAvatar } from "@/scene/BlockyAvatar";
 import type { AvatarMotion } from "@/scene/avatarPose";
-import { DashStreak } from "@/scene/DashStreak";
-import { Chaser } from "@/scene/Chaser";
 import { Crystals } from "@/scene/Crystals";
+import { DashStreak } from "@/scene/DashStreak";
 import { Debris } from "@/scene/Debris";
 import { Effects } from "@/scene/Effects";
+import { EnemyField } from "@/scene/EnemyField";
 import { GiftBox } from "@/scene/GiftBox";
+import { GliderWings } from "@/scene/GliderWings";
+import { GrappleLine } from "@/scene/GrappleLine";
 import { PALETTE } from "@/scene/palette";
 import { Platforms } from "@/scene/Platforms";
+import { Projectiles } from "@/scene/Projectiles";
 import { themeForLevel } from "@/scene/theme";
 import { bindingFor } from "./input";
 import { defaultServerUrl } from "./net";
@@ -41,7 +52,6 @@ import { WasmStepper } from "./sim";
 import { useGameStore } from "./store";
 
 const MAX_REMOTE = 8;
-const MAX_ENEMIES = 8;
 const MOUSE_SENSITIVITY = 0.0025;
 const CAMERA_DISTANCE = 8;
 const CAMERA_HEIGHT = 1.4;
@@ -73,7 +83,6 @@ function newMotion(): { current: AvatarMotion } {
 function World({ session, level, themeLevel }: { session: GameSession; level: LevelData; themeLevel: number }) {
   const player = useRef<Group>(null);
   const remotes = useRef<(Group | null)[]>([]);
-  const enemies = useRef<(Group | null)[]>([]);
   const camera = useThree((s) => s.camera);
   const motion = useMemo(newMotion, []);
   const remoteMotion = useMemo(() => Array.from({ length: MAX_REMOTE }, newMotion), []);
@@ -82,6 +91,9 @@ function World({ session, level, themeLevel }: { session: GameSession; level: Le
   );
   const giftsTaken = useGameStore((s) => s.giftsTaken);
   const fogMul = useGameStore((s) => s.runInfo?.fogDensityMul ?? 1);
+  const tiles = useGameStore((s) => s.tiles);
+  const altarsUsed = useGameStore((s) => s.altarsUsed);
+  const icy = level.event === EVENT_ICE;
   const normalGifts = useMemo(() => level.gifts.filter((g) => g.kind !== GIFT_GOLDEN), [level]);
   const normalLeft = normalGifts.filter((g) => !giftsTaken.includes(g.id)).length;
   // The beacon opens and golden (currency) gifts appear once every normal gift is collected.
@@ -188,18 +200,6 @@ function World({ session, level, themeLevel }: { session: GameSession; level: Le
       if (r) r.visible = false;
       if (last) last.ok = false;
     }
-    let e = 0;
-    for (const [id, o] of session.enemyPositions(now)) {
-      const r = enemies.current[e++];
-      if (!r) break;
-      r.visible = true;
-      r.position.set(o.x, o.y, o.z);
-      r.scale.setScalar(session.enemyRadius.get(id) ?? 0.5);
-    }
-    for (; e < MAX_ENEMIES; e++) {
-      const r = enemies.current[e];
-      if (r) r.visible = false;
-    }
   });
 
   return (
@@ -209,7 +209,7 @@ function World({ session, level, themeLevel }: { session: GameSession; level: Le
       <ambientLight intensity={0.7} />
       <hemisphereLight args={[theme.sky.zenith, theme.sky.horizon, 1.1]} />
       <directionalLight position={[8, 20, 6]} intensity={1.6} />
-      <Platforms platforms={level.platforms} theme={theme} />
+      <Platforms platforms={level.platforms} theme={theme} tiles={tiles} icy={icy} />
       <Crystals platforms={level.platforms} theme={theme} seed={level.seed + 7} />
       {level.gifts.map((gift) => {
         const golden = gift.kind === GIFT_GOLDEN;
@@ -221,20 +221,21 @@ function World({ session, level, themeLevel }: { session: GameSession; level: Le
         );
       })}
       {normalGifts.length > 0 && <Beacon position={level.beacon} open={beaconOpen} />}
+      <Altars altars={level.altars} used={altarsUsed} session={session} />
       <group ref={player}>
         <BlockyAvatar motion={motion} />
         <DashStreak motion={motion} color={theme.accent} />
+        <GliderWings session={session} />
       </group>
+      <GrappleLine session={session} />
+      <BlinkFlash session={session} />
       {Array.from({ length: MAX_REMOTE }, (_, i) => (
         <group key={i} ref={(g) => void (remotes.current[i] = g)} visible={false}>
           <BlockyAvatar bodyColor={PALETTE.edgeGlowCyan} motion={remoteMotion[i]} />
         </group>
       ))}
-      {Array.from({ length: MAX_ENEMIES }, (_, i) => (
-        <group key={i} ref={(g) => void (enemies.current[i] = g)} visible={false}>
-          <Chaser position={ORIGIN} />
-        </group>
-      ))}
+      <EnemyField session={session} />
+      <Projectiles session={session} />
       <Effects grade={grade} />
       <FpsProbe />
     </>
@@ -275,7 +276,16 @@ function DebugPanel() {
 }
 
 function causeOf(cause: number): DeathCause {
+  if (cause === DEATH_PROJECTILE) return "projectile";
   return cause === DEATH_ENEMY ? "enemy" : "void";
+}
+
+/** The ability hint for the bottom-of-screen controls line, by class. */
+function abilityHint(cls: number): string {
+  if (cls === CLASS_GRAPPLER) return "Shift grapple";
+  if (cls === CLASS_BLINKER) return "Shift blink";
+  if (cls === CLASS_GLIDER) return "Space twice double jump · hold Shift glide";
+  return "Shift dash";
 }
 
 export default function GameClient() {
@@ -283,7 +293,8 @@ export default function GameClient() {
   const [level, setLevel] = useState<LevelData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const container = useRef<HTMLDivElement>(null);
-  const { status, pointerLocked, runOver, giftsTaken, runInfo, draft, myMode, activeIds } = useGameStore();
+  const { status, pointerLocked, runOver, giftsTaken, runInfo, draft, myMode, activeIds, shop, notices, myClass } =
+    useGameStore();
   const [following, setFollowing] = useState<number | null>(null);
   const drafting = !!draft && runInfo?.phase === PHASE_ENEMY_DRAFT;
   // The lobby hub is shown in the colours of the level about to be played.
@@ -368,6 +379,8 @@ export default function GameClient() {
 
   const restart = useCallback(() => session?.restart(), [session]);
   const submitDraft = useCallback((picks: number[]) => session?.submitDraft(picks), [session]);
+  const buy = useCallback((itemId: string) => session?.buy(itemId), [session]);
+  const chooseClass = useCallback((cls: number) => session?.chooseClass(cls), [session]);
 
   return (
     <div
@@ -421,11 +434,15 @@ export default function GameClient() {
           lives={runInfo.lives}
           waiting={draft.submitted}
           onSubmit={submitDraft}
+          classId={myClass}
+          onChooseClass={chooseClass}
+          shop={shop}
+          onBuy={buy}
         />
       )}
       {!pointerLocked && status === "connected" && !runOver && !drafting && (
         <div className="pointer-events-none absolute bottom-8 left-1/2 -translate-x-1/2 rounded bg-black/60 px-4 py-2 font-mono text-sm text-white">
-          click to aim · WASD move · Space jump · Shift dash
+          click to aim · WASD move · Space jump · {abilityHint(myClass)} · E use altar
         </div>
       )}
       {runOver && (
@@ -436,6 +453,7 @@ export default function GameClient() {
           onRestart={restart}
         />
       )}
+      <Notices notices={notices} />
       <DebugPanel />
     </div>
   );

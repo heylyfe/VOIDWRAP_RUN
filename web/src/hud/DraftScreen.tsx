@@ -3,12 +3,15 @@
 // Full-screen draft overlay: enemy picks + reward picks, hotkeys 1..n, Enter
 // to submit. The selection state lives in an inner component that is keyed by
 // the card manifest, so a new draft restarts the choice cleanly (no setState
-// in effects).
+// in effects). The first lobby (no cards) adds the class picker; later
+// lobbies add the lobby shop below the cards.
 import { useCallback, useEffect, useState } from 'react';
 import type { JSX } from 'react';
-import '../content';
+import type { ShopItem } from '../protocol/generated';
 import { CARD_ENEMY } from '../content';
+import { ClassPicker } from './ClassPicker';
 import { DraftCard } from './DraftCard';
+import { ShopPanel } from './ShopPanel';
 import { selectionComplete, toggleSelection } from './draftSelection';
 
 const DANGER = '#ff4d4d';
@@ -24,11 +27,30 @@ export interface DraftScreenProps {
   currency: number;
   lives: number;
   waiting: boolean;
+  /** This player's class (CLASS_*); only changeable in the first-round lobby. */
+  classId: number;
+  onChooseClass: (cls: number) => void;
+  /** The lobby shop offer; null hides the shop. */
+  shop: ShopItem[] | null;
+  onBuy: (itemId: string) => void;
   onSubmit: (picks: number[]) => void;
 }
 
 function DraftScreenInner(props: DraftScreenProps): JSX.Element {
-  const { cards, enemyPicks, rewardPicks, nextLevel, currency, lives, waiting, onSubmit } = props;
+  const {
+    cards,
+    enemyPicks,
+    rewardPicks,
+    nextLevel,
+    currency,
+    lives,
+    waiting,
+    classId,
+    onChooseClass,
+    shop,
+    onBuy,
+    onSubmit,
+  } = props;
 
   const enemyCount = cards.filter((c) => c.kind === CARD_ENEMY).length;
   const rewardCount = cards.length - enemyCount;
@@ -40,7 +62,7 @@ function DraftScreenInner(props: DraftScreenProps): JSX.Element {
 
   const toggle = useCallback(
     (index: number) => {
-      if (waiting) {
+      if (waiting || cards.length === 0) {
         return;
       }
       setSelected((prev) => toggleSelection(prev, index, cards, enemyLimit, rewardLimit));
@@ -89,6 +111,7 @@ function DraftScreenInner(props: DraftScreenProps): JSX.Element {
 
   const enemySelected = selected.filter((i) => i >= 0 && i < cards.length && cards[i]?.kind === CARD_ENEMY).length;
   const rewardSelected = selected.length - enemySelected;
+  const firstRound = cards.length === 0;
 
   return (
     <div
@@ -107,16 +130,19 @@ function DraftScreenInner(props: DraftScreenProps): JSX.Element {
           </div>
         </header>
 
-        {cards.length === 0 ? (
-          <section data-testid="draft-first-round" className="flex flex-col gap-2 py-6 text-center">
-            <h2 className="text-lg font-bold tracking-[0.25em] text-white/90">A CLEAN START</h2>
-            <p className="text-sm text-white/75">
-              No hunters, no upgrades, no curses this round. Collect every gift and reach the beacon.
-            </p>
-            <p className="text-xs tracking-widest" style={{ color: MUTED }}>
-              After this level you vote on who hunts you. Press CONTINUE (or Enter) when you are ready.
-            </p>
-          </section>
+        {firstRound ? (
+          <>
+            <section data-testid="draft-first-round" className="flex flex-col gap-2 py-2 text-center">
+              <h2 className="text-lg font-bold tracking-[0.25em] text-white/90">A CLEAN START</h2>
+              <p className="text-sm text-white/75">
+                No hunters, no upgrades, no curses this round. Collect every gift and reach the beacon.
+              </p>
+              <p className="text-xs tracking-widest" style={{ color: MUTED }}>
+                After this level you vote on who hunts you. Pick a class, then press CONTINUE (or Enter).
+              </p>
+            </section>
+            <ClassPicker selected={classId} onChoose={onChooseClass} disabled={waiting} />
+          </>
         ) : (
           <p className="text-xs tracking-widest" style={{ color: MUTED }}>
             {enemySelected}/{enemyLimit} hunters · {rewardSelected}/{rewardLimit} rewards · keys 1-9 toggle · enter continues
@@ -173,6 +199,10 @@ function DraftScreenInner(props: DraftScreenProps): JSX.Element {
               )}
             </div>
           </section>
+        )}
+
+        {shop !== null && (
+          <ShopPanel items={shop} currency={currency} disabled={waiting} onBuy={onBuy} />
         )}
 
         <footer className="mt-auto flex flex-col items-center gap-2 pt-4">

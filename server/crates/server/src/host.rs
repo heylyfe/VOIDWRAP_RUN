@@ -43,7 +43,7 @@ impl UpnpStatus {
         match self {
             UpnpStatus::Off => "Hosting is off. Turn it on so friends can join.",
             UpnpStatus::Trying => "Asking your router to open the door for friends...",
-            UpnpStatus::Open => "Friends anywhere can join with the address below.",
+            UpnpStatus::Open => "Friends anywhere can join with the 'Friends anywhere' address.",
             UpnpStatus::Failed => {
                 "Your router did not allow automatic setup. Friends on your Wi-Fi can still join; for internet play see HOW-TO-PLAY.md."
             }
@@ -434,7 +434,7 @@ mod tests {
     fn status_messages_are_plain_words() {
         assert_eq!(
             UpnpStatus::Open.message(),
-            "Friends anywhere can join with the address below."
+            "Friends anywhere can join with the 'Friends anywhere' address."
         );
         assert_eq!(
             UpnpStatus::Failed.message(),

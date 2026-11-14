@@ -144,3 +144,13 @@ Paid route usage: 0 tickets (0%).
 - T-046: 19 react-hooks immutability/use-memo lint errors (materials from useMemo mutated in useFrame).
 - T-047: join parser rejects `host.com:1` (test expects acceptance), HostPanel setState-in-effect, useless escape.
   OVERSEER renamed hud/notices.ts -> noticeText.ts (case clash with Notices.tsx on Windows).
+
+## T-046 r1 / T-047 r1 - M2 scene visuals and screens (INKLING) - ACCEPTED
+- T-046 r1: refs instead of mutated hook values; eslint clean. T-047 r1: join parser was wrong (treated `host:1`
+  as a URL scheme), HostPanel fetches without synchronous setState. tsc/eslint/155 vitest green.
+- OVERSEER integration: DraftScreen props (class, shop, buy), Notices, per-class controls hint, "Hit by a bolt"
+  death text, host message wording.
+- Verified on the packaged desktop build (headless): title menu (Play / Play with friends / Join), class picker in
+  the plain first lobby, card draft with new enemies, lobby shop with disabled Buy + reason, hosting panel (LAN and,
+  on this router, UPnP public address; hosting switched off again after the test), level 4 gameplay. Capture ok,
+  no console errors.
