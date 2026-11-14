@@ -288,3 +288,36 @@ T-053 got a third round instead of an OVERSEER takeover, to save Opus credits (u
 - `just verify` green after each merge (T-064 → T-067 → T-065 → T-066) and on the release commit:
   server 89, matchmaker 9, sim 102 + hazards 33 + levelgen 18 + physics 3, protocol 5, web 236 vitest,
   tsc, eslint, clippy, fmt, content/chunk validators, names, conformance kit (skipped, env-gated).
+
+## v0.6.0-alpha.1 — Wave 1: geometry (ramps replace every stair)
+
+- T-068 ACCEPTED: slope collision implemented once in the shared `sim` crate, so the server and the
+  WASM client prediction agree by construction. Ramps encode their direction in the existing platform
+  `kind` byte (`PLATFORM_RAMP_PX/NX/PZ/NZ` = 3/4/5/6) rather than a new `slope` field: a struct field
+  would have broken all 48 existing `Platform { .. }` constructions across 10 files, the kind byte
+  breaks nothing. `bounds.min.y` is the surface at the LOW edge, `bounds.max.y` at the HIGH edge,
+  linear in between; the solid volume is everything below the surface. `surface_top`,
+  `surface_top_clamped`, `is_ramp`, `is_ramp_at`, `surface_height` in `world.rs`; `move_axis`,
+  `resting_on_solid`, `overlaps_any_solid` in `controller.rs` are ramp-aware. 5 new ramp tests; the
+  old staircase test became `half_unit_risers_are_climbable_at_full_speed`.
+- T-068b ACCEPTED: every staircase in the shipped catalog is now one ramp — ch04 (2 runs), ch05
+  (`RAMP_PZ` 0→6 over 15 u), ch06 (2 runs), ch08, ch15, ch18, ch21, ch22, ch25; ch20's two 1.5 u
+  CRUMBLE strips merged into single 3 u strips. ch05 renamed `ch05_ramp_of_embers` / "Ramp of Embers".
+  Renderer: one extra `InstancedMesh` with a baked unit wedge (zero-thickness low end) sharing the
+  non-crumble surface material, so palette, ice tint, shake and gone-sink all work; `rampInfo()` is
+  shared by renderer and decor; `rampSurfaceHeight()` places lanterns on the slope; ramps are
+  lantern-eligible; vines anchor to the flat wedge underside.
+  Lead fixes on top of the agent's response (the agent had no tools and could not run anything):
+  (1) `validate()` rejected ramp kinds as "unknown kind", so every level containing a ramp fell back
+  to the builtin map — 256/360 seeds; (2) the reachability graph judged edges by box tops, so a ramp
+  resting on a platform looked like a +4 u jump the controller cannot perform — edges are now judged
+  where the surfaces meet (`contact_rise`), which is the ramp's low edge for a ramp-on-platform, and
+  the new public `edge_rise()` lets the playthrough test classify edges the same way the graph does.
+  Regression test `ramp_resting_on_a_platform_is_walkable_from_it`.
+  Measured: fallback rate 256/360 → 0/360, altar frequency 0.06 → 0.48, min real platforms 43.
+- Stair audit: `HOW-TO-PLAY.md` and `README.md` no longer say "stairs". `design/M3_DESIGN.md` still
+  describes the old stair design as history and `design/CHUNK_FORMAT.md` keeps one "stairs no longer
+  exist" sentence; the remaining repo-wide stair references are T-084's audit.
+- `just verify` green after each merge (T-068 → T-068b) and on the release commit: server 89,
+  matchmaker 9, sim 111 + hazards 33 + levelgen 18 + physics 3, protocol 5, web 236 vitest, tsc,
+  eslint, clippy, fmt, content/chunk validators, names, conformance kit (skipped, env-gated).
