@@ -321,3 +321,30 @@ T-053 got a third round instead of an OVERSEER takeover, to save Opus credits (u
 - `just verify` green after each merge (T-068 → T-068b) and on the release commit: server 89,
   matchmaker 9, sim 111 + hazards 33 + levelgen 18 + physics 3, protocol 5, web 236 vitest, tsc,
   eslint, clippy, fmt, content/chunk validators, names, conformance kit (skipped, env-gated).
+
+## v0.7.0-alpha.1 — Wave 2: pattern generation
+
+- T-069 ACCEPTED: `design/PATTERN_FORMAT.md` is the frozen spec. A pattern is a chunk plus closed
+  theme/mechanic/hazard vocabularies (8/10/4 values) carried as prefixed entries in the existing
+  `tags` array, so the on-disk schema is unchanged and the 25 legacy chunks are valid patterns. The
+  catalog is three files merged at load time (`chunks.json`, `patterns-a.json`, `patterns-b.json`) so
+  the two batches could be authored in parallel without touching one file; `merge_catalog_json`
+  accepts `chunks` or `patterns`, skips empty sources and errors on duplicate ids.
+  `server/crates/sim/src/pattern.rs`: `PatternMeta`, `TagBag` (own SplitMix32, integer weights only,
+  no float transcendentals — the crate compiles to WASM and must stay bit-exact), `CompositionPlan`,
+  `PlanCursor`. `try_place` drains the plan and keeps every existing acceptance rule; with no
+  explicit pattern tags it falls back to `chunk_weight`, so the pre-T-069 behaviour is bit-identical.
+  Lead fixes: wired `merge_catalog_json` into `catalog()` (the agent could not see that call site),
+  `difficulty as u8`, four collapsed clippy if-lets, a `PlatformFingerprint` alias.
+- T-070 ACCEPTED: 30 patterns, batch A (`pa_*`). Lead fix: `pa_frost_drop`'s top platform overlapped
+  its own ramp by 2 u. The placement rules only check a pattern against already-placed ones, so the
+  overlap reached the level and `validate()` rejected every attempt using it — seed 28 level 9 fell
+  back to the builtin map. Shortened the platform to end where the ramp's high edge is and moved its
+  gift and altar with it. `validate-content.mjs` now rejects intra-pattern platform intersections.
+- T-071 ACCEPTED: 30 patterns, batch B (`pb_*`). No lead fixes needed.
+- Combined catalog: 85 patterns (25 legacy + 30 A + 30 B), inside the owner's 50-100 target.
+  Harness: 3000 plans, 3000 distinct ordered lists, 0 immediate repeats, 0.85% within-6 repeats
+  (uniform baseline 37.5%), 7.60 distinct themes per level; 2000 generated levels, 0 validation
+  failures, 2000 distinct geometries, 100 reproducible pairs. Fallback 0/360.
+- New guard `shipped_catalog_has_at_least_fifty_patterns` counts ids across the three catalog files.
+- `just verify` green after each merge (T-069 → T-070 → T-071) and on the release commit.
