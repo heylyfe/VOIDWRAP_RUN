@@ -250,3 +250,41 @@ T-053 got a third round instead of an OVERSEER takeover, to save Opus credits (u
 - Smoke: real client run (tools/capture.mjs) — gifts glow on the spawn platform and sit clear of the
   walls; headless software rendering caps the client at ~10 fps, so the tool's tick-rate assertion
   fails in this environment (not a game error).
+
+## v0.5.0-alpha.1 — Wave 2: matchmaker and lobby browser
+
+- T-064 ACCEPTED: new `server/crates/matchmaker` (axum 0.8, tokio, serde, `rand`). Frozen contract
+  implemented: `GET /health`, `POST /matches`, `POST /matches/{id}`, `DELETE /matches/{id}`,
+  `GET /matches?version=`. In-memory state, 30 s TTL swept every 10 s, secret-only authority,
+  address from body / `X-Forwarded-For` first hop / socket peer, CORS on `GET /matches` only.
+  `cargo test -p matchmaker` 9/9. Lead fix: one TTL test asserted the wrong entry was gone at
+  `start+TTL` (the refreshed entry is still live there).
+- T-067 ACCEPTED: `tools/matchmaker-conformance/run.mjs` (Node built-ins only) — 8 checks, prints
+  `PASS/FAIL — <check>`, exits 0 only on a full pass, skips cleanly with no base URL so `just verify`
+  stays green. `--selftest` proves it bites: full pass against the faithful stub, then 11 single
+  violations each tripping its paired check. `tools/matchmaker-stub/server.mjs` is the shared dev target.
+- T-065 ACCEPTED: `matchmaker_client` (reqwest, short timeouts) registers/heartbeats/delists; an
+  unreachable matchmaker logs at debug and retries next beat. `HostManager` registers once hosting
+  settles with `joinable = (upnp == Open)` and `reported_port()`, prefers `inner.public` and reconciles
+  against the echoed address; forced-open hosts register `joinable: true` with `PUBLIC_ORIGIN`. UPnP
+  lease re-asserted every 90 min. `cargo test -p server` 89/89.
+  Lead fixes: (1) `level` was sent as a number while the frozen contract and the matchmaker's types
+  make it an opaque string — every registration would have been a 400; (2) the heartbeat reported
+  placeholder zeros because the game task was unreachable from the ticket's file set — added
+  `GameStateHandle` (lock-free atomics) published by `game::run` each tick and read by the heartbeat,
+  and removed the now-dead placeholder field.
+- T-066 ACCEPTED: `matchmaker.ts` + `MatchList.tsx` in the JoinPanel. Fetches
+  `<NEXT_PUBLIC_MATCHMAKER_URL>/matches?version=<CLIENT_VERSION>`, validates every field, hands the
+  address to the existing `parseJoinAddress` path. Unjoinable entries greyed with "host is unreachable
+  from the internet"; "Waking server…" on a slow first fetch, error only after ~90 s; refresh on
+  reopen, no polling. `CLIENT_VERSION` is asserted against `web/package.json`.
+- Conformance gate: kit 8/8 against the real matchmaker binary built from the merged tree.
+- Seam checks: registration body field-for-field vs `CreateMatch` (level/phase strings — fixed above);
+  list shape vs `ListedMatch` incl. `{max_players, level, phase}`; address handoff through
+  `parseJoinAddress`.
+- E2E: real matchmaker + real server + built client in a browser. Hosting on → entry appears
+  (`VOIDWRAP RUN / http://localhost:7900 / 0/8 players · 1 · draft`) → JOIN navigates to `/play/` and
+  the game runs → the listing then reports `players: 1`, proving the live heartbeat.
+- `just verify` green after each merge (T-064 → T-067 → T-065 → T-066) and on the release commit:
+  server 89, matchmaker 9, sim 102 + hazards 33 + levelgen 18 + physics 3, protocol 5, web 236 vitest,
+  tsc, eslint, clippy, fmt, content/chunk validators, names, conformance kit (skipped, env-gated).
