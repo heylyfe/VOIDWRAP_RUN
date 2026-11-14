@@ -40,6 +40,7 @@ verify: wasm
     pnpm --dir web exec tsc --noEmit
     pnpm --dir web exec eslint .
     pnpm --dir web exec vitest run
+    node tools/matchmaker-conformance/run.mjs
 
 # Screenshot the running client into shots/ (needs `just run` in another terminal)
 capture:
