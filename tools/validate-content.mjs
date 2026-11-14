@@ -21,6 +21,10 @@ const PLAYER_SPEED = 9;
 const ID = /^[a-z][a-z0-9_]{1,31}$/;
 const ids = new Set();
 
+// Class order is fixed: the client indexes classes by position on the select screen. Declared here because the
+// enemy registry validates class_interactions keys against it before the classes section runs.
+const CLASS_IDS = ["striker", "grappler", "bulwark", "glider"];
+
 function checkId(where, id) {
   if (!ID.test(id ?? "")) err(`${where}: bad id ${JSON.stringify(id)}`);
   if (ids.has(id)) err(`${where}: duplicate id ${id}`);
@@ -48,10 +52,16 @@ function checkMods(where, mods, greater) {
 // M3 roster. The array order IS the network kind index, so the ids are pinned in place. `params.behavior` repeats
 // the id (one state machine per enemy); the M2 archetypes and their tuning fields (fire_interval_s,
 // projectile_speed, reveal_radius, corrupt_interval_s) are gone - those numbers live in the sim now.
+// T-072 appended the eleven registry entries after the nine M3 ids; the first nine positions must never move.
 const ENEMY_IDS = ["pallbearer", "snapshrike", "moteling", "rift_warden", "gale_wight", "lantern_leech", "turret",
-  "mimic", "corrupter"];
+  "mimic", "corrupter", "rewind", "warden", "peal", "kite", "static", "blight", "metronome", "overlook", "chorus",
+  "coil", "lure"];
 const ENEMY_PARAMS = ["speed", "aggro", "grace_s", "size", "behavior"];
 const STATIONARY = ["turret", "mimic"]; // the only two that never roam
+// Closed vocabularies from design/ENEMY_REGISTRY.md. Adding a member is a spec change, not a content change.
+const ENEMY_TAGS = ["fog", "ambush", "collapse", "chase", "zone", "debuff", "summon", "small", "large", "loot"];
+const CLASS_RELATIONS = ["counters", "immune", "ignores"];
+const SYNERGY_EFFECTS = ["peal_lethal_when_overtuned", "infection_pauses_timer", "chorus_needs_small_pair"];
 
 if (!Array.isArray(c.enemies) || c.enemies.length !== ENEMY_IDS.length) {
   err(`enemies: need exactly ${ENEMY_IDS.length} (have ${Array.isArray(c.enemies) ? c.enemies.length : 0})`);
@@ -72,6 +82,44 @@ for (const [i, e] of (c.enemies ?? []).entries()) {
   if (!(typeof p.aggro === "number" && p.aggro >= 0 && p.aggro <= 40)) err(`${w}.params.aggro=${p.aggro} must be in [0, 40]`);
   if (p.grace_s !== 4.0) err(`${w}.params.grace_s=${p.grace_s} must be 4.0 (nothing damages anyone in the first 4 s)`);
   if (!(typeof p.size === "number" && p.size >= 0.3 && p.size <= 1.6)) err(`${w}.params.size=${p.size} must be in [0.3, 1.6]`);
+
+  // Registry fields (T-072). Every one of them is required on a shipped entry; the Rust side defaults them so an
+  // older content file still loads, but the shipped file must spell them out.
+  if (!Number.isInteger(e.cue_tier) || e.cue_tier < 1 || e.cue_tier > 3) err(`${w}.cue_tier=${e.cue_tier} must be an integer 1..3`);
+  if (!Number.isInteger(e.min_level) || e.min_level < 1) err(`${w}.min_level=${e.min_level} must be an integer >= 1`);
+  if (!Number.isInteger(e.selection_cap) || e.selection_cap < 1 || e.selection_cap > 2) err(`${w}.selection_cap=${e.selection_cap} must be 1 or 2`);
+  if (!Array.isArray(e.tags) || e.tags.length === 0) err(`${w}.tags: need at least one tag`);
+  else {
+    const seenTags = new Set();
+    for (const t of e.tags) {
+      if (!ENEMY_TAGS.includes(t)) err(`${w}.tags: ${JSON.stringify(t)} not in the closed vocabulary`);
+      if (seenTags.has(t)) err(`${w}.tags: duplicate ${t}`);
+      seenTags.add(t);
+    }
+  }
+  const ci = e.class_interactions;
+  if (!ci || typeof ci !== "object" || Array.isArray(ci)) err(`${w}.class_interactions: must be an object`);
+  else {
+    for (const [cls, rel] of Object.entries(ci)) {
+      if (!CLASS_IDS.includes(cls)) err(`${w}.class_interactions.${cls}: not a class`);
+      if (!CLASS_RELATIONS.includes(rel)) err(`${w}.class_interactions.${cls}=${JSON.stringify(rel)} not one of ${CLASS_RELATIONS.join(", ")}`);
+    }
+  }
+  if (!Array.isArray(e.synergy_hooks)) err(`${w}.synergy_hooks: must be an array`);
+  else {
+    for (const [j, h] of e.synergy_hooks.entries()) {
+      const hw = `${w}.synergy_hooks[${j}]`;
+      if (!SYNERGY_EFFECTS.includes(h?.effect)) err(`${hw}.effect=${JSON.stringify(h?.effect)} not in the closed set`);
+      const hasWith = typeof h?.with === "string";
+      const hasReq = h?.requires !== undefined;
+      if (hasWith === hasReq) err(`${hw}: needs exactly one of "with" or "requires"`);
+      if (hasWith && !ENEMY_IDS.includes(h.with)) err(`${hw}.with=${JSON.stringify(h.with)} is not an enemy id`);
+      if (hasReq) {
+        if (!ENEMY_TAGS.includes(h.requires?.tag)) err(`${hw}.requires.tag=${JSON.stringify(h.requires?.tag)} not in the closed vocabulary`);
+        if (!Number.isInteger(h.requires?.count) || h.requires.count < 1) err(`${hw}.requires.count=${h.requires?.count} must be an integer >= 1`);
+      }
+    }
+  }
 }
 
 // --- upgrades and curses ---------------------------------------------------------------------------------------
@@ -100,8 +148,7 @@ if (fastest * worstMul > 14) err(`fastest enemy x worst curse = ${(fastest * wor
 
 // --- classes ---------------------------------------------------------------------------------------------------
 // Order is fixed: the client indexes classes by position on the select screen. M3 replaced the Blinker with the
-// Bulwark in slot 2; the old id must not survive anywhere in the file.
-const CLASS_IDS = ["striker", "grappler", "bulwark", "glider"];
+// Bulwark in slot 2; the old id must not survive anywhere in the file. CLASS_IDS is declared above.
 if (!Array.isArray(c.classes)) err("classes: missing");
 else {
   if (c.classes.length !== CLASS_IDS.length) err(`classes: need exactly ${CLASS_IDS.length} (have ${c.classes.length})`);

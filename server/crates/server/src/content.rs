@@ -32,12 +32,44 @@ const KNOWN_MODS: [&str; 16] = [
     "extra_enemies_add",
 ];
 
+/// Closed enemy tag vocabulary (design/ENEMY_REGISTRY.md §5). Adding a tag is a spec change.
+pub const ENEMY_TAGS: [&str; 10] = [
+    "fog", "ambush", "collapse", "chase", "zone", "debuff", "summon", "small", "large", "loot",
+];
+
+/// Closed class-interaction vocabulary (§6): a class counters the enemy, is immune to it, or never attracts it.
+pub const CLASS_RELATIONS: [&str; 3] = ["counters", "immune", "ignores"];
+
+/// The playable classes, in protocol order. `design/content.json` ships exactly these four.
+pub const CLASS_IDS: [&str; 4] = ["striker", "grappler", "bulwark", "glider"];
+
+/// Closed synergy-effect vocabulary (§7). Adding one is a spec change, not a content change.
+pub const SYNERGY_EFFECTS: [&str; 3] = [
+    "peal_lethal_when_overtuned",
+    "infection_pauses_timer",
+    "chorus_needs_small_pair",
+];
+
 fn pallbearer() -> String {
     "pallbearer".to_string()
 }
 
 fn one() -> f32 {
     1.0
+}
+
+/// Registry defaults for an older content file that predates T-072: no telegraph promise (tier 3),
+/// offerable from level 1, one permanent copy.
+fn default_cue_tier() -> u8 {
+    3
+}
+
+fn default_min_level() -> u8 {
+    1
+}
+
+fn default_selection_cap() -> u8 {
+    1
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -56,9 +88,47 @@ pub struct EnemyStats {
     pub behavior: String,
 }
 
+/// A declarative pool requirement: the run must already hold `count` permanents carrying `tag`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SynergyRequires {
+    pub tag: String,
+    pub count: u8,
+}
+
+/// One declarative synergy hook. Exactly one of `with` (pairwise) or `requires` (self) is set.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SynergyHook {
+    /// Another enemy id; the hook fires while that enemy is a permanent in the run.
+    #[serde(default)]
+    pub with: Option<String>,
+    /// A tag/count prerequisite on the run's own permanents.
+    #[serde(default)]
+    pub requires: Option<SynergyRequires>,
+    /// One of `SYNERGY_EFFECTS`.
+    pub effect: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct EnemyDef {
     pub id: String,
+    /// 1 = under 1 s telegraph, 2 = 1-2 s, 3 = ambient. Defaults to 3 so an older file promises nothing.
+    #[serde(default = "default_cue_tier")]
+    pub cue_tier: u8,
+    /// First level the enemy may be offered.
+    #[serde(default = "default_min_level")]
+    pub min_level: u8,
+    /// Permanent copies allowed in one run (1 or 2).
+    #[serde(default = "default_selection_cap")]
+    pub selection_cap: u8,
+    /// Closed vocabulary, see `ENEMY_TAGS`.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// class id -> "counters" | "immune" | "ignores"; absent classes are neutral.
+    #[serde(default)]
+    pub class_interactions: BTreeMap<String, String>,
+    /// Declarative only; the engine reads these, it never executes content.
+    #[serde(default)]
+    pub synergy_hooks: Vec<SynergyHook>,
     pub params: EnemyStats,
 }
 
@@ -127,6 +197,89 @@ impl Content {
         if c.curses.iter().filter(|k| k.greater).count() < 3 {
             return Err("design/content.json: need at least 3 greater curses".into());
         }
+        // Enemies: the frozen registry contract (design/ENEMY_REGISTRY.md). Ids are unique and every
+        // registry field sits inside its closed vocabulary; the sim still owns the behaviour itself.
+        let mut enemy_ids = std::collections::BTreeSet::new();
+        for enemy in &c.enemies {
+            if !enemy_ids.insert(enemy.id.as_str()) {
+                return Err(format!("design/content.json: duplicate enemy {}", enemy.id));
+            }
+        }
+        for enemy in &c.enemies {
+            let id = enemy.id.as_str();
+            if !(1..=3).contains(&enemy.cue_tier) {
+                return Err(format!(
+                    "design/content.json: enemy {id}: cue_tier {} not in 1..=3",
+                    enemy.cue_tier
+                ));
+            }
+            if enemy.min_level < 1 {
+                return Err(format!("design/content.json: enemy {id}: min_level must be >= 1"));
+            }
+            if !(1..=2).contains(&enemy.selection_cap) {
+                return Err(format!(
+                    "design/content.json: enemy {id}: selection_cap {} not in 1..=2",
+                    enemy.selection_cap
+                ));
+            }
+            if enemy.tags.is_empty() {
+                return Err(format!("design/content.json: enemy {id}: needs at least one tag"));
+            }
+            let mut tags = std::collections::BTreeSet::new();
+            for tag in &enemy.tags {
+                if !ENEMY_TAGS.contains(&tag.as_str()) {
+                    return Err(format!("design/content.json: enemy {id}: unknown tag {tag}"));
+                }
+                if !tags.insert(tag.as_str()) {
+                    return Err(format!("design/content.json: enemy {id}: duplicate tag {tag}"));
+                }
+            }
+            for (class, relation) in &enemy.class_interactions {
+                if !CLASS_IDS.contains(&class.as_str()) {
+                    return Err(format!("design/content.json: enemy {id}: unknown class {class}"));
+                }
+                if !CLASS_RELATIONS.contains(&relation.as_str()) {
+                    return Err(format!(
+                        "design/content.json: enemy {id}: unknown class relation {relation}"
+                    ));
+                }
+            }
+            for hook in &enemy.synergy_hooks {
+                if !SYNERGY_EFFECTS.contains(&hook.effect.as_str()) {
+                    return Err(format!(
+                        "design/content.json: enemy {id}: unknown synergy effect {}",
+                        hook.effect
+                    ));
+                }
+                match (&hook.with, &hook.requires) {
+                    (Some(other), None) => {
+                        if !enemy_ids.contains(other.as_str()) {
+                            return Err(format!(
+                                "design/content.json: enemy {id}: synergy with unknown enemy {other}"
+                            ));
+                        }
+                    }
+                    (None, Some(requires)) => {
+                        if !ENEMY_TAGS.contains(&requires.tag.as_str()) {
+                            return Err(format!(
+                                "design/content.json: enemy {id}: unknown requirement tag {}",
+                                requires.tag
+                            ));
+                        }
+                        if requires.count < 1 {
+                            return Err(format!(
+                                "design/content.json: enemy {id}: requirement count must be >= 1"
+                            ));
+                        }
+                    }
+                    _ => {
+                        return Err(format!(
+                            "design/content.json: enemy {id}: synergy hook needs exactly one of `with` or `requires`"
+                        ));
+                    }
+                }
+            }
+        }
         // Shop: unique ids, known kinds, known mod keys.
         let mut shop_ids = std::collections::BTreeSet::new();
         for item in &c.shop {
@@ -168,9 +321,8 @@ impl Content {
         }
         // Classes: the first four, in order, are the CLASS_* protocol constants.
         if !c.classes.is_empty() {
-            let expected = ["striker", "grappler", "bulwark", "glider"];
-            let valid = c.classes.len() >= expected.len()
-                && c.classes.iter().zip(expected).all(|(class, want)| class.id == want);
+            let valid = c.classes.len() >= CLASS_IDS.len()
+                && c.classes.iter().zip(CLASS_IDS).all(|(class, want)| class.id == want);
             if !valid {
                 return Err("design/content.json: classes must start with striker, grappler, bulwark, glider".into());
             }
@@ -504,8 +656,92 @@ mod tests {
     }
 
     #[test]
+    fn shipped_registry_has_twenty_valid_entries() {
+        let c = Content::load().unwrap();
+        let ids: Vec<&str> = c.enemies.iter().map(|e| e.id.as_str()).collect();
+        let expected = [
+            "pallbearer",
+            "snapshrike",
+            "moteling",
+            "rift_warden",
+            "gale_wight",
+            "lantern_leech",
+            "turret",
+            "mimic",
+            "corrupter",
+            "rewind",
+            "warden",
+            "peal",
+            "kite",
+            "static",
+            "blight",
+            "metronome",
+            "overlook",
+            "chorus",
+            "coil",
+            "lure",
+        ];
+        assert_eq!(ids, expected, "content order is the network kind index");
+        for e in &c.enemies {
+            assert!(!e.id.trim().is_empty(), "enemy without an id");
+            assert!((1..=3).contains(&e.cue_tier), "{}: cue_tier {}", e.id, e.cue_tier);
+            assert!(e.min_level >= 1, "{}: min_level {}", e.id, e.min_level);
+            assert!(
+                (1..=2).contains(&e.selection_cap),
+                "{}: selection_cap {}",
+                e.id,
+                e.selection_cap
+            );
+            assert!(!e.tags.is_empty(), "{}: no tags", e.id);
+            for tag in &e.tags {
+                assert!(ENEMY_TAGS.contains(&tag.as_str()), "{}: tag {tag}", e.id);
+            }
+            for (class, relation) in &e.class_interactions {
+                assert!(CLASS_IDS.contains(&class.as_str()), "{}: class {class}", e.id);
+                assert!(
+                    CLASS_RELATIONS.contains(&relation.as_str()),
+                    "{}: relation {relation}",
+                    e.id
+                );
+            }
+            for hook in &e.synergy_hooks {
+                assert!(
+                    SYNERGY_EFFECTS.contains(&hook.effect.as_str()),
+                    "{}: effect {}",
+                    e.id,
+                    hook.effect
+                );
+                if let Some(other) = &hook.with {
+                    assert!(ids.contains(&other.as_str()), "{}: with {other}", e.id);
+                }
+            }
+        }
+        // The three hooks the registry pins.
+        let hooks = |id: &str| c.enemy(id).map(|(_, e)| e.synergy_hooks.clone()).unwrap_or_default();
+        assert!(
+            hooks("peal")
+                .iter()
+                .any(|h| h.with.as_deref() == Some("coil") && h.effect == "peal_lethal_when_overtuned")
+        );
+        assert!(
+            hooks("blight")
+                .iter()
+                .any(|h| h.with.as_deref() == Some("rewind") && h.effect == "infection_pauses_timer")
+        );
+        assert!(
+            hooks("blight")
+                .iter()
+                .any(|h| h.with.as_deref() == Some("kite") && h.effect == "infection_pauses_timer")
+        );
+        assert!(hooks("chorus").iter().any(|h| {
+            h.effect == "chorus_needs_small_pair"
+                && h.requires.as_ref().is_some_and(|r| r.tag == "small" && r.count == 2)
+        }));
+    }
+
+    #[test]
     fn older_content_without_m2_or_m3_sections_still_loads() {
-        // Simulates an older content.json: no classes/shop/events/altars, no behavior.
+        // Simulates an older content.json: no classes/shop/events/altars, no behavior, no registry fields.
         let older = r#"{
             "enemies": [
                 {"id": "a", "params": {"speed": 1.0, "aggro": 1.0, "grace_s": 1.0, "size": 1.0}},
@@ -531,5 +767,12 @@ mod tests {
         assert!(c.shop.is_empty() && c.events.is_empty() && c.classes.is_empty() && c.altars.is_empty());
         assert_eq!(c.enemies[0].params.behavior, "pallbearer");
         assert_eq!(c.event(2).map(|e| e.id.as_str()), None);
+        // Registry fields fall back to the permissive defaults.
+        assert_eq!(c.enemies[0].cue_tier, 3);
+        assert_eq!(c.enemies[0].min_level, 1);
+        assert_eq!(c.enemies[0].selection_cap, 1);
+        assert!(c.enemies[0].tags.is_empty());
+        assert!(c.enemies[0].class_interactions.is_empty());
+        assert!(c.enemies[0].synergy_hooks.is_empty());
     }
 }
