@@ -449,3 +449,23 @@ commit.
   poll's theme choice is not yet consumed by the server, and the matchmaker heartbeat does not report
   `phase: "voting"`.
 - `just verify` green after each merge (T-078 → T-079 → T-081 → T-080) and on the release commit.
+
+## Wave 5 (in progress) — progression, modes and economy
+
+Merge order T-082 → T-083 → T-084 → T-085 → T-086 → T-087 → T-088 → T-089. `just verify` green
+after each merge so far. No release cut yet: Wave 5 releases at its boundary.
+
+- T-082 ACCEPTED: the between-level shop. Four static items sampled from content plus contextual
+  offerings from run state — two upgrade cards, one perk per class, one counter per permanent the
+  run holds, one purge per distinct curse with stock equal to the stacks held. Content grows to 31
+  shop items (20 counters, 4 perks, the original 7). Both validators learned the `counter` and
+  `perk` kinds; the "exactly 7 base items" rule still holds for life/reroll/mods. Lead fixes: two
+  over-long effect strings, and two stale test expectations (the offer is no longer exactly four
+  items; two curse stacks clamp at the run-speed floor of 0.8 rather than multiplying to 0.7744).
+- T-083 ACCEPTED: four one-time altars, one per `AltarKind`, mapped by `id % 4` — shortcut, gift
+  sight, clear sky, debt. Effects live in an `AltarLedger` on `Run` so they survive level
+  transitions, with a stable line-based restart codec. Lead fixes: 13 borrow errors (altar feet are
+  now taken by value; the golden-gift pass gathers ids before mutating), the validator now requires
+  the four altar ids in `AltarKind` order, the presentation/codec API carries `#[allow(dead_code)]`
+  because only tests exercise it today, and one stale game test was rewritten for the new altar
+  semantics.
