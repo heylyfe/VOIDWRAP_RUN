@@ -219,3 +219,11 @@ T-053 got a third round instead of an OVERSEER takeover, to save Opus credits (u
   eslint, clippy (incl. desktop feature), fmt, content/chunk validators, names. Packaged game: capture.mjs and
   capture-m3.mjs pass with no console errors (class picker, 46 gifts on L1, 76 on L4, stairs, hunter telegraph,
   draft + shop, Ctrl mouse lock).
+
+## Release v0.3.0-alpha.1 (M3) - published and verified from the GitHub download
+- CI green (verify, docker, Windows desktop). Assets: windows-setup.exe 2.56 MB, windows.zip 3.45 MB, linux.tar.gz
+  3.41 MB, prerelease=true.
+- Downloaded installer: silent install exit 0 (game, web/, ENEMIES.md, HOW-TO-PLAY.md, PLAY-IN-BROWSER.cmd,
+  uninstaller; HKCU entry "VOIDWRAP RUN / v0.3.0-alpha.1"); installed game opens the "VOIDWRAP RUN" window, /health
+  ok, capture-m3 level-1 checks pass (46 gifts, Ctrl lock); graceful close; uninstall exit 0 leaves nothing.
+  (The level-4 draft/shop/hunter shots were taken on the identical build before tagging.)
