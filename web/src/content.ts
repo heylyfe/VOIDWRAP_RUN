@@ -1,5 +1,5 @@
 // Typed access to design/content.json: draft cards (enemies, upgrades, curses), run classes, lobby shop stock,
-// level events and altars, plus per-theme screen grades.
+// level events, milestone notices and altars, plus per-theme screen grades.
 // The Rust server reads the same file, so card ids, numbers and text can never drift between client and server.
 import content from "../../design/content.json";
 
@@ -79,6 +79,24 @@ export interface LevelEvent {
   friction_mul?: number;
 }
 
+/**
+ * A milestone notice: the phase-2 collapse, or one escalation step from design §5.
+ * The server broadcasts these as NOTICE_EVENT ids ("collapse", "milestone_9", ...).
+ */
+export interface Milestone {
+  id: string;
+  /** Escalation level that fires it; 0 for the collapse. */
+  level: number;
+  name: string;
+  banner: string;
+}
+
+/** Title + body of one notice line. */
+export interface NoticeLine {
+  title: string;
+  body: string;
+}
+
 export interface Altar {
   id: string;
   name: string;
@@ -105,6 +123,7 @@ export const CURSES: readonly ModCard[] = content.curses as ModCard[];
 export const CLASSES: readonly ClassCard[] = content.classes as ClassCard[];
 export const SHOP: readonly ShopItem[] = content.shop as ShopItem[];
 export const EVENTS: readonly LevelEvent[] = content.events as LevelEvent[];
+export const MILESTONES: readonly Milestone[] = content.milestones as Milestone[];
 export const ALTARS: readonly Altar[] = content.altars as Altar[];
 const GRADES: Record<string, ScreenGrade> = content.grades;
 
@@ -138,6 +157,27 @@ export function lookupCard(kind: number, id: string): AnyCard | null {
 /** Level event by its wire number; null when the level carries no event. */
 export function eventInfo(event: number): LevelEvent | null {
   return EVENTS.find((e) => e.event === event) ?? null;
+}
+
+/** Milestone by notice id ("collapse", "milestone_9", ...); null for unknown ids. */
+export function milestoneInfo(id: string): Milestone | null {
+  return MILESTONES.find((m) => m.id === id) ?? null;
+}
+
+/**
+ * Text for a NOTICE_EVENT id. Level events win over milestones, so an id that
+ * exists in both always shows the event banner; unknown ids return null.
+ */
+export function noticeEventText(id: string): NoticeLine | null {
+  const event = EVENTS.find((e) => e.id === id);
+  if (event) {
+    return { title: event.name, body: event.banner };
+  }
+  const milestone = milestoneInfo(id);
+  if (milestone) {
+    return { title: milestone.name, body: milestone.banner };
+  }
+  return null;
 }
 
 const NEUTRAL_GRADE: ScreenGrade = {

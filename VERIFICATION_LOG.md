@@ -190,3 +190,6 @@ State of `main` (local, NOT pushed - CI would fail until the items below are gre
 Process notes: large files -> FN/APPEND edits via `node tools/apply-fns.mjs` (format: tickets/FN-FORMAT.md); tickets
 reference code with `@include path`; subordinate answers over ~100 KB get cut off - split tickets. Exception logged:
 T-053 got a third round instead of an OVERSEER takeover, to save Opus credits (user preference).
+- T-059 (DEEPSEEK) ACCEPTED: 15 milestone/collapse notice texts (facts match design section 5), content otherwise
+  unchanged, 183 vitest. T-060 (GLM) ACCEPTED: alpha-3 guide/README/release notes, README protected sections
+  byte-identical, check-names ok. T-061 (INKLING) applied: tools/capture-m3.mjs, exercised at the M3 play-test.

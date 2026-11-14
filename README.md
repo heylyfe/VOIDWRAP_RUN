@@ -10,28 +10,39 @@ Every run drops you into a freshly generated sprawl of floating platforms hangin
 
 ## Status
 
-The project is a pre-release alpha (alpha 2). Working:
+The project is a pre-release alpha (alpha 3). Working:
 
+- Windows installer (recommended): its own icon, a Start menu entry, an optional desktop shortcut, no administrator rights needed — the zip download still works as before
 - Desktop game window (no browser needed; `PLAY-IN-BROWSER` falls back to the web browser)
 - A lobby with class choice, enemy, upgrade, and curse voting
-- Classes: Striker, Grappler, Blinker, Glider, each with an ability
-- A lobby shop for golden-gift money: extra lives, rerolls, small permanent boosts
+- Classes: Striker, Grappler, Glider and the new Bulwark (replaces the Blinker), each with an ability
+- Huge modular maps built from hand-made pieces: stacked layers on pillars, walkable stairs, towers, two-level bridges, jump pads, loops and junctions
+- Two-phase levels: collect the gifts, then the map collapses from the outside in while golden gifts mark the spots you emptied
+- A lobby shop for golden-gift money: extra lives, rerolls, small permanent boosts (new prices — you earn far more gold now)
 - Altars: one random upgrade and one random curse each
-- Randomly generated levels with level events (High Rise, Slick Ice, Crumbling)
-- Gifts, golden gifts, and an exit beacon
-- Lives, and three new hunters: Bolt Sentry, False Gift, Crumble Wisp
+- Randomly generated levels with level events (High Rise, Slick Ice, Crumbling) and announced milestones from level 4
+- Gifts, golden gifts, and the exit beacon on the spawn platform
+- Lives, and nine reworked hunters whose deadly attacks are always announced by a visible warning
 - Play with friends over your network or the internet from your own computer (up to 8), with spectator mode
+- Ctrl locks and frees the mouse pointer
 - Animations
 - Per-level visual themes
 
-Still planned: accounts, cosmetics, sound, more classes and events, installer.
+Still planned: accounts, cosmetics, sound, more classes and events.
 
 ## Play
 
-1. Open https://github.com/heylyfe/VOIDWRAP_RUN/releases, click the newest version's file ending in `-windows.zip`.
-2. In Downloads, right-click it -> "Extract All..." -> "Extract", open the extracted folder.
-3. Double-click `VOIDWRAP RUN`. The game opens in its own window. If it stays empty or white, double-click `PLAY-IN-BROWSER` instead — the game then opens in your web browser (keep the black window open while you play).
-4. If "Windows protected your PC" appears: "More info" -> "Run anyway".
+Windows — installer (recommended):
+
+1. Open https://github.com/heylyfe/VOIDWRAP_RUN/releases, click the newest version, click "Assets", click the file ending in `-windows-setup.exe`.
+2. Double-click the downloaded file. If "Windows protected your PC" appears: "More info" -> "Run anyway".
+3. Click "Next", then "Install", then "Finish". The game installs for your user only — no administrator rights needed — and gets its own icon and a Start menu entry.
+4. Start the game from the Start menu or the desktop shortcut.
+
+Windows zip, or Linux:
+
+1. Download the file ending in `-windows.zip`, extract it (right-click -> "Extract All..." -> "Extract"), open the extracted folder, and double-click `VOIDWRAP RUN`. On Linux, extract the `-linux.tar.gz` file and run `./play.sh` in a terminal.
+2. If the game window stays empty or white, double-click `PLAY-IN-BROWSER` instead — the game then opens in your web browser (keep the black window open while you play).
 
 For detailed help, see [HOW-TO-PLAY.md](HOW-TO-PLAY.md).
 
@@ -55,12 +66,12 @@ Then:
 ## Controls
 
 - WASD (or arrow keys) — move
-- Mouse — look (click the game to capture the mouse)
+- Mouse — look
+- Ctrl — lock or free the mouse pointer (a hint at the bottom of the screen shows it; clicking the game also locks it)
 - Space — jump (hold for higher)
 - Shift or right-click — class ability
 - E — use an altar
 - 1–4 — choose a class in the first lobby
-- Esc — release the mouse pointer
 
 For the full control list, see [HOW-TO-PLAY.md](HOW-TO-PLAY.md).
 

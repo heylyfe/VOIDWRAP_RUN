@@ -3,9 +3,9 @@
 > **Quick start (4 steps)**
 >
 > 1. Open https://github.com/heylyfe/VOIDWRAP_RUN/releases in your web browser.
-> 2. Under the newest version, click "Assets", then click the file whose name ends in `-windows.zip`.
-> 3. In your Downloads folder, right-click that file, choose "Extract All...", click "Extract", then open the extracted folder.
-> 4. Double-click `VOIDWRAP RUN`. If a blue box says "Windows protected your PC", click "More info", then click "Run anyway". The game opens in its own window after a moment.
+> 2. Under the newest version, click "Assets", then click the file whose name ends in `-windows-setup.exe`. This is the installer — the recommended way to play.
+> 3. Double-click the downloaded file. If a blue box says "Windows protected your PC", click "More info", then click "Run anyway".
+> 4. In the installer, click "Next", then "Install". At the end, click "Finish". If "Start VOIDWRAP RUN now" is ticked, the game opens in its own window after a moment.
 
 ## What is this?
 
@@ -17,17 +17,31 @@ Official tagline: "Collect every gift. Outrun what you voted for."
 
 ## Download and start (Windows)
 
+There are two ways to get the game on your computer. The installer is easier and is the recommended way. The zip file works exactly as it did before.
+
 ### Step 1: Download the game
 
 1. Open your web browser.
 2. Type `https://github.com/heylyfe/VOIDWRAP_RUN/releases` into the address bar at the top and press Enter. (If this text is clickable where you read this, you can click it instead.)
 3. You now see a list of versions of the game. The newest version is at the top. It has a small label "Pre-release".
 4. Under the top version, find the word "Assets" and click it. A list of files opens.
-5. Click the file whose name ends in `-windows.zip`, for example `VOIDWRAP_RUN-v0.2.0-alpha.1-windows.zip`.
-6. The browser saves the file. This takes only a few seconds.
-7. The browser saves it into your **Downloads** folder. You may also see the file appear at the bottom of the browser window.
+5. Two files work on Windows:
+   - the installer, whose name ends in `-windows-setup.exe` [a small program that puts the game on your computer for you]. This is the recommended way.
+   - the zip file, whose name ends in `-windows.zip`.
+6. Click the one you want. The browser saves it into your **Downloads** folder. You may also see the file appear at the bottom of the browser window.
 
-### Step 2: Unzip the file
+### Step 2: Install the game (recommended way)
+
+1. Open the **Downloads** folder on your computer.
+2. Double-click the file whose name ends in `-windows-setup.exe`.
+3. The FIRST time, Windows may show a blue box that says "Windows protected your PC". This appears for new games from small developers that are not "signed" [not registered with a paid certificate]. It does not mean the game is dangerous. In that blue box, click "More info" (a small line of text), then click "Run anyway".
+4. The installer window opens. Click "Next", then "Install". It needs no administrator rights, and it installs only for you, the current user.
+5. If you want a shortcut on your desktop, leave the box for it ticked.
+6. At the end, click "Finish". If "Start VOIDWRAP RUN now" is ticked, the game opens right away.
+7. After installing, the game is in your Start menu as **VOIDWRAP RUN**, with its own game icon. The guides `HOW-TO-PLAY.md` (this file) and `ENEMIES.md` are in the game folder.
+8. To remove the game later: open **Windows Settings > Apps**, find VOIDWRAP RUN, and click "Uninstall". You can also uninstall it from the Start menu.
+
+### Step 2 (alternative): the zip file
 
 The download is a zip file [a packed folder, like a sealed envelope]. You must unpack it first. Running the game from inside the zip without extracting does **not** work.
 
@@ -36,9 +50,9 @@ The download is a zip file [a packed folder, like a sealed envelope]. You must u
 3. RIGHT-click the zip file (press the right-hand mouse button once). A menu opens.
 4. Click "Extract All..." in the menu.
 5. A window opens. Click the button "Extract".
-6. A normal folder opens. It is named `VOIDWRAP_RUN-...` (for example `VOIDWRAP_RUN-v0.2.0-alpha.1`). Open it.
+6. A normal folder opens. It is named `VOIDWRAP_RUN-...` (for example `VOIDWRAP_RUN-v0.3.0-alpha.1`). Open it.
 
-Inside you should see: `VOIDWRAP RUN.exe` (the game), `PLAY-IN-BROWSER.cmd` (a backup way to start), a folder named `web`, and this guide.
+Inside you should see: `VOIDWRAP RUN.exe` (the game), `PLAY-IN-BROWSER.cmd` (a backup way to start), a folder named `web`, and the guides (`HOW-TO-PLAY.md` and `ENEMIES.md`).
 
 Two important notes:
 
@@ -47,16 +61,15 @@ Two important notes:
 
 ### Step 3: Start the game
 
-1. Double-click `VOIDWRAP RUN` (it may show as "VOIDWRAP RUN" or "VOIDWRAP RUN.exe").
-2. The FIRST time, Windows may show a blue box that says "Windows protected your PC". This appears for new games from small developers that are not "signed" [not registered with a paid certificate]. It does not mean the game is dangerous.
-3. In that blue box, click "More info" (a small line of text), then click "Run anyway".
-4. The game opens in its OWN window. There is no black window and no web browser involved.
-5. You now see the title screen with three buttons: **PLAY** (play alone, or with friends who already joined), **PLAY WITH FRIENDS**, and **JOIN A FRIEND**. Click PLAY to start.
-6. To stop playing: close the game window. That is all.
+1. If you used the installer: click the Windows Start button and click **VOIDWRAP RUN**, or double-click the desktop shortcut if you made one.
+2. If you used the zip: open the extracted folder and double-click `VOIDWRAP RUN` (it may show as "VOIDWRAP RUN" or "VOIDWRAP RUN.exe"). If the blue box "Windows protected your PC" appears and you have not clicked through it yet, click "More info", then click "Run anyway".
+3. The game opens in its OWN window. There is no black window and no web browser involved.
+4. You now see the title screen with three buttons: **PLAY** (play alone, or with friends who already joined), **PLAY WITH FRIENDS**, and **JOIN A FRIEND**. Click PLAY to start.
+5. To stop playing: close the game window. That is all.
 
 If the game window stays empty or white, or does not open at all: double-click `PLAY-IN-BROWSER` instead. A black window (the "console") opens with some text in it. **KEEP IT OPEN while you play.** Closing this window stops the game. The game opens in your web browser after a moment. If it does not: open your browser (Chrome, Edge or Firefox), type `localhost:7878` into the address bar at the top, and press Enter.
 
-Good to know: next time you do not need to download anything again. Just open the folder and double-click VOIDWRAP RUN.
+Good to know: next time you do not need to download anything again. With the installer, start the game from the Start menu. With the zip, open the folder and double-click VOIDWRAP RUN.
 
 A note for some Windows 11 computers: "Smart App Control" can block the game completely, with no "Run anyway" button. In that case the game cannot run on that PC right now. Turning Smart App Control off is possible in Windows Security, but it cannot be turned back on without resetting Windows — only do that if you understand what it means.
 
@@ -69,19 +82,19 @@ A note for some Windows 11 computers: "Smart App Control" can block the game com
 
 ## Controls
 
-First: click once inside the game so it can use your mouse. The mouse pointer disappears — that is normal. Press Esc to get the pointer back.
+First: click once inside the game so it can use your mouse. The mouse pointer disappears — that is normal. Press **Ctrl** to free the pointer again. Press **Ctrl** once more to lock it — or just click inside the game. The game shows a small hint about the mouse at the bottom of the screen.
 
 | Action | How |
 | --- | --- |
 | Move | W A S D (or the arrow keys) |
 | Look around | Move the mouse |
 | Jump | Space — hold it for a higher jump, tap it for a small hop |
-| Class ability | Shift or the right mouse button (dash for the Striker, grapple for the Grappler, blink for the Blinker, glide for the Glider) |
+| Class ability | Shift or the right mouse button (dash for the Striker, grapple for the Grappler, the rooted push for the Bulwark, glide for the Glider) |
 | Use an altar | E |
 | Choose a class (first lobby) | Number keys 1–4 |
 | Choose a card on the selection screen | Number keys 1–9 |
 | Confirm on the selection screen | Enter |
-| Get the mouse pointer back | Esc |
+| Lock or free the mouse pointer | Ctrl |
 
 ## How a run works
 
@@ -89,7 +102,7 @@ First: click once inside the game so it can use your mouse. The mouse pointer di
 2. The four classes — each has an ability on Shift or the right mouse button:
    - **Striker**: dash — a short burst forward.
    - **Grappler**: fires an auto-aimed grapple that pulls you to the platform ahead. Keep moving toward it while you press.
-   - **Blinker**: instantly teleports you up to 6 units toward where you move. Walls stop you.
+   - **Bulwark**: on the ground, presses Shift or the right mouse button to ROOT you in place for 1.6 seconds. While rooted you cannot move, but a pulse pushes everything nearby away, and almost nothing can hurt you — falling shells still can. Long cooldown: 16 seconds.
    - **Glider**: one extra jump in mid-air. Hold Shift while falling to glide slowly down.
 3. Click CONTINUE (or press Enter) when you have chosen.
 4. From level 2 on, the lobby shows cards:
@@ -97,26 +110,69 @@ First: click once inside the game so it can use your mouse. The mouse pointer di
    - "TAKE ONE FROM THE VOID — choose 1" on every lobby after that: pick 1 card. Blue cards (UPGRADE) help you. Red cards (CURSE) make the run harder.
 5. Click a card to choose it. Click it again to un-choose it. Then click CONTINUE (or press Enter).
 6. Below the cards is the LOBBY SHOP. Scroll down to see it. Items cost gold from the golden gifts you collect — the money is shared by the whole team. Each item shows its price and how many are left. The items are: an extra life, a "reroll" that swaps the reward cards, and small permanent boosts. The Buy button explains when you cannot afford something.
-7. A new, randomly made level appears. Everyone starts on the big platform.
-8. Collect the 5 gold gifts with the pink ribbons. The counter at the bottom shows how many you have, for example "2 / 5". Touching a gift collects it.
-9. When all 5 are collected, golden bonus gifts appear (they are money for the shop) and the exit turns on. The exit is a tall pillar of light, called the "beacon". Walk into the light to finish the level.
-10. You go back to the lobby, pick a new card, maybe buy something, and the next level starts. The hunters stay the same for the whole run.
+7. A new, randomly made level appears. The maps are now much bigger (see "Big maps" below). Everyone starts on the spawn platform.
+8. PHASE 1 — collect every small gift on the level. There are about 50 on level 1 and more on every later level (up to 400). Touching a gift collects it. The counter at the bottom shows how many you have, for example "12 / 50".
+9. PHASE 2 — when the LAST gift is collected, the map collapses and the beacon on your spawn platform lights up (see "Two phases: collect, then run" below). Walk into the beacon to finish the level.
+10. You go back to the lobby, pick a new card, maybe buy something, and the next level starts. The hunters stay the same for the whole run. From level 4 on, some levels announce a MILESTONE: more hunter copies, shorter warnings before tiles fall, or thicker fog.
 11. Some levels have an EVENT, announced at the start of the level:
     - **High Rise**: the platforms climb higher and higher.
     - **Slick Ice**: you slide and stop slowly.
     - **Crumbling**: cracked platforms fall away a moment after you step on them. They come back after 3 seconds.
 12. Some levels have an ALTAR: a small stone shrine with a glowing sign. Walk up to it and press E. You get one random upgrade AND one random curse. Each altar works only once.
-13. These hunters can join the chase:
-    - **Bolt Sentry**: never moves. Shoots slow glowing bolts — hide behind platforms. A bolt hit counts as being caught.
-    - **False Gift**: looks exactly like a gift until you come close, then chases you.
-    - **Crumble Wisp**: slow, and makes the platforms near it crumble.
+13. The hunters you voted for join the chase (see "Hunters" below). Hunters sleep for the first 4 seconds of a level.
 14. If you fall off into the void or a hunter catches you, the run ends — unless you picked an extra life. Click "Run again" to start a new run.
 
 Good to know:
 
-- Hunters are harmless for the first few seconds of a level. Use that time to get ahead.
+- Use the first 4 seconds of a level — while the hunters sleep — to get ahead.
 - The box in the top-right corner shows your money, your lives, your hunters and your cards. Point at a name to see what it does.
 - If the game window stays empty or white, use `PLAY-IN-BROWSER` instead (see "Download and start (Windows)", Step 3).
+
+## Big maps
+
+The maps are much bigger now. They are built from hand-made pieces that the game puts together:
+
+- several walkway layers stacked on pillars, joined by stairs;
+- stairs with SMALL steps — you walk up them, you do not need to jump;
+- tall towers above everything;
+- bridges with a second road on top;
+- glowing jump pads that throw you about 4 metres into the air;
+- paths that loop back and split at junctions.
+
+Small gifts line the paths. Every map is checked before you play it, so every gift and the beacon can always be reached.
+
+## Two phases: collect, then run
+
+Every level has two phases.
+
+**PHASE 1 — COLLECT.** Small gifts sit on the platforms — about 50 on level 1, more on every later level, up to 400. Walk into them to collect. The counter at the bottom shows your progress, for example "12 / 50".
+
+**PHASE 2 — RUN.** When you collect the last gift, a warning starts: the map begins to collapse in 3 seconds, and the banner says "The void hungers — take the gold and run". Then the map collapses from the OUTSIDE IN — tiles far away fall first. A tile shakes and flashes before it falls. The spawn platform never falls.
+
+Where you collected a gift, a golden gift appears — each one is 1 gold for the shared team money. Grab what you can while the ground falls away behind you. Then walk into the BEACON: a tall pillar of light on the spawn platform. It finishes the level for the whole team.
+
+Golden gifts on tiles that have already fallen are lost. Get to them before the floor gives way.
+
+## Hunters
+
+The hunters you vote for in the lobby chase you and try to stop you. All nine have been reworked:
+
+- Every deadly attack is announced first: a visible warning — a ring, a line or a flare — appears 0.6 to 2.5 seconds before it lands. The same attack always uses the same shape, so you learn what each shape means.
+- Some hunters cannot kill you at all. They push you around or slow you down instead. The void below does the rest — falling is still falling.
+
+The line-up:
+
+- **The Pallbearer** — follows the trail you left seconds ago. Never go back the way you came.
+- **Snapshrike** — locks a line and dashes down it. Sidestep the moment the line stops moving.
+- **Moteling** — marks the fastest-moving player. Stand still until its ring snaps shut.
+- **The Rift Warden** — pushes everything away from itself. It cannot hurt you; the fall can.
+- **Gale Wight** — drops exploding shells marked by circles on the floor. Standing under a bridge makes the shell break early.
+- **Lantern Leech** — rushes to wherever a gift was just collected. Grab the gift, then step away.
+- **Bolt Sentry** — never moves; shoots along a thin aiming line. Break its line of sight, or jump the bolt.
+- **False Gift** — looks exactly like a gift, then lunges. Watch for the magenta shimmer.
+- **Crumble Wisp** — makes the floor around it slow you and lock your abilities. Cross fast, do not stand there.
+
+The full guide — what each hunter does, its exact warning, and how to survive — is `ENEMIES.md`, in the game folder.
 
 ## Playing with friends
 
@@ -149,13 +205,13 @@ If you reach the beacon (or run out of lives) before the others, you become an i
 ## Something went wrong?
 
 **Windows shows "Windows protected your PC"**
-Click "More info", then click "Run anyway". See "Download and start (Windows)", Step 3.
+Click "More info", then click "Run anyway". See "Download and start (Windows)", Step 2.
 
 **The game window stays empty or white, or does not open**
-Double-click `PLAY-IN-BROWSER` instead. A black window opens and the game opens in your web browser. Keep the black window open — closing it stops the game.
+Double-click `PLAY-IN-BROWSER` instead. A black window opens and the game opens in your web browser. Keep the black window open — closing it stops the game. (This needs the zip download; if you used the installer and the game window stays white, report it — see below.)
 
 **The black window opens and closes immediately** (when using PLAY-IN-BROWSER)
-You are probably running the game from inside the zip. Extract it first — see "Download and start (Windows)", Step 2.
+You are probably running the game from inside the zip. Extract it first — see "Download and start (Windows)", the zip section.
 
 **The browser shows "This site can't be reached"** (when using PLAY-IN-BROWSER)
 The black window is closed or still starting. Wait a few seconds, make sure the black window is open, then refresh the page (press F5).

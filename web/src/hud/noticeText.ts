@@ -2,7 +2,7 @@
 // Unit-tested; never throws.
 import type { Notice } from '../game/store';
 import { NOTICE_ALTAR, NOTICE_BOUGHT, NOTICE_EVENT } from '../protocol/generated';
-import { CARD_CURSE, CARD_UPGRADE, EVENTS, SHOP, lookupCard } from '../content';
+import { CARD_CURSE, CARD_UPGRADE, SHOP, lookupCard, noticeEventText } from '../content';
 
 export const NOTICE_LIFETIME_MS = 4000;
 export const NOTICE_FADE_MS = 500;
@@ -52,11 +52,8 @@ export function noticeText(notice: Notice): NoticeText | null {
       if (!eventId) {
         return null;
       }
-      const event = EVENTS.find((entry) => entry.id === eventId);
-      if (!event) {
-        return null;
-      }
-      return { title: event.name, body: event.banner };
+      // Level events first, then milestones (collapse + escalation steps); null when neither knows the id.
+      return noticeEventText(eventId);
     }
     return null;
   } catch {

@@ -408,6 +408,98 @@
       "banner": "Platforms crumble underfoot; keep moving forward."
     }
   ],
+  "milestones": [
+    {
+      "id": "collapse",
+      "level": 0,
+      "name": "The Void Collapses",
+      "banner": "Grab the gold and get back to the beacon before the floor is gone."
+    },
+    {
+      "id": "milestone_4",
+      "level": 4,
+      "name": "Ashen Unlock",
+      "banner": "Ashen bridges open; one more of the most-voted enemy joins the hunt."
+    },
+    {
+      "id": "milestone_5",
+      "level": 5,
+      "name": "Tall Order",
+      "banner": "The tall silos open, and the Moteling's hush tightens to 1.8 s."
+    },
+    {
+      "id": "milestone_6",
+      "level": 6,
+      "name": "Crowded Wake",
+      "banner": "One more Pallbearer wakes; every drafted enemy gains a copy every 3 levels."
+    },
+    {
+      "id": "milestone_7",
+      "level": 7,
+      "name": "Catwalk Season",
+      "banner": "The narrow catwalks open above the void."
+    },
+    {
+      "id": "milestone_8",
+      "level": 8,
+      "name": "Bombardier",
+      "banner": "The Gale Wight drops three shells instead of two."
+    },
+    {
+      "id": "milestone_9",
+      "level": 9,
+      "name": "Short Warning",
+      "banner": "Tiles warn for 2 s instead of 3 s before they fall."
+    },
+    {
+      "id": "milestone_10",
+      "level": 10,
+      "name": "Second Front",
+      "banner": "Every 2 drafted enemy types add a copy; greater curses reach the shop."
+    },
+    {
+      "id": "milestone_12",
+      "level": 12,
+      "name": "Grey Tide",
+      "banner": "Fog thickens by a quarter; the far platforms go grey."
+    },
+    {
+      "id": "milestone_14",
+      "level": 14,
+      "name": "Swifter Wake",
+      "banner": "The Pallbearer hunts at 6.0 u/s instead of 5.2."
+    },
+    {
+      "id": "milestone_15",
+      "level": 15,
+      "name": "Elder Models",
+      "banner": "Snapshrike locks in 0.60 s; the Bolt Sentry charges in 0.80 s."
+    },
+    {
+      "id": "milestone_17",
+      "level": 17,
+      "name": "Hunger",
+      "banner": "The collapse runs 3 s shorter; the floor still holds 30 s at least."
+    },
+    {
+      "id": "milestone_18",
+      "level": 18,
+      "name": "Deep Night",
+      "banner": "The False Gift shimmers every 2.2 s; fog rises another 15%."
+    },
+    {
+      "id": "milestone_20",
+      "level": 20,
+      "name": "Full Chorus",
+      "banner": "Every drafted enemy gains a copy; altars rise to 5 a level."
+    },
+    {
+      "id": "milestone_25",
+      "level": 25,
+      "name": "Endless",
+      "banner": "Past level 25 the collapse loses 1 s a level; enemies gain 5% speed every 5 levels."
+    }
+  ],
   "altars": [
     {
       "id": "bargain_altar",

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Validates design content (enemies, upgrades, curses, classes, shop, events, altars, screen grades) against the
-// effect vocabulary and the playability limits. Used by `just verify` on design/content.json and by OVERSEER on
-// subordinate drafts.
+// Validates design content (enemies, upgrades, curses, classes, shop, events, milestones, altars, screen grades)
+// against the effect vocabulary and the playability limits. Used by `just verify` on design/content.json and by
+// OVERSEER on subordinate drafts.
 //   node tools/validate-content.mjs [path=design/content.json]
 import { readFileSync } from "node:fs";
 
@@ -169,6 +169,30 @@ else {
   if (ice && ice.friction_mul !== 0.25) err(`events[slick_ice].friction_mul=${ice.friction_mul} must be 0.25`);
 }
 
+// --- milestones ------------------------------------------------------------------------------------------------
+// Escalation notices (design §5) plus the phase-2 collapse. The client resolves a NOTICE_EVENT id against events
+// first and milestones second, so the id set is pinned to the design table and must not shadow an event id.
+const MILESTONE_LEVELS = [4, 5, 6, 7, 8, 9, 10, 12, 14, 15, 17, 18, 20, 25];
+const MILESTONE_IDS = ["collapse", ...MILESTONE_LEVELS.map((level) => `milestone_${level}`)];
+if (!Array.isArray(c.milestones)) err("milestones: missing");
+else {
+  const seen = new Set();
+  for (const [i, m] of c.milestones.entries()) {
+    const w = `milestones[${i}]`;
+    checkId(w, m.id);
+    if (seen.has(m.id)) err(`${w}.id=${m.id}: duplicate milestone id`);
+    seen.add(m.id);
+    if (!Number.isInteger(m.level) || m.level < 0) err(`${w}.level=${m.level} must be an integer >= 0`);
+    else if (m.level === 0 && m.id !== "collapse") err(`${w}.id=${JSON.stringify(m.id)} must be collapse at level 0`);
+    else if (m.level > 0 && m.id !== `milestone_${m.level}`) err(`${w}.id=${JSON.stringify(m.id)} must be milestone_${m.level}`);
+    checkText(w, "name", m.name, 28);
+    checkText(w, "banner", m.banner, 100);
+  }
+  for (const id of MILESTONE_IDS) if (!seen.has(id)) err(`milestones: missing ${id}`);
+  for (const id of seen) if (!MILESTONE_IDS.includes(id)) err(`milestones: ${id} is not an escalation level or the collapse`);
+  for (const e of c.events ?? []) if (seen.has(e.id)) err(`milestones: id ${e.id} collides with a level event (events win the lookup)`);
+}
+
 // --- altars ----------------------------------------------------------------------------------------------------
 if (!Array.isArray(c.altars) || c.altars.length !== 1) {
   err(`altars: need exactly 1 (have ${Array.isArray(c.altars) ? c.altars.length : 0})`);
@@ -197,4 +221,4 @@ if (errors.length) {
   console.error(`validate-content: ${path}: ${errors.length} problem(s)\n  ${errors.join("\n  ")}`);
   process.exit(1);
 }
-console.log(`validate-content: ${path} ok (${c.enemies.length} enemies, ${c.upgrades.length} upgrades, ${c.curses.length} curses, ${c.classes.length} classes, ${c.shop.length} shop items, ${c.events.length} events, ${c.altars.length} altars; fastest enemy worst case ${(fastest * worstMul).toFixed(1)} u/s vs player ${PLAYER_SPEED})`);
+console.log(`validate-content: ${path} ok (${c.enemies.length} enemies, ${c.upgrades.length} upgrades, ${c.curses.length} curses, ${c.classes.length} classes, ${c.shop.length} shop items, ${c.events.length} events, ${(c.milestones ?? []).length} milestones, ${c.altars.length} altars; fastest enemy worst case ${(fastest * worstMul).toFixed(1)} u/s vs player ${PLAYER_SPEED})`);

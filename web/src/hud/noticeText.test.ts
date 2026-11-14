@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CURSES, EVENTS, SHOP, UPGRADES } from '../content';
+import { CURSES, EVENTS, MILESTONES, SHOP, UPGRADES } from '../content';
 import { NOTICE_ALTAR, NOTICE_BOUGHT, NOTICE_EVENT } from '../protocol/generated';
 import type { Notice } from '../game/store';
 import { NOTICE_FADE_MS, NOTICE_LIFETIME_MS, noticeOpacity, noticeText } from './noticeText';
@@ -8,8 +8,9 @@ const upgrade = UPGRADES[0];
 const curse = CURSES[0];
 const event = EVENTS[0];
 const shopItem = SHOP[0];
-if (!upgrade || !curse || !event || !shopItem) {
-  throw new Error('design/content.json must define at least one upgrade, curse, event and shop item');
+const collapse = MILESTONES.find((m) => m.id === 'collapse');
+if (!upgrade || !curse || !event || !shopItem || !collapse) {
+  throw new Error('design/content.json must define at least one upgrade, curse, event and shop item, and the collapse milestone');
 }
 
 const makeNotice = (kind: number, ids: string[]): Notice => ({ seq: 1, kind, ids, at: 0 });
@@ -48,8 +49,39 @@ describe('noticeText', () => {
     });
   });
 
-  it('returns null for an unknown event', () => {
+  it('resolves every level event id to its own text', () => {
+    for (const levelEvent of EVENTS) {
+      expect(noticeText(makeNotice(NOTICE_EVENT, [levelEvent.id]))).toEqual({
+        title: levelEvent.name,
+        body: levelEvent.banner,
+      });
+    }
+  });
+
+  it('describes the collapse notice', () => {
+    expect(noticeText(makeNotice(NOTICE_EVENT, [collapse.id]))).toEqual({
+      title: collapse.name,
+      body: collapse.banner,
+    });
+  });
+
+  it('resolves every milestone id to its own text', () => {
+    for (const milestone of MILESTONES) {
+      expect(noticeText(makeNotice(NOTICE_EVENT, [milestone.id]))).toEqual({
+        title: milestone.name,
+        body: milestone.banner,
+      });
+    }
+  });
+
+  it('covers the escalation levels from the design', () => {
+    const levels = MILESTONES.map((m) => m.level).filter((level) => level > 0);
+    expect(levels).toEqual([4, 5, 6, 7, 8, 9, 10, 12, 14, 15, 17, 18, 20, 25]);
+  });
+
+  it('returns null for an unknown event or milestone id', () => {
     expect(noticeText(makeNotice(NOTICE_EVENT, ['no-such-event']))).toBeNull();
+    expect(noticeText(makeNotice(NOTICE_EVENT, ['milestone_99']))).toBeNull();
     expect(noticeText(makeNotice(NOTICE_EVENT, []))).toBeNull();
   });
 
