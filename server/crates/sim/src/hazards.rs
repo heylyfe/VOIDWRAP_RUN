@@ -719,7 +719,17 @@ fn step_one(h: &mut Hazards, index: usize, e: &mut Enemy, ctx: &Ctx, fx: &mut Ve
         Brain::Corrupter(b) => corrupter_step(h, &mut e.pos, b, speed_mul, &home, ctx),
         // The five registry brains are stepped by the server through `Brain::step`
         // (see `rules::Brain::step`); the sim's hazard pass leaves them where they are.
-        Brain::Rewind(_) | Brain::Warden(_) | Brain::Peal(_) | Brain::Kite(_) | Brain::Static(_) => {}
+        Brain::Rewind(_)
+        | Brain::Warden(_)
+        | Brain::Peal(_)
+        | Brain::Kite(_)
+        | Brain::Static(_)
+        | Brain::Blight(_)
+        | Brain::Metronome(_)
+        | Brain::Overlook(_)
+        | Brain::Chorus(_)
+        | Brain::Coil(_)
+        | Brain::Lure(_) => {}
     }
     // The pallbearer never descends below y = 0.
     if e.pos.y < 0.0 {
@@ -1595,6 +1605,14 @@ fn cooldown_state(enemy: &mut Enemy) {
             b.phase = StaticPhase::Vanish;
             b.timer = STATIC_VANISH_TICKS;
         }
+        // Batch B brains keep their own phase machines; a Bulwark pulse only
+        // staggers them, which `knock_ticks` already does.
+        Brain::Blight(_)
+        | Brain::Metronome(_)
+        | Brain::Overlook(_)
+        | Brain::Chorus(_)
+        | Brain::Coil(_)
+        | Brain::Lure(_) => {}
         Brain::Pallbearer(b) => {
             b.phase = PallbearerPhase::Recover;
             b.timer = PALLBEARER_RECOVER_TICKS;
@@ -1863,6 +1881,15 @@ fn view_of(enemy: &Enemy) -> protocol::EnemyView {
             StaticPhase::Strike => (ENEMY_ATTACK, b.locked, 255, 0),
             StaticPhase::Vanish => (ENEMY_RECOVER, ZERO(), 0, 0),
         },
+        // Batch B reports its telegraphs through its own step payloads
+        // (`OverlookStep::path_public`, `LureStep`, ...); the shared view keeps
+        // them hunting so the client draws the body without a decal.
+        Brain::Blight(_)
+        | Brain::Metronome(_)
+        | Brain::Overlook(_)
+        | Brain::Chorus(_)
+        | Brain::Coil(_)
+        | Brain::Lure(_) => (ENEMY_HUNTING, ZERO(), 0, 0),
     };
     protocol::EnemyView {
         id: enemy.id,

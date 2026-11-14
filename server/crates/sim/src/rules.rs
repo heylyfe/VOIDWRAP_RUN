@@ -57,6 +57,18 @@ pub const BEHAVIOR_PEAL: u8 = 11;
 pub const BEHAVIOR_KITE: u8 = 12;
 /// Behaviour tag: static (fog dasher).
 pub const BEHAVIOR_STATIC: u8 = 13;
+/// Behaviour tag: blight (infection aura).
+pub const BEHAVIOR_BLIGHT: u8 = 14;
+/// Behaviour tag: metronome (counting beacon).
+pub const BEHAVIOR_METRONOME: u8 = 15;
+/// Behaviour tag: overlook (teleporting laser).
+pub const BEHAVIOR_OVERLOOK: u8 = 16;
+/// Behaviour tag: chorus (gated choir).
+pub const BEHAVIOR_CHORUS: u8 = 17;
+/// Behaviour tag: coil (winding shockwave leap).
+pub const BEHAVIOR_COIL: u8 = 18;
+/// Behaviour tag: lure (redesigned fog-gift ambush).
+pub const BEHAVIOR_LURE: u8 = 19;
 
 /// Ticks a freshly spawned enemy stays dormant when spawned without explicit params (4 s at 20 Hz).
 pub const DEFAULT_GRACE_TICKS: u32 = 80;
@@ -506,6 +518,18 @@ pub enum Brain {
     Kite(KiteBrain),
     /// Static: fog-bound dasher that vanishes after each strike.
     Static(StaticBrain),
+    /// Blight: infection aura that pauses Rewind's and Kite's timers.
+    Blight(enemies::BlightBrain),
+    /// Metronome: a beacon counts and the marked player must act on the number.
+    Metronome(enemies::MetronomeBrain),
+    /// Overlook: teleports around a marked player and fires a private laser.
+    Overlook(enemies::OverlookBrain),
+    /// Chorus: gated on two small permanents and level 10; instruments freeze it.
+    Chorus(enemies::ChorusBrain),
+    /// Coil: coils, leaps, and emits OVERTUNED shockwaves.
+    Coil(enemies::CoilBrain),
+    /// Lure: dormant fog ambush that reads as a gift.
+    Lure(enemies::LureBrain),
 }
 
 impl Brain {
@@ -525,6 +549,12 @@ impl Brain {
             BEHAVIOR_PEAL => Brain::Peal(PealBrain::default()),
             BEHAVIOR_KITE => Brain::Kite(KiteBrain::default()),
             BEHAVIOR_STATIC => Brain::Static(StaticBrain::default()),
+            BEHAVIOR_BLIGHT => Brain::Blight(enemies::BlightBrain::default()),
+            BEHAVIOR_METRONOME => Brain::Metronome(enemies::MetronomeBrain::default()),
+            BEHAVIOR_OVERLOOK => Brain::Overlook(enemies::OverlookBrain::default()),
+            BEHAVIOR_CHORUS => Brain::Chorus(enemies::ChorusBrain::default()),
+            BEHAVIOR_COIL => Brain::Coil(enemies::CoilBrain::default()),
+            BEHAVIOR_LURE => Brain::Lure(enemies::LureBrain::default()),
             _ => Brain::Pallbearer(PallbearerBrain::default()),
         }
     }
@@ -863,6 +893,16 @@ mod tests {
         assert!(matches!(Brain::for_behavior(BEHAVIOR_PEAL), Brain::Peal(_)));
         assert!(matches!(Brain::for_behavior(BEHAVIOR_KITE), Brain::Kite(_)));
         assert!(matches!(Brain::for_behavior(BEHAVIOR_STATIC), Brain::Static(_)));
+    }
+
+    #[test]
+    fn for_behavior_maps_the_t075_enemies() {
+        assert!(matches!(Brain::for_behavior(BEHAVIOR_BLIGHT), Brain::Blight(_)));
+        assert!(matches!(Brain::for_behavior(BEHAVIOR_METRONOME), Brain::Metronome(_)));
+        assert!(matches!(Brain::for_behavior(BEHAVIOR_OVERLOOK), Brain::Overlook(_)));
+        assert!(matches!(Brain::for_behavior(BEHAVIOR_CHORUS), Brain::Chorus(_)));
+        assert!(matches!(Brain::for_behavior(BEHAVIOR_COIL), Brain::Coil(_)));
+        assert!(matches!(Brain::for_behavior(BEHAVIOR_LURE), Brain::Lure(_)));
     }
 
     #[test]

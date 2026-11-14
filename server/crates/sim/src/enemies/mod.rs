@@ -1,6 +1,12 @@
 //! Enemy brains for the registry entries added in T-072.
 //!
-//! T-074 implements the first five: Rewind, Warden, Peal, Kite and Static. Each
+//! T-074 implements the first five: Rewind, Warden, Peal, Kite and Static.
+//! T-075 implements the second six: Blight, Metronome, Overlook, Chorus, Coil and
+//! the redesigned Lure. The two batches use separate per-tick context types
+//! ([`StepContext`] for batch A, [`TickContext`] for batch B) because they were
+//! written in parallel against the same frozen registry; both are live.
+//!
+//! Each
 //! enemy lives in its own module and exposes a phase enum the client can draw, a
 //! brain struct holding the phase and its memory, a `step` function that advances
 //! one 20 Hz tick, and a `relation` function carrying the registry's class
@@ -12,9 +18,15 @@
 
 use protocol::{Gift, Vec3};
 
-use crate::rules::{PlayerStatus, distance, player_centre};
+use crate::rules::{PlayerStatus, distance, horizontal_distance, player_centre};
 
+pub mod blight;
+pub mod chorus;
+pub mod coil;
 pub mod kite;
+pub mod lure;
+pub mod metronome;
+pub mod overlook;
 pub mod peal;
 pub mod rewind;
 pub mod r#static;
@@ -25,6 +37,13 @@ pub use peal::{PealBrain, PealPhase};
 pub use rewind::{RewindBrain, RewindPhase};
 pub use r#static::{StaticBrain, StaticPhase};
 pub use warden::{WardenBrain, WardenPhase};
+
+pub use blight::{BlightBrain, BlightPhase, BlightStep, INFECTION_SPEED_MUL, infection_pauses_timer, step_blight};
+pub use chorus::{ChorusBrain, ChorusPhase, ChorusStep, chorus_candidate_allowed, step_chorus};
+pub use coil::{CoilBrain, CoilPhase, CoilStep, step_coil};
+pub use lure::{LureBrain, LurePhase, LureStep, glimmer_intensity, lure_sees_true_silhouette, step_lure};
+pub use metronome::{MetronomeBrain, MetronomePhase, MetronomeStep, step_metronome};
+pub use overlook::{OverlookBrain, OverlookPhase, OverlookStep, step_overlook};
 
 /// Seconds per enemy brain tick (20 Hz, matching the existing enemy timers).
 pub const ENEMY_DT: f32 = 0.05;
@@ -233,6 +252,138 @@ pub(crate) fn most_isolated_player(players: &[PlayerSnapshot]) -> Option<&Player
     best
 }
 
+/// Seconds per simulation tick (60 Hz, matching `crate::tuning::DT`).
+pub const SIM_DT: f32 = 1.0 / 60.0;
+
+/// OVERTUNED: the debuff Coil inflicts that makes Peal's final ring lethal
+/// (registry synergy hook `peal_lethal_when_overtuned`).
+///
+/// 10 seconds at 60 Hz. Batch A is adding `overtuned_ticks: u32` to the player
+/// state; once it exists, the merge is one field on the player plus calls to
+/// the three helpers below. If batch A has not landed yet, callers can track the
+/// timer caller-side with the same helpers.
+pub const OVERTUNED_TICKS: u32 = 600;
+
+/// Apply or refresh OVERTUNED on a bare timer.
+pub fn apply_overtuned(ticks: &mut u32) {
+    *ticks = OVERTUNED_TICKS;
+}
+
+/// Advance an OVERTUNED timer by one tick; returns true while it is still live.
+pub fn tick_overtuned(ticks: &mut u32) -> bool {
+    if *ticks > 0 {
+        *ticks -= 1;
+    }
+    *ticks > 0
+}
+
+/// True while an OVERTUNED timer is live. Peal's final ring reads this.
+pub fn overtuned_active(ticks: u32) -> bool {
+    ticks > 0
+}
+
+/// Per-player snapshot the brains read for one tick.
+#[derive(Debug, Clone)]
+pub struct PlayerSample<'a> {
+    /// Stable player id.
+    pub id: u32,
+    /// Feet position.
+    pub feet: Vec3,
+    /// Class id from `design/content.json` (`striker`, `grappler`, `bulwark`, `glider`).
+    pub class: &'a str,
+    /// True on the tick this player launched off a jump pad.
+    pub jump_launched: bool,
+    /// True on the tick this player used their class ability.
+    pub used_ability: bool,
+    /// True on the tick this player used a support-class ability (cleanses debuffs).
+    pub used_support_ability: bool,
+    /// True while the glider class ability is held and the player is falling.
+    pub gliding: bool,
+}
+
+/// World inputs shared by one enemy tick.
+#[derive(Debug, Clone)]
+pub struct TickContext<'a> {
+    /// All players in the level.
+    pub players: &'a [PlayerSample<'a>],
+    /// True during the collapse phase (players rushing the exit).
+    pub collapse_phase: bool,
+    /// Minimum corner of the playable map (used for leap / re-dorm placement).
+    pub map_min: Vec3,
+    /// Maximum corner of the playable map.
+    pub map_max: Vec3,
+}
+
+/// Nearest player to `from` (horizontal distance) that satisfies `pred`.
+pub(crate) fn nearest_player_where<'a, F: Fn(&PlayerSample<'a>) -> bool>(
+    players: &'a [PlayerSample<'a>],
+    from: &Vec3,
+    pred: F,
+) -> Option<&'a PlayerSample<'a>> {
+    let mut best: Option<&PlayerSample<'a>> = None;
+    let mut best_d = f32::INFINITY;
+    for p in players {
+        if !pred(p) {
+            continue;
+        }
+        let d = horizontal_distance(from, &p.feet);
+        if d < best_d {
+            best_d = d;
+            best = Some(p);
+        }
+    }
+    best
+}
+
+/// Deterministic xorshift32; `state` must not be zero (zero is remapped).
+pub(crate) fn xorshift32(state: &mut u32) -> u32 {
+    let mut x = *state;
+    if x == 0 {
+        x = 0x9E37_79B9;
+    }
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *state = x;
+    x
+}
+
+/// Next deterministic value in `[0, 1)`.
+pub(crate) fn unit_f32(state: &mut u32) -> f32 {
+    (xorshift32(state) % 1024) as f32 / 1024.0
+}
+
+/// Stable seed derived from a spawn position (the step API has no enemy id).
+pub(crate) fn seed_from_pos(pos: &Vec3) -> u32 {
+    let s = pos.x.to_bits() ^ pos.z.to_bits().rotate_left(13) ^ 0x9E37_79B9;
+    if s == 0 { 0xA53A_9D1F } else { s }
+}
+
+#[cfg(test)]
+pub(crate) mod testutil {
+    use protocol::Vec3;
+
+    use super::PlayerSample;
+
+    /// Player sample with every flag clear; tests flip individual flags.
+    pub(crate) fn sample_player(id: u32, x: f32, z: f32, class: &'static str) -> PlayerSample<'static> {
+        PlayerSample {
+            id,
+            feet: Vec3::new(x, 0.0, z),
+            class,
+            jump_launched: false,
+            used_ability: false,
+            used_support_ability: false,
+            gliding: false,
+        }
+    }
+
+    /// Arena bounds for map-dependent enemies (Coil leap, Lure re-dorm).
+    pub(crate) fn arena() -> (Vec3, Vec3) {
+        (Vec3::new(-60.0, 0.0, -60.0), Vec3::new(60.0, 0.0, 60.0))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,5 +437,27 @@ mod tests {
         assert_eq!(most_isolated_player(&players).map(|p| p.id), Some(3));
         assert_eq!(most_isolated_player(&players[..1]).map(|p| p.id), Some(1));
         assert!(most_isolated_player(&[]).is_none());
+    }
+    #[test]
+    fn overtuned_helpers_roundtrip() {
+        let mut ticks = 0;
+        assert!(!overtuned_active(ticks));
+        apply_overtuned(&mut ticks);
+        assert_eq!(ticks, OVERTUNED_TICKS);
+        assert!(overtuned_active(ticks));
+        for _ in 0..OVERTUNED_TICKS {
+            tick_overtuned(&mut ticks);
+        }
+        assert_eq!(ticks, 0);
+        assert!(!tick_overtuned(&mut ticks));
+    }
+
+    #[test]
+    fn xorshift_is_deterministic_and_nonzero() {
+        let mut a = 0x1234_5678;
+        let mut b = 0x1234_5678;
+        assert_eq!(xorshift32(&mut a), xorshift32(&mut b));
+        let mut zero = 0;
+        assert_ne!(xorshift32(&mut zero), 0);
     }
 }
