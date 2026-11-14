@@ -165,3 +165,12 @@ Paid route usage: 0 tickets (0%).
 - Downloaded zip: headless capture ok, no console errors (a first attempt under machine load saw 6 ticks/s at the
   headless client and failed the capture's rate check; rerun alone passed); desktop launch shows the "VOIDWRAP RUN"
   window, /health ok, graceful close.
+
+## T-049 - icon, exe metadata, per-user installer (INKLING) - ACCEPTED after OVERSEER fixes
+- Icon renders from SVG (7-size ICO, window RGBA); exe carries ProductName/FileDescription. OVERSEER fixes: build.rs
+  icon path (rc.exe runs in OUT_DIR -> absolute path; relative path also pointed one level too high), NSIS:
+  SetShellVarContext outside a section, missing VIProductVersion (numeric version derived from the tag), nonexistent
+  MUI_UNLANGUAGE macro, FindWindow check (returns 0, never sets the error flag -> every install aborted, exit 2).
+- Verified with the CI-built setup exe (workflow_dispatch run 43565853908): silent install exit 0 -> files, Start
+  menu + desktop shortcuts, HKCU uninstall entry; installed game opens the "VOIDWRAP RUN" window, /health ok, closes
+  cleanly; uninstaller exit 0 removes files, shortcuts and registry key.
