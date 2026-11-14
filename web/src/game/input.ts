@@ -39,7 +39,6 @@ const BINDINGS: Record<string, keyof KeyState> = {
   ShiftRight: "ability",
   KeyE: "interact",
   KeyC: "down",
-  ControlLeft: "down",
 };
 
 export function bindingFor(code: string): keyof KeyState | undefined {

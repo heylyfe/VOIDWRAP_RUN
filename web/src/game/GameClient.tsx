@@ -330,6 +330,14 @@ export default function GameClient() {
     if (!session) return;
     const key = (down: boolean) => (e: KeyboardEvent) => {
       const st = useGameStore.getState();
+      // Ctrl toggles the mouse lock (the desktop window has no browser "Esc to unlock" bar).
+      if (down && !e.repeat && (e.code === "ControlLeft" || e.code === "ControlRight")) {
+        e.preventDefault();
+        const inDraft = !!st.draft && st.runInfo?.phase === PHASE_ENEMY_DRAFT;
+        if (document.pointerLockElement) document.exitPointerLock();
+        else if (!st.runOver && !inDraft) void container.current?.requestPointerLock();
+        return;
+      }
       const spectatingNow = st.runInfo?.phase === PHASE_PLAYING && st.myMode !== PLAYER_ACTIVE;
       if (down && spectatingNow && !e.repeat && (e.code === "KeyF" || e.code === "KeyG")) {
         session.followIndex = e.code === "KeyF" ? nextFollow(session.followIndex, st.activeIds.length) : null;
@@ -441,8 +449,16 @@ export default function GameClient() {
         />
       )}
       {!pointerLocked && status === "connected" && !runOver && !drafting && (
-        <div className="pointer-events-none absolute bottom-8 left-1/2 -translate-x-1/2 rounded bg-black/60 px-4 py-2 font-mono text-sm text-white">
-          click to aim · WASD move · Space jump · {abilityHint(myClass)} · E use altar
+        <div className="pointer-events-none absolute bottom-28 left-1/2 -translate-x-1/2 rounded bg-black/60 px-4 py-2 font-mono text-sm text-white">
+          click or Ctrl to aim · WASD move · Space jump · {abilityHint(myClass)} · E use altar
+        </div>
+      )}
+      {status === "connected" && !runOver && !drafting && (
+        <div
+          data-testid="mouse-lock-hint"
+          className="pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 font-mono text-[11px] tracking-[0.25em] text-white/55"
+        >
+          CTRL TO LOCK/UNLOCK MOUSE
         </div>
       )}
       {runOver && (
