@@ -1,6 +1,4 @@
 // ---- chunk_weight / weighted_pick ----
-}
-
 /// Weight for a chunk at a level: prefer lower difficulty, ×3 for climbing tags on HIGH_RISE.
 fn chunk_weight(chunk: &Chunk, tier: u32, high_rise: bool) -> f32 {
     let over = chunk.difficulty as f32 - tier as f32;
@@ -27,8 +25,18 @@ fn weighted_pick(rng: &mut Rng, weights: &[f32]) -> Option<usize> {
 }
 
 fn weighted_platform_index(rng: &mut Rng, normal: &[usize], cum: &[f32]) -> usize {
+    if normal.is_empty() {
+        return 0;
+    }
+    let total = cum.last().copied().unwrap_or(1.0).max(1e-6);
+    let roll = rng.f32() * total;
+    let pos = cum.partition_point(|&c| c < roll);
+    normal[pos.min(normal.len() - 1)]
+}
 
 // ---- assemble_level (the growth walk) ----
+/// Core assembly: builds a level from `cat` with explicit budget parameters.
+#[allow(clippy::too_many_arguments)]
 fn assemble_level(
     cat: &Catalog,
     rng_seed: u32,
@@ -228,8 +236,29 @@ fn try_build(
     rng_seed: u32,
     run_seed: u32,
     level: u32,
+    players: u32,
+    event: u8,
+    spacing_mul: f32,
+) -> Option<GeneratedLevel> {
+    assemble_level(
+        cat,
+        rng_seed,
+        run_seed,
+        level,
+        players,
+        event,
+        target_area(level),
+        max_chunks_for(level),
+        max_junctions(level),
+        spacing_mul,
+    )
+}
 
 // ---- try_place (chunk selection per socket) ----
+/// Tries to place one chunk on `anchor` (up to [`CANDIDATE_TRIALS`] weighted random picks;
+/// each pick checks every socket of that chunk in all four rotations against the coarse
+/// grid). Returns the placement and the index of the chunk socket that joined to `anchor`.
+#[allow(clippy::too_many_arguments)]
 fn try_place(
     cat: &Catalog,
     anchor: &OpenSocket,
@@ -338,6 +367,7 @@ fn commit_stub(
     Some(true)
 }
 
+// ---- generate_with_catalog ----
 /// Test hook: runs the full generate pipeline (regeneration attempts, then the
 /// guaranteed-valid fallbacks) against an explicit catalog instead of the shared one.
 /// Normal callers want [`generate`] / [`generate_for`].
@@ -348,3 +378,24 @@ pub fn generate_with_catalog(cat: &Catalog, seed: u32, level: u32, players: u32)
 /// [`generate_with_catalog`] with an explicit gift-spacing multiplier (Clustered Gifts curse).
 fn generate_with_catalog_spacing(
     cat: &Catalog,
+    seed: u32,
+    level: u32,
+    players: u32,
+    spacing_mul: f32,
+) -> GeneratedLevel {
+    let event = event_for(seed, level);
+    for attempt in 0..MAX_ATTEMPTS {
+        let aseed = attempt_seed(seed, attempt);
+        if let Some(cand) = try_build(cat, aseed, seed, level, players, event, spacing_mul)
+            && validate(&cand.data).is_ok()
+        {
+            return cand;
+        }
+    }
+    if let Some(cand) = catalog_fallback(cat, seed, level, players, spacing_mul)
+        && validate(&cand.data).is_ok()
+    {
+        return cand;
+    }
+    builtin_fallback(seed, level, players, spacing_mul)
+}
