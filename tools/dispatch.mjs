@@ -25,7 +25,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SYSTEM_PROMPT = join(root, "tools/subordinate-system.md");
 
 export const ROUTES = {
-  deepseek: { default: "plan", plan: "deepseek-v4", api: { url: "https://api.deepseek.com/chat/completions", model: "deepseek-chat", keyEnv: "DEEPSEEK_API_KEY" } },
+  deepseek: { default: "plan", plan: process.env.VW_DEEPSEEK_MODEL ?? "deepseek-v4-max", api: { url: "https://api.deepseek.com/chat/completions", model: "deepseek-chat", keyEnv: "DEEPSEEK_API_KEY" } },
   glm: { default: "plan", plan: "zai-glm-5-3-flash", api: { url: "https://open.bigmodel.cn/api/paas/v4/chat/completions", model: "glm-5.3-flash", keyEnv: "ZHIPU_API_KEY" } },
   "inkling-design": { default: "opencode", opencode: process.env.VW_INKLING_MODEL ?? "opencode/inkling-2-small-free#max" },
   "inkling-vision": { default: "opencode", opencode: process.env.VW_INKLING_MODEL ?? "opencode/inkling-2-small-free#max", vision: true },
@@ -226,7 +226,8 @@ async function main() {
       rmSync(sandbox, { recursive: true, force: true });
     }
     if (result.code === 0 && result.text && !result.meta.error) break;
-    if (result.meta.error?.includes("free usage limit")) break; // retrying cannot help
+    const errText = typeof result.meta.error === "string" ? result.meta.error : JSON.stringify(result.meta.error ?? "");
+    if (errText.includes("free usage limit")) break; // retrying cannot help
     console.error(`[dispatch] attempt ${attempt} failed (exit ${result.code}): ${(result.meta.error ?? result.stderr).toString().slice(-300)}`);
     if (attempt < maxAttempts) await new Promise((r) => setTimeout(r, 5000 * attempt));
   }
