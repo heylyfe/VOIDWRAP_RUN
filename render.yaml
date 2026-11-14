@@ -8,3 +8,19 @@ services:
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health
     autoDeploy: true
+    envVars:
+      # Hostname of the matchmaker service below (Render's `fromService` exposes the host,
+      # not a full URL); the game server prepends https:// when it talks to it.
+      - key: MATCHMAKER_URL
+        fromService:
+          type: web
+          name: voidwrap-matchmaker
+          property: host
+
+  - type: web
+    name: voidwrap-matchmaker
+    runtime: docker
+    plan: free
+    dockerfilePath: ./server/crates/matchmaker/Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
