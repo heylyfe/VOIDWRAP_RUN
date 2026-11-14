@@ -131,3 +131,16 @@ Paid route usage: 0 tickets (0%).
 - Grace-elapse tick fired a tick early (code bug), crumble re-warned on the expiry tick (code bug), two tests had
   the target outside aggro (test bugs). 138 sim tests pass; full `just verify` green. OVERSEER: r0 compile slips,
   `slice::from_ref` lint, server `..EnemyParams::default()` stopgap until T-045 maps behaviours from content.
+
+## T-045 - server integration for M2 (INKLING, max) - ACCEPTED r0 (+ OVERSEER test fixes)
+- 60 server tests; clippy clean. OVERSEER fixes: one test asserted on the message queue without draining earlier
+  messages (twice - test bug, handler correct), one unused test var, one dead `Player::centre`, collapsible-if,
+  `assert!` instead of `assert_eq!(.., true)`.
+- Covers classes (first lobby only, persists across respawn/new run), shop (4 items per lobby from level 2, 402/404/409,
+  reroll clears reward votes), altars (E rising edge, one use), Hazards owned by Run with world.set_tiles, ice
+  friction in tuning, event notices, projectile deaths, mimic spawns on platform tops.
+
+## T-046 / T-047 - returned for r1 (INKLING)
+- T-046: 19 react-hooks immutability/use-memo lint errors (materials from useMemo mutated in useFrame).
+- T-047: join parser rejects `host.com:1` (test expects acceptance), HostPanel setState-in-effect, useless escape.
+  OVERSEER renamed hud/notices.ts -> noticeText.ts (case clash with Notices.tsx on Windows).

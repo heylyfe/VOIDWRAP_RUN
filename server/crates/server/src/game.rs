@@ -6,20 +6,21 @@
 //! client can never run faster than real time), and the server consumes that many
 //! queued frames. Snapshots carry the last applied `seq` so the client can reconcile.
 //!
-//! Run flow (see [`crate::run`]): lobby on the spawn hub with a draft offer → every player
-//! votes → a generated level → collect all normal gifts → golden gifts + beacon → lobby.
-//! Tick order: movement → (playing) gifts → enemies → deaths/lives → beacon → end check → snapshots.
+//! Run flow (see [`crate::run`]): lobby on the spawn hub with a draft offer (and, from level 2 on, the shop)
+//! -> every player votes -> a generated level -> collect all normal gifts -> golden gifts + beacon -> lobby.
+//! Tick order: movement (altar uses on rising-edge BTN_INTERACT) -> (playing) gifts -> hazards -> deaths/lives -> beacon -> end check -> snapshots.
 //!
 //! Multiplayer: a player who enters the open beacon is FINISHED and one who runs out of lives is DEAD; both
 //! become invisible spectators. The level ends when nobody is ACTIVE: back to the lobby if anyone finished,
 //! otherwise the run is over. Solo is the same rule with one player.
 
 use crate::content::Content;
-use crate::run::Run;
+use crate::run::{Run, ShopError, ShopPurchase};
 use protocol::{
-    BTN_ABILITY, BTN_INTERACT, BTN_JUMP, ClientMsg, ControllerState, InputFrame, MAX_DRAFT_PICKS, MAX_INPUTS_PER_MSG,
-    MAX_NAME_LEN, PHASE_ENEMY_DRAFT, PHASE_OVER, PHASE_PLAYING, PHYSICS_HZ, PLAYER_ACTIVE, PLAYER_DEAD,
-    PLAYER_FINISHED, PLAYER_WAITING, PROTOCOL_VERSION, PlayerView, RunSummary, ServerMsg, TICK_HZ, Tuning, Vec3,
+    BTN_ABILITY, BTN_INTERACT, BTN_JUMP, CARD_ENEMY, CLASS_GLIDER, CLASS_STRIKER, ClientMsg, ControllerState,
+    DEATH_VOID, EVENT_NONE, InputFrame, MAX_DRAFT_PICKS, MAX_INPUTS_PER_MSG, MAX_NAME_LEN, NOTICE_ALTAR, NOTICE_BOUGHT,
+    NOTICE_EVENT, PHASE_ENEMY_DRAFT, PHASE_OVER, PHASE_PLAYING, PHYSICS_HZ, PLAYER_ACTIVE, PLAYER_DEAD,
+    PLAYER_FINISHED, PLAYER_WAITING, PROTOCOL_VERSION, PlayerView, RunSummary, ServerMsg, ShopItem, TICK_HZ, Vec3,
 };
 use sim::controller;
 use std::collections::{BTreeMap, VecDeque};
@@ -70,25 +71,26 @@ struct Player {
     mode: u8,
     /// How this player last died (for the run summary).
     cause: u8,
+    /// The class the player chose (CLASS_*); copied into the controller state at every spawn/respawn.
+    class: u8,
 }
 
 impl Player {
     fn active(&self) -> bool {
         self.mode == PLAYER_ACTIVE
     }
-
-    fn centre(&self) -> Vec3 {
-        Vec3::new(
-            self.state.pos.x,
-            self.state.pos.y + sim::tuning::PLAYER_HEIGHT / 2.0,
-            self.state.pos.z,
-        )
-    }
 }
 
 struct Conn {
     out: mpsc::Sender<Vec<u8>>,
     player: Option<Player>,
+}
+
+/// Spawn state at `at` with the player's class baked into the controller state.
+fn player_spawn_state(at: Vec3, class: u8) -> ControllerState {
+    let mut state = controller::spawn_state(at);
+    state.class = class;
+    state
 }
 
 pub struct Game {
@@ -136,10 +138,6 @@ impl Game {
             .filter(|(_, c)| c.player.is_some())
             .map(|(id, _)| *id)
             .collect()
-    }
-
-    fn tuning(&self) -> Tuning {
-        self.run.mods.tuning()
     }
 
     /// Spawn position for the n-th joined player.
@@ -211,13 +209,28 @@ impl Game {
         })
     }
 
+    /// The lobby shop offer as a message, when a shop is open.
+    fn shop_msg(&self) -> Option<ServerMsg> {
+        let shop = self.run.shop.as_ref()?;
+        Some(ServerMsg::Shop {
+            items: shop
+                .iter()
+                .map(|item| ShopItem {
+                    id: item.id.clone(),
+                    cost: item.cost,
+                    stock: item.stock,
+                })
+                .collect(),
+        })
+    }
+
     /// Everyone back on the spawn platform of the current level (hub or generated), alive, then tell them.
     fn respawn_all_and_broadcast(&mut self) {
         let ids = self.joined_ids();
         for (slot, id) in ids.iter().enumerate() {
             let at = self.spawn_point(slot);
             if let Some(p) = self.conns.get_mut(id).and_then(|c| c.player.as_mut()) {
-                p.state = controller::spawn_state(at);
+                p.state = player_spawn_state(at, p.class);
                 p.mode = PLAYER_ACTIVE;
                 p.starved_ticks = 0;
             }
@@ -225,11 +238,23 @@ impl Game {
         let level = ServerMsg::Level {
             data: self.run.level.clone(),
         };
-        let info = ServerMsg::RunState { info: self.run.info() };
         self.broadcast(&level);
+        // Level start (generated levels only; the hub has no event): announce it.
+        if self.run.level.event != EVENT_NONE
+            && let Some(def) = self.content.event(self.run.level.event)
+        {
+            self.broadcast(&ServerMsg::Notice {
+                kind: NOTICE_EVENT,
+                ids: vec![def.id.clone()],
+            });
+        }
+        let info = ServerMsg::RunState { info: self.run.info() };
         self.broadcast(&info);
         if let Some(draft) = self.draft_msg() {
             self.broadcast(&draft);
+        }
+        if let Some(shop) = self.shop_msg() {
+            self.broadcast(&shop);
         }
     }
 
@@ -238,13 +263,18 @@ impl Game {
         self.broadcast(&info);
     }
 
-    /// Resolve the lobby draft once every joined player has voted.
+    /// Resolve the lobby draft once every joined player has a currently-valid vote.
+    /// (After a shop reroll, stored enemy-only votes are invalid until the player re-votes.)
     fn maybe_resolve_draft(&mut self) {
         if self.run.phase != PHASE_ENEMY_DRAFT || self.run.offer.is_none() {
             return;
         }
         let ids = self.joined_ids();
-        if ids.is_empty() || !ids.iter().all(|id| self.votes.contains_key(id)) {
+        let all_valid = !ids.is_empty()
+            && ids
+                .iter()
+                .all(|id| self.votes.get(id).is_some_and(|v| self.run.validate_picks(v).is_ok()));
+        if !all_valid {
             return;
         }
         let votes: Vec<Vec<u8>> = ids.iter().filter_map(|id| self.votes.get(id).cloned()).collect();
@@ -264,6 +294,7 @@ impl Game {
         self.seed = self.seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         self.run = Run::new(&self.content, self.seed, self.start_level);
         self.votes.clear();
+        // Players keep their last class; they can change it in the next first lobby.
         self.respawn_all_and_broadcast();
     }
 
@@ -292,18 +323,21 @@ impl Game {
                 } else {
                     PLAYER_WAITING
                 };
+                let class = CLASS_STRIKER;
+                let state = player_spawn_state(spawn, class);
                 if let Some(conn) = self.conns.get_mut(&id) {
                     conn.player = Some(Player {
                         id: player_id,
                         name,
-                        state: controller::spawn_state(spawn),
+                        state,
                         inputs: VecDeque::new(),
                         last_recv_seq: None,
                         last_applied_seq: 0,
                         tokens: 0,
                         starved_ticks: 0,
                         mode,
-                        cause: protocol::DEATH_VOID,
+                        cause: DEATH_VOID,
+                        class,
                     });
                 }
                 self.send(
@@ -322,6 +356,9 @@ impl Game {
                 self.send(id, &info);
                 if let Some(draft) = self.draft_msg() {
                     self.send(id, &draft);
+                }
+                if let Some(shop) = self.shop_msg() {
+                    self.send(id, &shop);
                 }
             }
             _ if !joined => self.reject(id, 400, "hello required first"),
@@ -344,8 +381,72 @@ impl Game {
                 }
             }
             ClientMsg::Ping { t } => self.send(id, &ServerMsg::Pong { t }),
-            // M2: shop purchases and class choice are wired in by T-043.
-            ClientMsg::Buy { .. } | ClientMsg::ChooseClass { .. } => {}
+            ClientMsg::Buy { item } => {
+                match self.run.buy_shop_item(&self.content, &item) {
+                    Ok(purchase) => {
+                        // A reroll replaces the reward cards: enemy cards stay, reward votes are cleared,
+                        // everyone gets the fresh Draft again.
+                        if purchase == ShopPurchase::Reroll {
+                            let cards = self.run.offer.as_ref().map(|o| o.cards.clone()).unwrap_or_default();
+                            for vote in self.votes.values_mut() {
+                                vote.retain(|&p| cards.get(p as usize).is_some_and(|c| c.kind == CARD_ENEMY));
+                            }
+                            if let Some(draft) = self.draft_msg() {
+                                self.broadcast(&draft);
+                            }
+                        }
+                        self.broadcast(&ServerMsg::Notice {
+                            kind: NOTICE_BOUGHT,
+                            ids: vec![item],
+                        });
+                        self.broadcast_run_state();
+                        // Re-send the shop so everyone sees the new stock and currency.
+                        if let Some(shop) = self.shop_msg() {
+                            self.broadcast(&shop);
+                        }
+                    }
+                    Err(why) => {
+                        let (code, message) = match why {
+                            ShopError::NotInLobby => (409, "the shop is not open"),
+                            ShopError::UnknownItem => (404, "unknown shop item"),
+                            ShopError::SoldOut => (409, "sold out"),
+                            ShopError::NotEnoughCurrency => (402, "not enough currency"),
+                        };
+                        self.send(
+                            id,
+                            &ServerMsg::Error {
+                                code,
+                                message: message.to_owned(),
+                            },
+                        );
+                    }
+                }
+            }
+            ClientMsg::ChooseClass { class } => {
+                // Only in the lobby, and only for the first lobby of a run (level 1).
+                if self.run.phase != PHASE_ENEMY_DRAFT || self.run.level_num != 1 {
+                    return self.send(
+                        id,
+                        &ServerMsg::Error {
+                            code: 409,
+                            message: "class can only be changed in the first lobby".to_owned(),
+                        },
+                    );
+                }
+                if class > CLASS_GLIDER {
+                    return self.send(
+                        id,
+                        &ServerMsg::Error {
+                            code: 400,
+                            message: "unknown class".to_owned(),
+                        },
+                    );
+                }
+                if let Some(p) = self.conns.get_mut(&id).and_then(|c| c.player.as_mut()) {
+                    p.class = class;
+                    p.state.class = class;
+                }
+            }
             ClientMsg::DraftPick { picks } => {
                 if picks.len() > MAX_DRAFT_PICKS as usize {
                     return self.reject(id, 400, "too many draft picks");
@@ -377,7 +478,9 @@ impl Game {
     /// Advance the simulation one 20 Hz tick and broadcast snapshots.
     pub fn tick(&mut self) {
         self.tick = self.tick.wrapping_add(1);
-        let tuning = self.tuning();
+        let tuning = self.run.tuning();
+        // Altar uses are discovered while stepping input frames; notices go out after the movement loop.
+        let mut altar_notices: Vec<(String, String)> = Vec::new();
 
         // 1. Movement (lobby and playing).
         for p in self.conns.values_mut().filter_map(|c| c.player.as_mut()) {
@@ -393,6 +496,14 @@ impl Game {
             let mut stepped = 0;
             while p.tokens > 0 {
                 let Some(f) = p.inputs.pop_front() else { break };
+                // Altars: rising-edge BTN_INTERACT from the input frames, ACTIVE players, playing levels only.
+                if self.run.phase == PHASE_PLAYING
+                    && f.buttons & BTN_INTERACT != 0
+                    && p.state.prev_buttons & BTN_INTERACT == 0
+                    && let Some(pair) = self.run.try_use_altar(&self.content, &p.state.pos)
+                {
+                    altar_notices.push(pair);
+                }
                 controller::step_with(&mut p.state, &f, &self.run.world, &tuning);
                 p.last_applied_seq = f.seq;
                 p.tokens -= 1;
@@ -416,6 +527,13 @@ impl Game {
                 p.starved_ticks = 0;
             }
         }
+        for (upgrade, curse) in altar_notices {
+            self.broadcast(&ServerMsg::Notice {
+                kind: NOTICE_ALTAR,
+                ids: vec![upgrade, curse],
+            });
+            self.broadcast_run_state();
+        }
 
         if self.run.phase == PHASE_PLAYING {
             self.tick_playing();
@@ -428,7 +546,7 @@ impl Game {
                 if let Some(p) = self.conns.get_mut(id).and_then(|c| c.player.as_mut())
                     && p.state.pos.y < kill_y
                 {
-                    p.state = controller::spawn_state(at);
+                    p.state = player_spawn_state(at, p.class);
                 }
             }
         }
@@ -447,6 +565,9 @@ impl Game {
             })
             .collect();
         let enemies = self.run.enemy_views();
+        let projectiles = self.run.hazards.projectiles();
+        let tiles = self.run.hazards.tiles();
+        let altars_used = self.run.altars_used.clone();
         for id in self.joined_ids() {
             let Some(p) = self.conns.get(&id).and_then(|c| c.player.as_ref()) else {
                 continue;
@@ -459,9 +580,9 @@ impl Game {
                 players: players.clone(),
                 enemies: enemies.clone(),
                 gifts_taken: self.run.gifts_taken.clone(),
-                projectiles: Vec::new(),
-                tiles: Vec::new(),
-                altars_used: Vec::new(),
+                projectiles: projectiles.clone(),
+                tiles: tiles.clone(),
+                altars_used: altars_used.clone(),
             };
             self.send(id, &msg);
         }
@@ -477,15 +598,20 @@ impl Game {
         }
         let mut info_changed = self.run.currency != currency_before;
 
-        // Enemies chase the living.
-        let targets: Vec<Vec3> = self
+        // Hazards: enemy behaviour (chaser/turret/mimic/corrupter), projectiles, crumbling tiles.
+        // `players` are the feet positions of the living; Hazards derives centres from them.
+        let feet: Vec<Vec3> = self
             .conns
             .values()
             .filter_map(|c| c.player.as_ref())
             .filter(|p| p.active())
-            .map(Player::centre)
+            .map(|p| p.state.pos.clone())
             .collect();
-        self.run.step_enemies(&targets);
+        self.run
+            .hazards
+            .step(&mut self.run.enemies, &self.run.world, &self.run.level, &feet);
+        // Crumbled platforms stop being solid for every player's controller from the next step.
+        self.run.world.set_tiles(&self.run.hazards.tiles());
 
         // Deaths: a spare life (shared by the team) respawns you at the level start; otherwise you spectate.
         let ids = self.joined_ids();
@@ -499,12 +625,18 @@ impl Game {
             else {
                 continue;
             };
-            let Some(cause) = self.run.hazard(&p.state.pos) else {
+            let cause = if p.state.pos.y < self.run.world.kill_y {
+                Some(DEATH_VOID)
+            } else {
+                // Dormant and disguised enemies are harmless; projectiles kill.
+                self.run.hazards.hit(&self.run.enemies, &p.state.pos)
+            };
+            let Some(cause) = cause else {
                 continue;
             };
             if self.run.lives > 0 {
                 self.run.lives -= 1;
-                p.state = controller::spawn_state(at);
+                p.state = player_spawn_state(at, p.class);
                 tracing::info!(conn = id, cause, lives = self.run.lives, "life lost");
             } else {
                 p.mode = PLAYER_DEAD;
@@ -551,7 +683,8 @@ impl Game {
         }
     }
 
-    /// Everyone is out: the run is over. Each player gets a summary with their own cause of death.
+    /// Everyone is out: the run is over. Each player gets a summary with their own cause of death
+    /// (DEATH_VOID, DEATH_ENEMY or DEATH_PROJECTILE).
     fn end_run(&mut self) {
         self.run.end();
         tracing::info!(level = self.run.level_num, "run over");
@@ -620,8 +753,10 @@ pub async fn run(mut rx: mpsc::Receiver<GameEvent>, mut game: Game) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::run::valid_picks;
-    use protocol::GIFT_GOLDEN;
+    use crate::run::{ShopOffer, valid_picks};
+    use protocol::{Aabb, EVENT_ICE, GIFT_GOLDEN, LevelData, PLATFORM_CRUMBLE, Platform, TILE_WARN};
+    use sim::rules::{BEHAVIOR_TURRET, EnemyParams, spawn_enemy_with};
+    use sim::world::World;
 
     fn game() -> Game {
         Game::starting_at(2, 42).unwrap()
@@ -676,6 +811,20 @@ mod tests {
         });
     }
 
+    fn buy(g: &mut Game, id: ConnId, item: &str) {
+        g.handle(GameEvent::Message {
+            id,
+            msg: ClientMsg::Buy { item: item.to_owned() },
+        });
+    }
+
+    fn choose_class(g: &mut Game, id: ConnId, class: u8) {
+        g.handle(GameEvent::Message {
+            id,
+            msg: ClientMsg::ChooseClass { class },
+        });
+    }
+
     #[test]
     fn hello_lands_in_the_lobby_with_a_draft_offer() {
         let mut g = game();
@@ -686,6 +835,7 @@ mod tests {
         assert!(matches!(&msgs[1], ServerMsg::Level { data } if data.gifts.is_empty()));
         assert!(matches!(&msgs[2], ServerMsg::RunState { info } if info.phase == PHASE_ENEMY_DRAFT));
         assert!(matches!(&msgs[3], ServerMsg::Draft { enemy_picks: 2, reward_picks: 1, cards } if cards.len() == 7));
+        assert!(matches!(&msgs[4], ServerMsg::Shop { items } if items.len() == 4));
         g.tick();
         assert!(matches!(&drain(&mut rx)[..], [ServerMsg::Snapshot { tick: 1, players, .. }] if players.len() == 1));
         assert_eq!(g.conns[&1].player.as_ref().unwrap().name, "tester");
@@ -780,6 +930,10 @@ mod tests {
         assert!(
             msgs.iter()
                 .any(|m| matches!(m, ServerMsg::RunState { info } if info.currency > 0 && info.level == 2))
+        );
+        assert!(
+            msgs.iter().any(|m| matches!(m, ServerMsg::Shop { .. })),
+            "the next lobby offers the shop"
         );
     }
 
@@ -1041,5 +1195,394 @@ mod tests {
     fn name_sanitized() {
         assert_eq!(sanitize_name("\n\t"), "blocky");
         assert_eq!(sanitize_name(&"x".repeat(100)).len(), MAX_NAME_LEN as usize);
+    }
+
+    #[test]
+    fn choose_class_only_in_first_lobby_and_persists_across_respawn() {
+        let mut g = Game::starting_at(1, 99).unwrap(); // level 1: the first lobby
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        assert_eq!(player(&mut g, 1).class, CLASS_STRIKER);
+        // Choose the glider.
+        choose_class(&mut g, 1, protocol::CLASS_GLIDER);
+        assert_eq!(player(&mut g, 1).class, protocol::CLASS_GLIDER);
+        assert_eq!(player(&mut g, 1).state.class, protocol::CLASS_GLIDER);
+        // Out-of-range class: 400, no change.
+        drain(&mut rx);
+        choose_class(&mut g, 1, 4);
+        assert!(matches!(drain(&mut rx)[..], [ServerMsg::Error { code: 400, .. }]));
+        assert_eq!(player(&mut g, 1).class, protocol::CLASS_GLIDER);
+        // Vote into the level: class is copied into the spawned state.
+        vote(&mut g, 1);
+        assert_eq!(g.run.phase, PHASE_PLAYING);
+        assert_eq!(player(&mut g, 1).state.class, protocol::CLASS_GLIDER);
+        // Now playing: choosing is rejected with 409.
+        drain(&mut rx);
+        choose_class(&mut g, 1, CLASS_STRIKER);
+        assert!(matches!(drain(&mut rx)[..], [ServerMsg::Error { code: 409, .. }]));
+        assert_eq!(player(&mut g, 1).class, protocol::CLASS_GLIDER);
+        // Respawn with a spare life: the class survives.
+        g.run.lives = 1;
+        let kill_y = g.run.world.kill_y;
+        player(&mut g, 1).state.pos.y = kill_y - 5.0;
+        g.tick();
+        assert_eq!(player(&mut g, 1).mode, PLAYER_ACTIVE);
+        assert_eq!(player(&mut g, 1).class, protocol::CLASS_GLIDER);
+        assert_eq!(player(&mut g, 1).state.class, protocol::CLASS_GLIDER);
+    }
+
+    #[test]
+    fn choose_class_rejected_outside_the_first_lobby() {
+        let mut g = game(); // starting at level 2: not the first lobby
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        drain(&mut rx);
+        choose_class(&mut g, 1, protocol::CLASS_BLINKER);
+        assert!(matches!(drain(&mut rx)[..], [ServerMsg::Error { code: 409, .. }]));
+        assert_eq!(player(&mut g, 1).class, CLASS_STRIKER);
+    }
+
+    #[test]
+    fn new_run_keeps_last_class() {
+        let mut g = Game::starting_at(1, 99).unwrap();
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        choose_class(&mut g, 1, protocol::CLASS_GLIDER);
+        vote(&mut g, 1);
+        drain(&mut rx);
+        g.run.lives = 0;
+        let kill_y = g.run.world.kill_y;
+        player(&mut g, 1).state.pos.y = kill_y - 5.0;
+        g.tick();
+        assert_eq!(g.run.phase, PHASE_OVER);
+        g.handle(GameEvent::Message {
+            id: 1,
+            msg: ClientMsg::Restart,
+        });
+        assert_eq!(g.run.phase, PHASE_ENEMY_DRAFT);
+        assert_eq!(g.run.level_num, 1);
+        assert_eq!(
+            player(&mut g, 1).class,
+            protocol::CLASS_GLIDER,
+            "class survives a new run"
+        );
+        // ...and can be changed again in the next first lobby.
+        choose_class(&mut g, 1, CLASS_STRIKER);
+        assert_eq!(player(&mut g, 1).class, CLASS_STRIKER);
+    }
+
+    #[test]
+    fn event_notice_and_ice_friction_when_level_has_event() {
+        let mut g = game();
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        drain(&mut rx);
+        // Simulate a freshly generated EVENT_ICE level (content carries friction_mul 0.25).
+        g.run.level.event = EVENT_ICE;
+        g.run.event_friction_mul = 0.25;
+        g.respawn_all_and_broadcast();
+        let msgs = drain(&mut rx);
+        assert!(msgs.iter().any(|m| matches!(
+            m,
+            ServerMsg::Notice { kind: NOTICE_EVENT, ids } if ids == &vec!["slick_ice".to_string()]
+        )));
+        assert!(msgs.iter().any(|m| matches!(
+            m,
+            ServerMsg::RunState { info } if info.tuning.friction_mul == 0.25
+        )));
+        // With no event, no notice and normal friction.
+        g.run.level.event = EVENT_NONE;
+        g.run.event_friction_mul = 1.0;
+        g.respawn_all_and_broadcast();
+        let msgs = drain(&mut rx);
+        assert!(
+            !msgs
+                .iter()
+                .any(|m| matches!(m, ServerMsg::Notice { kind: NOTICE_EVENT, .. }))
+        );
+        assert!(msgs.iter().any(|m| matches!(
+            m,
+            ServerMsg::RunState { info } if info.tuning.friction_mul == 1.0
+        )));
+    }
+
+    #[test]
+    fn buy_errors_map_to_codes_and_never_kick() {
+        let mut g = game(); // level 2 lobby: the shop is open
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        drain(&mut rx);
+        g.run.currency = 0;
+        g.run.shop = Some(vec![ShopOffer {
+            id: "kept_flame".to_string(),
+            cost: 30,
+            stock: 1,
+        }]);
+        // Unknown item: 404.
+        buy(&mut g, 1, "nope");
+        assert!(matches!(drain(&mut rx)[..], [ServerMsg::Error { code: 404, .. }]));
+        // Not enough currency: 402.
+        buy(&mut g, 1, "kept_flame");
+        assert!(matches!(drain(&mut rx)[..], [ServerMsg::Error { code: 402, .. }]));
+        // Bought; bought again: sold out, 409.
+        g.run.currency = 100;
+        buy(&mut g, 1, "kept_flame");
+        drain(&mut rx);
+        buy(&mut g, 1, "kept_flame");
+        assert!(matches!(drain(&mut rx)[..], [ServerMsg::Error { code: 409, .. }]));
+        // The shop is closed while playing: 409.
+        vote(&mut g, 1);
+        drain(&mut rx);
+        g.run.currency = 100;
+        buy(&mut g, 1, "kept_flame");
+        assert!(matches!(drain(&mut rx)[..], [ServerMsg::Error { code: 409, .. }]));
+        assert_eq!(g.player_count(), 1, "errors never kick the player");
+    }
+
+    #[test]
+    fn buying_reroll_clears_reward_votes_and_resends_draft() {
+        let mut g = game(); // level 2 lobby
+        let mut rx1 = connect(&mut g, 1);
+        hello(&mut g, 1);
+        let mut rx2 = connect(&mut g, 2);
+        hello(&mut g, 2);
+        drain(&mut rx1);
+        drain(&mut rx2);
+        g.run.currency = 100;
+        g.run.shop = Some(vec![ShopOffer {
+            id: "new_hand".to_string(),
+            cost: 15,
+            stock: 1,
+        }]);
+        vote(&mut g, 1);
+        assert_eq!(g.run.phase, PHASE_ENEMY_DRAFT);
+        // Player 2 buys the reroll.
+        buy(&mut g, 2, "new_hand");
+        // Player 1's stored vote is stripped down to enemy picks only.
+        let offer = g.run.offer.clone().unwrap();
+        assert!(g.votes[&1].iter().all(|&p| offer.cards[p as usize].kind == CARD_ENEMY));
+        // Both players got the fresh Draft, the Notice and the re-sent Shop (stock 0).
+        for rx in [&mut rx1, &mut rx2] {
+            let msgs = drain(rx);
+            assert!(msgs.iter().any(|m| matches!(m, ServerMsg::Draft { .. })));
+            assert!(msgs.iter().any(|m| matches!(
+                m,
+                ServerMsg::Notice { kind: NOTICE_BOUGHT, ids } if ids == &vec!["new_hand".to_string()]
+            )));
+            assert!(
+                msgs.iter()
+                    .any(|m| matches!(m, ServerMsg::Shop { items } if items.len() == 1 && items[0].stock == 0))
+            );
+            assert!(msgs.iter().any(|m| matches!(
+                m,
+                ServerMsg::RunState { info } if info.currency == 85
+            )));
+        }
+        // Player 2 votes; the draft must NOT resolve yet (player 1's vote was cleared).
+        vote(&mut g, 2);
+        assert_eq!(g.run.phase, PHASE_ENEMY_DRAFT);
+        // Player 1 re-votes; now the draft resolves.
+        vote(&mut g, 1);
+        assert_eq!(g.run.phase, PHASE_PLAYING);
+    }
+
+    #[test]
+    fn altar_use_broadcasts_notice_and_happens_once() {
+        let mut g = game(); // level 2 lobby
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        vote(&mut g, 1);
+        assert_eq!(g.run.phase, PHASE_PLAYING);
+        drain(&mut rx);
+        // Construct an altar next to the player.
+        g.run.level.altars = vec![
+            protocol::Altar {
+                id: 9,
+                pos: Vec3::new(0.0, 0.0, 0.0),
+            },
+            protocol::Altar {
+                id: 10,
+                pos: Vec3::new(0.0, 0.0, 0.0),
+            },
+        ];
+        g.run.altars_used.clear();
+        let upgrades_before = g.run.upgrades.len();
+        let curses_before = g.run.curses.len();
+        player(&mut g, 1).state.pos = Vec3::new(0.25, 0.0, 0.25);
+        // Rising edge: press E (BTN_INTERACT).
+        g.handle(GameEvent::Message {
+            id: 1,
+            msg: ClientMsg::Inputs {
+                frames: vec![InputFrame {
+                    seq: 1,
+                    move_x: 0,
+                    move_z: 0,
+                    buttons: BTN_INTERACT,
+                }],
+            },
+        });
+        g.tick();
+        assert_eq!(g.run.altars_used, vec![9], "first unused altar in range is used");
+        assert_eq!(g.run.upgrades.len(), upgrades_before + 1);
+        assert_eq!(g.run.curses.len(), curses_before + 1);
+        let msgs = drain(&mut rx);
+        assert!(msgs.iter().any(|m| matches!(
+            m,
+            ServerMsg::Notice { kind: NOTICE_ALTAR, ids }
+                if ids.len() == 2
+                    && ids[0] == *g.run.upgrades.last().unwrap()
+                    && ids[1] == *g.run.curses.last().unwrap()
+        )));
+        assert!(msgs.iter().any(|m| matches!(
+            m,
+            ServerMsg::Snapshot { altars_used, .. } if altars_used == &vec![9]
+        )));
+        // Holding the key (no rising edge) does not touch the second altar.
+        g.handle(GameEvent::Message {
+            id: 1,
+            msg: ClientMsg::Inputs {
+                frames: vec![InputFrame {
+                    seq: 2,
+                    move_x: 0,
+                    move_z: 0,
+                    buttons: BTN_INTERACT,
+                }],
+            },
+        });
+        g.tick();
+        assert_eq!(g.run.altars_used, vec![9], "holding BTN_INTERACT is not a rising edge");
+        // Release, then press again: the second altar is used.
+        g.handle(GameEvent::Message {
+            id: 1,
+            msg: ClientMsg::Inputs {
+                frames: vec![InputFrame {
+                    seq: 3,
+                    move_x: 0,
+                    move_z: 0,
+                    buttons: 0,
+                }],
+            },
+        });
+        g.tick();
+        g.handle(GameEvent::Message {
+            id: 1,
+            msg: ClientMsg::Inputs {
+                frames: vec![InputFrame {
+                    seq: 4,
+                    move_x: 0,
+                    move_z: 0,
+                    buttons: BTN_INTERACT,
+                }],
+            },
+        });
+        g.tick();
+        assert_eq!(g.run.altars_used, vec![9, 10]);
+        // And again: both altars are spent for this level.
+        g.handle(GameEvent::Message {
+            id: 1,
+            msg: ClientMsg::Inputs {
+                frames: vec![
+                    InputFrame {
+                        seq: 5,
+                        move_x: 0,
+                        move_z: 0,
+                        buttons: 0,
+                    },
+                    InputFrame {
+                        seq: 6,
+                        move_x: 0,
+                        move_z: 0,
+                        buttons: BTN_INTERACT,
+                    },
+                ],
+            },
+        });
+        g.tick();
+        assert_eq!(g.run.altars_used, vec![9, 10], "one use per altar per level");
+    }
+
+    #[test]
+    fn projectile_kills_and_run_over_cause_is_death_projectile() {
+        let mut g = game(); // level 2 lobby
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        vote(&mut g, 1);
+        drain(&mut rx);
+        // Replace the drafted enemies with a point-blank turret.
+        g.run.enemies.clear();
+        g.run.lives = 0;
+        let pos = player(&mut g, 1).state.pos.clone();
+        g.run.enemies.push(spawn_enemy_with(
+            1,
+            0,
+            Vec3::new(pos.x + 3.0, pos.y, pos.z),
+            EnemyParams {
+                behavior: BEHAVIOR_TURRET,
+                grace_ticks: 0,
+                fire_interval_ticks: 1,
+                projectile_speed: 50.0,
+                aggro: 100.0,
+                size: 0.5,
+                ..EnemyParams::default()
+            },
+        ));
+        for _ in 0..30 {
+            g.tick();
+        }
+        let msgs = drain(&mut rx);
+        let summary = msgs.iter().find_map(|m| match m {
+            ServerMsg::RunOver { summary } => Some(summary),
+            _ => None,
+        });
+        assert_eq!(
+            summary.map(|s| s.cause),
+            Some(protocol::DEATH_PROJECTILE),
+            "the run summary carries DEATH_PROJECTILE"
+        );
+    }
+
+    #[test]
+    fn crumbling_tile_shows_up_in_the_snapshot() {
+        let mut g = game(); // level 2 lobby
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        vote(&mut g, 1);
+        drain(&mut rx);
+        // Construct a level whose main platform is crumbling.
+        g.run.level = LevelData {
+            level: 2,
+            seed: 1,
+            spawn: Vec3::new(0.0, 0.0, 0.0),
+            beacon: Vec3::new(0.0, 0.0, 50.0),
+            kill_y: -100.0,
+            platforms: vec![Platform {
+                id: 7,
+                kind: PLATFORM_CRUMBLE,
+                bounds: Aabb {
+                    min: Vec3::new(-5.0, -1.0, -5.0),
+                    max: Vec3::new(5.0, 10.0, 5.0),
+                },
+            }],
+            gifts: Vec::new(),
+            event: EVENT_NONE,
+            altars: Vec::new(),
+        };
+        g.run.world = World::from_level(&g.run.level);
+        g.run.hazards.reset();
+        g.run.altars_used.clear();
+        g.run.gifts_taken.clear();
+        g.run.enemies.clear();
+        player(&mut g, 1).state.pos = Vec3::new(0.0, 10.0, 0.0); // feet on the platform top
+        g.tick();
+        let msgs = drain(&mut rx);
+        let tiles = msgs.iter().find_map(|m| match m {
+            ServerMsg::Snapshot { tiles, .. } => Some(tiles.clone()),
+            _ => None,
+        });
+        let tiles = tiles.expect("snapshot carries tiles");
+        assert!(
+            tiles.iter().any(|t| t.id == 7 && t.state == TILE_WARN),
+            "standing on a crumbling platform warns it; snapshot reports it"
+        );
     }
 }
