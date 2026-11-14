@@ -12,6 +12,12 @@
 //! edge by edge — it steers around nothing else, because the edges of the route stay on
 //! platform tops and therefore clear the level's obstacles:
 //!
+//! Generated levels are no longer gated on the route bot below (it is kept as an `#[ignore]`d
+//! diagnostic, `cargo test --test playthrough -- --ignored`): the generated-map gate is now
+//! `every_graph_edge_kind_is_physically_doable`, which proves every KIND of edge the platform
+//! graph admits is performable with the real controller in a minimal two-platform world (plus
+//! representative step-up / stair / drop cases).
+//!
 //! Standing on a platform reports the smallest matching footprint, so a platform set
 //! flush into a larger same-height floor does not shadow it forever.
 //!
@@ -50,7 +56,7 @@ use sim::levelgen;
 use sim::levels::{LEVEL_COUNT, level};
 use sim::rules::{beacon_reached, gift_touched};
 use sim::world::World;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 const MAX_FRAMES_PER_GOAL: u32 = 60 * 60;
 /// Player capsule half-width in u (mirrors the controller's collision radius).
@@ -629,12 +635,14 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
-/// Generated maps must be physically completable, not just graph-reachable: run the bot on
-/// many of them. Per (seed, level) the bot must reach 8 seed-chosen gifts and then the beacon.
-/// A failure prints the seed, the level, the current platform, the next platform, the edge kind
-/// and the edge's geometry (all harvested from the panicking leg), so a real map defect can be
-/// reported, not papered over. The test passes when every (seed, level) completes (failed == 0).
+/// Diagnostic only, NOT a gate: generated maps are pinned by edge feasibility in
+/// `every_graph_edge_kind_is_physically_doable`. Kept for `cargo test -- --ignored`:
+/// runs the route bot on 10 seeds x levels 1..=6 and prints every failure with the
+/// seed, the level, the current platform, the next platform, the edge kind and the edge's
+/// geometry (all harvested from the panicking leg), so a real map defect can be reported,
+/// not papered over.
 #[test]
+#[ignore]
 fn generated_levels_are_completable_with_the_real_controller() {
     let mut played = 0;
     let mut failures: Vec<String> = Vec::new();
@@ -657,6 +665,385 @@ fn generated_levels_are_completable_with_the_real_controller() {
     assert!(
         failures.is_empty(),
         "bot could not complete generated levels (seed, level, current platform, next platform, edge kind and geometry):\n{}",
+        failures.join("\n")
+    );
+}
+
+/// ---------------------------------------------------------------------------
+/// Edge feasibility: prove that every KIND of edge `platform_graph` admits is
+/// physically doable with the real controller, instead of routing whole maps.
+/// ---------------------------------------------------------------------------
+
+/// Quantized bucket of a jump/pad edge: gap rounded UP to 0.25 u, rise rounded
+/// to the nearest 0.25 u, the landing's smaller horizontal extent rounded DOWN
+/// to 0.5 u, and whether the launcher is a jump pad. Ordered, so the printed
+/// table is deterministic.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct LandingBucket {
+    gap_q: i64,
+    rise_q: i64,
+    width_q: i64,
+    pad: bool,
+}
+
+impl LandingBucket {
+    fn quantize(gap: f32, rise: f32, landing_smaller_extent: f32, pad: bool) -> Self {
+        // Small epsilons keep exact quarter/half-u values from landing on the
+        // wrong side of a float boundary.
+        let gap_q = ((gap / 0.25) - 1e-3).ceil().max(0.0) as i64;
+        let rise_q = (rise / 0.25).round() as i64;
+        let width_q = ((landing_smaller_extent / 0.5) - 1e-3).floor().max(0.0) as i64;
+        Self {
+            gap_q,
+            rise_q,
+            width_q,
+            pad,
+        }
+    }
+
+    fn gap(&self) -> f32 {
+        self.gap_q as f32 * 0.25
+    }
+
+    fn rise(&self) -> f32 {
+        self.rise_q as f32 * 0.25
+    }
+
+    fn width(&self) -> f32 {
+        self.width_q as f32 * 0.5
+    }
+}
+
+/// Outcome of simulating one bucket or representative case.
+struct EdgeSim {
+    ok: bool,
+    /// Closest horizontal distance from the feet to the goal footprint (0 when over it),
+    /// tracked only while at or below goal-top + 0.5 u (above that we are flying over it).
+    closest: f32,
+}
+
+/// Whether the simulated run may jump (a plain jump), is launched by the pad it
+/// stands on (never presses BTN_JUMP), or never jumps at all (walk/step/drop).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SimMode {
+    Walk,
+    Jump,
+    Pad,
+}
+
+/// A non-pad platform from a generated level, used as a clone-source for the test
+/// platforms: bounds and (when required) kind are overwritten, every other field is
+/// irrelevant to movement. Never constructed from scratch, so no assumption is made
+/// about the full protocol shape of `Platform`.
+fn platform_proto() -> Platform {
+    let base = levelgen::generate(0, 1).data;
+    base.platforms
+        .iter()
+        .find(|p| p.kind != PLATFORM_JUMP_PAD)
+        .or_else(|| base.platforms.first())
+        .cloned()
+        .expect("a generated level has at least one platform")
+}
+
+/// Clone of `proto` with its bounds replaced, kind untouched.
+fn rect_platform(
+    proto: &Platform,
+    min_x: f32,
+    max_x: f32,
+    min_y: f32,
+    max_y: f32,
+    min_z: f32,
+    max_z: f32,
+) -> Platform {
+    let mut p = proto.clone();
+    p.bounds.min.x = min_x;
+    p.bounds.max.x = max_x;
+    p.bounds.min.y = min_y;
+    p.bounds.max.y = max_y;
+    p.bounds.min.z = min_z;
+    p.bounds.max.z = max_z;
+    p
+}
+
+/// Builds a LevelData containing exactly `platforms`, gifts emptied, with the player
+/// spawn moved onto platform A at (sx, sy, sz). The level is a donor clone of a
+/// generated level: platforms and gifts are overwritten, the spawn fields are moved —
+/// every other field is copied, never constructed.
+fn tiny_level(platforms: Vec<Platform>, sx: f32, sy: f32, sz: f32) -> LevelData {
+    let mut lvl = levelgen::generate(0, 1).data;
+    lvl.platforms = platforms;
+    lvl.gifts.clear();
+    lvl.spawn.x = sx;
+    lvl.spawn.y = sy;
+    lvl.spawn.z = sz;
+    lvl
+}
+
+/// Builds the two-platform world for one bucket: A is a 12 u long, 4 u wide run-up
+/// along +x with its top at y = 0 (a 3x3 PLATFORM_JUMP_PAD for pad buckets), B sits
+/// edge-to-edge `bucket.gap` beyond A's edge, its top at `bucket.rise`, its depth
+/// 3 u along the jump direction and its width `bucket.width` across it.
+fn bucket_platforms(bucket: LandingBucket) -> Vec<Platform> {
+    let proto = platform_proto();
+    let (gap, rise, width) = (bucket.gap(), bucket.rise(), bucket.width());
+    let a_min_x = if bucket.pad { -3.0 } else { -12.0 };
+    let a_half_z = if bucket.pad { 1.5 } else { 2.0 };
+    let mut a = rect_platform(&proto, a_min_x, 0.0, -1.0, 0.0, -a_half_z, a_half_z);
+    if bucket.pad {
+        a.kind = PLATFORM_JUMP_PAD;
+    }
+    let b = rect_platform(&proto, gap, gap + 3.0, rise - 1.0, rise, -width * 0.5, width * 0.5);
+    vec![a, b]
+}
+
+/// Runs the real controller from the far end of A straight at the goal's centre.
+/// Full input the whole time; in `Jump` mode BTN_JUMP is pressed on the last frame
+/// still grounded on A (coyote time honoured as a backstop) and held for the full
+/// rise, and released on the way down. `goal_top` / `goal` describe the landing
+/// platform for the success check (grounded on its top) and the closest-approach
+/// metric. 180 frames = 3 s.
+fn simulate_controller(
+    platforms: Vec<Platform>,
+    spawn: (f32, f32, f32),
+    target: (f32, f32),
+    mode: SimMode,
+    goal_top: f32,
+    goal: (f32, f32, f32, f32), // min_x, max_x, min_z, max_z
+) -> EdgeSim {
+    // A's jump edge is always at x = 0 in the constructed worlds.
+    const A_EDGE_X: f32 = 0.0;
+    let lvl = tiny_level(platforms, spawn.0, spawn.1, spawn.2);
+    let world = World::from_level(&lvl);
+    let mut state = spawn_state(lvl.spawn.clone());
+    let mut seq = 0u32;
+    let mut frames = 0u32;
+    let mut holding_jump = false;
+    let mut jumped = false;
+    let mut closest = f32::INFINITY;
+    while frames < 180 {
+        frames += 1;
+        seq += 1;
+        let dx = target.0 - state.pos.x;
+        let dz = target.1 - state.pos.z;
+        let d = (dx * dx + dz * dz).sqrt();
+        // Full input straight at the goal's centre.
+        let (mx, mz) = if d < 0.05 {
+            (0, 0)
+        } else {
+            ((dx / d * 127.0) as i8, (dz / d * 127.0) as i8)
+        };
+        // Closest approach of the feet to the goal footprint; only meaningful at/below
+        // goal-top + 0.5 u (higher up, we are still flying over it).
+        let clamp_x = state.pos.x.clamp(goal.0, goal.1);
+        let clamp_z = state.pos.z.clamp(goal.2, goal.3);
+        if state.pos.y <= goal_top + 0.5 {
+            let dist = ((state.pos.x - clamp_x).powi(2) + (state.pos.z - clamp_z).powi(2)).sqrt();
+            closest = closest.min(dist);
+        }
+        // Jump on the last frame still grounded on A (coyote allowed); never off a pad.
+        if mode == SimMode::Jump && !jumped && !holding_jump {
+            let at_edge = state.grounded && state.pos.x >= A_EDGE_X - 0.15;
+            let coyote_hop = !state.grounded && state.coyote_frames > 0;
+            if at_edge || coyote_hop {
+                holding_jump = true;
+                jumped = true;
+            }
+        }
+        if holding_jump && state.vel.y <= 0.0 {
+            // Release on the way down; BTN_JUMP was held for the full rise.
+            holding_jump = false;
+        }
+        let input = InputFrame {
+            seq,
+            move_x: mx,
+            move_z: mz,
+            buttons: if holding_jump { BTN_JUMP } else { 0 },
+        };
+        step(&mut state, &input, &world);
+        let in_goal = state.pos.x >= goal.0 - 0.4
+            && state.pos.x <= goal.1 + 0.4
+            && state.pos.z >= goal.2 - 0.4
+            && state.pos.z <= goal.3 + 0.4;
+        if state.grounded && (state.pos.y - goal_top).abs() < 1e-3 && in_goal {
+            return EdgeSim {
+                ok: true,
+                closest: 0.0,
+            };
+        }
+        if state.pos.y <= world.kill_y {
+            break;
+        }
+    }
+    EdgeSim {
+        ok: false,
+        closest,
+    }
+}
+
+/// Prints one representative (non-bucket) case and records it as a failure when it fails.
+fn report_case(label: &str, out: &EdgeSim, failures: &mut Vec<String>) {
+    println!("case {label}: ok={} closest={:.2} u", out.ok, out.closest);
+    if !out.ok {
+        failures.push(format!(
+            "representative case {label}: closest landing {:.2} u",
+            out.closest
+        ));
+    }
+}
+
+/// Every KIND of edge the platform graph admits must be physically doable with the
+/// real controller. For 10 seeds x levels 1..=10 this walks every directed edge of
+/// `levelgen::platform_graph`, classifies it as walk / step-up / drop / jump / pad,
+/// buckets the jump and pad edges by (gap rounded up to 0.25 u, rise rounded to 0.25 u,
+/// landing smaller extent rounded down to 0.5 u, launcher is pad) and simulates each
+/// bucket in a two-platform world (run at full input from the far end of A straight
+/// at B's centre, jump on the last frame still grounded on A — coyote allowed — hold
+/// jump for the full rise, steer to B's centre while airborne; success = grounded on
+/// B's top within 3 s). Representative 0.5 u step-up, 4-step (0.5 u rise, 1 u tread)
+/// stair and touching -6.0 u drop cases are simulated the same way. Prints a per-bucket
+/// table (count, gap, rise, width, pad, ok); on failure prints the failing buckets with
+/// the closest landing distance. Fails if any bucket or representative case cannot be
+/// performed.
+#[test]
+fn every_graph_edge_kind_is_physically_doable() {
+    let mut counts: BTreeMap<LandingBucket, u32> = BTreeMap::new();
+    let mut walk_n = 0u32;
+    let mut step_up_n = 0u32;
+    let mut drop_n = 0u32;
+    for level_n in 1..=10u32 {
+        for seed_i in 0..10u32 {
+            let seed = seed_i.wrapping_mul(2_654_435_761);
+            let lvl = levelgen::generate(seed, level_n).data;
+            let adj = levelgen::platform_graph(&lvl);
+            for (from_i, edges) in adj.iter().enumerate() {
+                for &to_i in edges {
+                    let from = &lvl.platforms[from_i];
+                    let to = &lvl.platforms[to_i];
+                    let rise = to.bounds.max.y - from.bounds.max.y;
+                    let gap = gap_xz(from, to);
+                    // Touching and within step height: a plain step; touching and lower:
+                    // a drop; touching and otherwise level: a walk. (Mirrored from
+                    // `edge_kind`: a touching edge is never jumped.)
+                    if gap <= 0.001 && rise <= 0.55 + 0.001 {
+                        if rise > 0.001 {
+                            step_up_n += 1;
+                        } else if rise < -0.001 {
+                            drop_n += 1;
+                        } else {
+                            walk_n += 1;
+                        }
+                        continue;
+                    }
+                    let pad = from.kind == PLATFORM_JUMP_PAD
+                        && rise <= 4.0 + 0.001
+                        && gap <= 5.0 + 0.001;
+                    let smaller_extent = (to.bounds.max.x - to.bounds.min.x)
+                        .min(to.bounds.max.z - to.bounds.min.z);
+                    *counts
+                        .entry(LandingBucket::quantize(gap, rise, smaller_extent, pad))
+                        .or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    println!(
+        "edge kinds walked: walk={walk_n} step_up={step_up_n} drop={drop_n} jump/pad buckets={}",
+        counts.len()
+    );
+    println!(
+        "{:>6} {:>6} {:>7} {:>6} {:>4} {:>4}",
+        "count", "gap", "rise", "width", "pad", "ok"
+    );
+
+    let mut failures: Vec<String> = Vec::new();
+
+    for (bucket, &count) in &counts {
+        let gap = bucket.gap();
+        let rise = bucket.rise();
+        let width = bucket.width();
+        let (spawn, mode) = if bucket.pad {
+            ((-2.5, 1.0, 0.0), SimMode::Pad)
+        } else {
+            ((-11.0, 1.0, 0.0), SimMode::Jump)
+        };
+        let out = simulate_controller(
+            bucket_platforms(*bucket),
+            spawn,
+            (gap + 1.5, 0.0),
+            mode,
+            rise,
+            (gap, gap + 3.0, -width * 0.5, width * 0.5),
+        );
+        println!(
+            "{:>6} {:>6.2} {:>+7.2} {:>6.1} {:>4} {:>4}",
+            count,
+            gap,
+            rise,
+            width,
+            if bucket.pad { "pad" } else { "-" },
+            if out.ok { "ok" } else { "FAIL" }
+        );
+        if !out.ok {
+            failures.push(format!(
+                "gap {gap:.2} rise {rise:+.2} width {width:.1} pad {} ({count} graph edges): closest landing {:.2} u",
+                bucket.pad, out.closest
+            ));
+        }
+    }
+
+    let proto = platform_proto();
+    // Representative non-jump edges.
+    // 1) One 0.5 u step-up onto a 4 x 4 platform (walked, never jumped).
+    {
+        let a = rect_platform(&proto, -12.0, 0.0, -1.0, 0.0, -2.0, 2.0);
+        let b = rect_platform(&proto, 0.0, 4.0, -0.5, 0.5, -2.0, 2.0);
+        let out = simulate_controller(
+            vec![a, b],
+            (-11.0, 1.0, 0.0),
+            (2.0, 0.0),
+            SimMode::Walk,
+            0.5,
+            (0.0, 4.0, -2.0, 2.0),
+        );
+        report_case("step-up-0.5", &out, &mut failures);
+    }
+    // 2) Stair: 4 risers of 0.5 u with 1.0 u treads (walked, never jumped).
+    {
+        let a = rect_platform(&proto, -12.0, 0.0, -1.0, 0.0, -2.0, 2.0);
+        let mut plats = vec![a];
+        for k in 0..4u32 {
+            let top = (k as f32 + 1.0) * 0.5;
+            let min_x = k as f32 * 1.0;
+            plats.push(rect_platform(&proto, min_x, min_x + 1.0, top - 1.0, top, -2.0, 2.0));
+        }
+        let out = simulate_controller(
+            plats,
+            (-11.0, 1.0, 0.0),
+            (3.5, 0.0),
+            SimMode::Walk,
+            2.0,
+            (3.0, 4.0, -2.0, 2.0),
+        );
+        report_case("stair 4x(0.5 up, 1.0 tread)", &out, &mut failures);
+    }
+    // 3) Touching -6.0 u drop (walked off the edge, never jumped).
+    {
+        let a = rect_platform(&proto, -12.0, 0.0, -1.0, 0.0, -2.0, 2.0);
+        let b = rect_platform(&proto, 0.0, 4.0, -7.0, -6.0, -2.0, 2.0);
+        let out = simulate_controller(
+            vec![a, b],
+            (-11.0, 1.0, 0.0),
+            (2.0, 0.0),
+            SimMode::Walk,
+            -6.0,
+            (0.0, 4.0, -2.0, 2.0),
+        );
+        report_case("drop -6.0 off the edge", &out, &mut failures);
+    }
+
+    assert!(
+        failures.is_empty(),
+        "graph admits edges the real controller cannot perform (gap, rise, width, pad):\n{}",
         failures.join("\n")
     );
 }

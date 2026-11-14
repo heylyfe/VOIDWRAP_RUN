@@ -1046,9 +1046,11 @@ mod tests {
             msgs.iter()
                 .any(|m| matches!(m, ServerMsg::Draft { enemy_picks: 0, .. }))
         );
+        // After finish_level the team is back in the lobby for level 3; RunState reports
+        // the upcoming level and the persistent team currency.
         assert!(
             msgs.iter()
-                .any(|m| matches!(m, ServerMsg::RunState { info } if info.currency > 0 && info.level == 2))
+                .any(|m| matches!(m, ServerMsg::RunState { info } if info.currency > 0 && info.level == 3))
         );
         assert!(
             msgs.iter().any(|m| matches!(m, ServerMsg::Shop { .. })),
@@ -1636,14 +1638,40 @@ mod tests {
         hello(&mut g, 1);
         vote(&mut g, 1);
         drain(&mut rx);
-        // Replace the drafted enemies with a point-blank turret (Bolt Sentry charges flat bolts).
+        // Minimal firing range: a single platform far below the line of fire and nothing in it,
+        // so the Bolt Sentry's line-of-sight check is unambiguously clear and its flat bolt can
+        // only be stopped by the player. (On a generated hub the LOS/bolt lane grazes the deck's
+        // top face, which counts as an intersection, so the turret never got to charge or fire.)
+        g.run.level = LevelData {
+            level: 2,
+            seed: 1,
+            spawn: Vec3::new(0.0, 2.0, 0.0),
+            beacon: Vec3::new(50.0, 2.0, 0.0), // never reached; the level only ends by deaths
+            kill_y: -50.0,
+            platforms: vec![Platform {
+                id: 1,
+                kind: protocol::PLATFORM_NORMAL,
+                bounds: Aabb {
+                    min: Vec3::new(-5.0, -1.0, -5.0),
+                    max: Vec3::new(5.0, 0.0, 5.0),
+                },
+            }],
+            gifts: Vec::new(),
+            event: EVENT_NONE,
+            altars: Vec::new(),
+        };
+        g.run.world = World::from_level(&g.run.level);
+        g.run.hazards.reset();
+        g.run.altars_used.clear();
+        g.run.gifts_taken.clear();
         g.run.enemies.clear();
         g.run.lives = 0;
-        let pos = player(&mut g, 1).state.pos.clone();
+        let pos = Vec3::new(0.0, 2.0, 0.0); // feet; the player floats here (pinned, no gravity)
+        // Replace the drafted enemies with a point-blank turret (Bolt Sentry charges flat bolts).
         g.run.enemies.push(spawn_enemy_with(
             1,
             0,
-            Vec3::new(pos.x + 3.0, pos.y, pos.z),
+            Vec3::new(pos.x + 3.0, pos.y + 0.9, pos.z),
             EnemyParams {
                 behavior: BEHAVIOR_TURRET,
                 speed_mul: 1.0,
@@ -1662,7 +1690,7 @@ mod tests {
                 p.starved_ticks = 0;
             }
             g.tick();
-            if i % 32 == 31 {
+            if i % 16 == 15 {
                 summary = drain(&mut rx).into_iter().find_map(|m| match m {
                     ServerMsg::RunOver { summary } => Some(summary),
                     _ => None,
@@ -1844,7 +1872,7 @@ mod m3_tests {
     #[test]
     fn bulwark_cast_roots_and_raises_the_ward() {
         let mut g = Game::starting_at(1, 99).unwrap(); // level 1: the first lobby, class choice is open
-        let _rx = connect(&mut g, 1);
+        let mut rx = connect(&mut g, 1);
         hello(&mut g, 1);
         g.handle(GameEvent::Message {
             id: 1,
@@ -1856,6 +1884,7 @@ mod m3_tests {
         // Let the level start and the player land on the deck before any ability is held:
         // a BTN_ABILITY rising edge consumed while airborne never opens the ward, and this
         // sends frames at the real-time rate (STEPS_PER_TICK per tick) so physics ticks normally.
+        // Drain every tick: an undrained outbox fills (OUTBOX_CAPACITY) and the server drops us.
         let mut seq = 0u32;
         for _ in 0..60 {
             let frames: Vec<InputFrame> = (0..STEPS_PER_TICK)
@@ -1872,6 +1901,7 @@ mod m3_tests {
                 msg: ClientMsg::Inputs { frames },
             });
             g.tick();
+            let _ = drain(&mut rx);
         }
         // A fresh rising edge of BTN_ABILITY on a grounded, still player casts Aegis Bloom.
         let mut warded = false;
@@ -1890,6 +1920,7 @@ mod m3_tests {
                 msg: ClientMsg::Inputs { frames },
             });
             g.tick();
+            let _ = drain(&mut rx);
             if g.conns[&1].player.as_ref().unwrap().state.ward_frames > 0 {
                 warded = true;
                 break;
@@ -1904,6 +1935,7 @@ mod m3_tests {
         let mut rx = connect(&mut g, 1);
         hello(&mut g, 1);
         vote(&mut g, 1);
+        let _ = drain(&mut rx); // flush the level-start burst so the outbox stays slack
         for e in &mut g.run.enemies {
             e.active_in = 1_000; // keep the drafted enemies dormant
         }
@@ -1920,7 +1952,7 @@ mod m3_tests {
             },
         ));
         let mut saw_stagger = false;
-        for i in 0..60 {
+        for _ in 0..120 {
             // Pin the player next to the warden: a no-input player freefalls out of knockback range.
             {
                 let p = player(&mut g, 1);
@@ -1929,9 +1961,7 @@ mod m3_tests {
                 p.starved_ticks = 0;
             }
             g.tick();
-            if i % 16 == 15 {
-                let _ = drain(&mut rx); // keep the outbox empty
-            }
+            let _ = drain(&mut rx); // drain every tick so the outbox never fills
             let p = g.conns[&1].player.as_ref().unwrap();
             if p.state.stagger_frames > 0 {
                 assert_eq!(p.state.stagger_frames % 3, 0, "stagger is stored in 60 Hz frames");
@@ -1988,6 +2018,8 @@ mod m3_tests {
             }
         }
         assert_eq!(g.run.level_phase, protocol::LEVEL_COLLAPSING, "the siren lasts 3.0 s");
+        // Drain first so the next snapshot read is the final tick's, not a stale buffered one.
+        let _ = drain(&mut rx);
         g.tick();
         let snap = drain(&mut rx).into_iter().find_map(|m| match m {
             ServerMsg::Snapshot {

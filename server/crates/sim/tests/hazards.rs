@@ -729,7 +729,7 @@ fn turret_charges_fires_and_kills_with_a_projectile() {
     let world = World::from_level(&level);
     let mut hz = Hazards::new();
     warm(&mut hz, &level, &world);
-    let mut enemies = vec![enemy(1, BEHAVIOR_TURRET, 0.0, 0.0, 0.0)];
+    let mut enemies = vec![enemy(1, BEHAVIOR_TURRET, 0.0, 1.0, 0.0)];
     let players = vec![sense(1, 6.0, 0.0, 0.0)]; // velocity 0: intercept == player centre
     let mut tele_at = None;
     let mut attack_at = None;
@@ -770,7 +770,7 @@ fn turret_needs_line_of_sight_to_the_target() {
     let world = World::from_level(&level);
     let mut hz = Hazards::new();
     warm(&mut hz, &level, &world);
-    let mut enemies = vec![enemy(1, BEHAVIOR_TURRET, 0.0, 0.0, 0.0)];
+    let mut enemies = vec![enemy(1, BEHAVIOR_TURRET, 0.0, 1.0, 0.0)];
     let players = vec![sense(1, 6.0, 0.0, 0.0)];
     for _ in 0..40 {
         let fx = tick(&mut hz, &mut enemies, &level, &world, &players, &[]);
@@ -793,7 +793,7 @@ fn turret_bolt_is_blocked_by_the_ward() {
     let world = World::from_level(&level);
     let mut hz = Hazards::new();
     warm(&mut hz, &level, &world);
-    let mut enemies = vec![enemy(1, BEHAVIOR_TURRET, 0.0, 0.0, 0.0)];
+    let mut enemies = vec![enemy(1, BEHAVIOR_TURRET, 0.0, 1.0, 0.0)];
     let players = vec![sense_vel(1, v3(6.0, 0.0, 0.0), v3(0.0, 0.0, 0.0), true)];
     let mut kill_count = 0usize;
     for _ in 0..200 {
@@ -1120,4 +1120,26 @@ fn determinism_same_inputs_same_effects() {
         out
     }
     assert_eq!(run(), run(), "same inputs must produce same effects");
+}
+
+/// Regression (found in M3 integration): hub enemy slots lie ON the floor, and a turret whose centre sat on the floor
+/// surface never had line of sight (the sight line grazed the floor's top face). The server now spawns enemies with
+/// their centre at least at chest height; a turret standing on a floor at that height must hit a player in the open.
+#[test]
+fn turret_standing_on_a_floor_fires_at_a_player_in_the_open() {
+    let floor = platform(0, protocol::PLATFORM_NORMAL, [-30.0, -1.0, -30.0], [30.0, 0.0, 30.0]);
+    let level = test_level(vec![floor], 7);
+    let world = World::from_level(&level);
+    let mut enemies = vec![enemy(1, BEHAVIOR_TURRET, 0.0, 1.0, 0.0)];
+    let mut hazards = Hazards::new();
+    let player = sense(9, 8.0, 0.0, 0.0);
+    let mut killed = false;
+    for _ in 0..400 {
+        let fx = hazards.step(&mut enemies, &world, &level, std::slice::from_ref(&player), &[], 1.0);
+        if fx.iter().any(|e| matches!(e, HazardEffect::Kill { player: 9, cause } if *cause == DEATH_PROJECTILE)) {
+            killed = true;
+            break;
+        }
+    }
+    assert!(killed, "a turret standing on a floor must be able to shoot a standing player 8 u away");
 }

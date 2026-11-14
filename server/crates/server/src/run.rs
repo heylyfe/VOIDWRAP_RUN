@@ -644,6 +644,12 @@ impl Run {
                 && let Some(top) = platform_top_below(&self.level.platforms, pos.x, pos.z, pos.y)
             {
                 pos.y = top + 0.5;
+            } else if let Some(top) = platform_top_below(&self.level.platforms, pos.x, pos.z, pos.y + 0.01) {
+                // Everything else starts with its body clear of the floor and its centre at least at a
+                // player's chest height: hub enemy slots lie ON the floor (y = top), and a turret whose
+                // centre sits on the floor surface had its line of sight and its flat bolts start inside
+                // the floor, so it never fired.
+                pos.y = pos.y.max(top + params.size.max(0.9) + 0.1);
             }
             let enemy_id = u32::try_from(index).unwrap_or(u32::MAX - 1) + 1;
             // kind = index into content.json enemies, so the client draws the right model.

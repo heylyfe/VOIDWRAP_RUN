@@ -193,3 +193,10 @@ T-053 got a third round instead of an OVERSEER takeover, to save Opus credits (u
 - T-059 (DEEPSEEK) ACCEPTED: 15 milestone/collapse notice texts (facts match design section 5), content otherwise
   unchanged, 183 vitest. T-060 (GLM) ACCEPTED: alpha-3 guide/README/release notes, README protected sections
   byte-identical, check-names ok. T-061 (INKLING) applied: tools/capture-m3.mjs, exercised at the M3 play-test.
+- T-056 r3 (INKLING, re-sent with sources after the dispatcher nested-include fix) ACCEPTED: 72/72 server tests.
+  Its turret test was rebuilt around a floating turret, which hid a REAL bug the lead then fixed: hub enemy slots lie
+  ON the floor (y = top), so a Bolt Sentry's sight line and flat bolts started inside the floor and it never fired.
+  `Run::start_level` now lifts every non-mimic enemy to centre >= top + max(size, 0.9) + 0.1. Regression test
+  `turret_standing_on_a_floor_fires_at_a_player_in_the_open` (fails at floor height, passes now).
+- Also lead-found real bug: hub spawn point 1 u from the hub edge + SPAWN_RING (up to 1.6 u) put players over the
+  void; spawn now inset 3.5 u.
