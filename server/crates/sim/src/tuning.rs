@@ -56,11 +56,11 @@ pub const GLIDE_FALL_SPEED: f32 = 3.0;
 /// CLASS_GLIDER: multiplier applied to the horizontal air-speed limit while gliding.
 pub const GLIDE_AIR_SPEED_MUL: f32 = 1.15;
 
-/// CLASS_BLINKER: horizontal teleport distance (units).
+/// CLASS_BULWARK: horizontal teleport distance (units).
 pub const BLINK_DISTANCE: f32 = 6.0;
-/// CLASS_BLINKER: sweep step while searching for a free position (units of travel per sample).
+/// CLASS_BULWARK: sweep step while searching for a free position (units of travel per sample).
 pub const BLINK_SWEEP_STEP: f32 = 0.25;
-/// CLASS_BLINKER: frames the visual flash lasts after a blink.
+/// CLASS_BULWARK: frames the visual flash lasts after a blink.
 pub const BLINK_FLASH_FRAMES: u8 = 6;
 
 /// CLASS_GRAPPLER: maximum distance from the feet to a grapple target (units).

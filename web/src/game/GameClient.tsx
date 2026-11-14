@@ -4,7 +4,7 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Group } from "three";
 import {
-  CLASS_BLINKER,
+  CLASS_BULWARK,
   CLASS_GLIDER,
   CLASS_GRAPPLER,
   DEATH_ENEMY,
@@ -283,7 +283,7 @@ function causeOf(cause: number): DeathCause {
 /** The ability hint for the bottom-of-screen controls line, by class. */
 function abilityHint(cls: number): string {
   if (cls === CLASS_GRAPPLER) return "Shift grapple";
-  if (cls === CLASS_BLINKER) return "Shift blink";
+  if (cls === CLASS_BULWARK) return "Shift blink";
   if (cls === CLASS_GLIDER) return "Space twice double jump · hold Shift glide";
   return "Shift dash";
 }

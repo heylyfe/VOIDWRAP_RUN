@@ -583,6 +583,10 @@ impl Game {
                 projectiles: projectiles.clone(),
                 tiles: tiles.clone(),
                 altars_used: altars_used.clone(),
+                // M3 (T-056): two-phase levels.
+                level_phase: protocol::LEVEL_COLLECT,
+                golden_taken: Vec::new(),
+                collapse_ms: 0,
             };
             self.send(id, &msg);
         }
@@ -1237,7 +1241,7 @@ mod tests {
         let mut rx = connect(&mut g, 1);
         hello(&mut g, 1);
         drain(&mut rx);
-        choose_class(&mut g, 1, protocol::CLASS_BLINKER);
+        choose_class(&mut g, 1, protocol::CLASS_BULWARK);
         assert!(matches!(drain(&mut rx)[..], [ServerMsg::Error { code: 409, .. }]));
         assert_eq!(player(&mut g, 1).class, CLASS_STRIKER);
     }

@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 6;
+pub const PROTOCOL_VERSION: u16 = 7;
 pub const TICK_HZ: u32 = 20;
 pub const PHYSICS_HZ: u32 = 60;
 pub const MAX_INPUTS_PER_MSG: u32 = 32;
@@ -32,7 +32,6 @@ pub const PLAYER_WAITING: u8 = 3;
 pub const DEATH_PROJECTILE: u8 = 2;
 pub const CLASS_STRIKER: u8 = 0;
 pub const CLASS_GRAPPLER: u8 = 1;
-pub const CLASS_BLINKER: u8 = 2;
 pub const CLASS_GLIDER: u8 = 3;
 pub const EVENT_NONE: u8 = 0;
 pub const EVENT_HIGH_RISE: u8 = 1;
@@ -49,6 +48,16 @@ pub const NOTICE_ALTAR: u8 = 0;
 pub const NOTICE_BOUGHT: u8 = 1;
 pub const NOTICE_EVENT: u8 = 2;
 pub const MAX_ITEM_LEN: u8 = 32;
+pub const CLASS_BULWARK: u8 = 2;
+pub const PLATFORM_JUMP_PAD: u8 = 2;
+pub const TILE_FRETTED: u8 = 3;
+pub const LEVEL_COLLECT: u8 = 0;
+pub const LEVEL_COLLAPSE_PENDING: u8 = 1;
+pub const LEVEL_COLLAPSING: u8 = 2;
+pub const ENEMY_TELEGRAPH: u8 = 3;
+pub const ENEMY_ATTACK: u8 = 4;
+pub const ENEMY_RECOVER: u8 = 5;
+pub const ENEMY_FLAG_HEAVY: u8 = 1;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Vec3 {
@@ -72,7 +81,7 @@ pub struct InputFrame {
     pub buttons: u8,
 }
 
-/// Complete kinematic character state. Must contain everything the step function reads so client reconciliation is exact. class: CLASS_* - which ability BTN_ABILITY triggers (striker dash, grappler grapple, blinker blink, glider glide).
+/// Complete kinematic character state. Must contain everything the step function reads so client reconciliation is exact. class: CLASS_* - which ability BTN_ABILITY triggers (striker dash, grappler grapple, blinker blink, glider glide). ward_frames: Bulwark ward countdown (rooted, knockback-immune). stagger_frames: after a shove, no jump/ability/dash input is honoured.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ControllerState {
     pub pos: Vec3,
@@ -86,6 +95,8 @@ pub struct ControllerState {
     pub ability_active_frames: u8,
     pub ability_dir: Vec3,
     pub class: u8,
+    pub ward_frames: u16,
+    pub stagger_frames: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -132,7 +143,7 @@ pub struct PlayerView {
     pub class: u8,
 }
 
-/// kind indexes design/content.json enemies; radius is the hit sphere radius (the client draws the body at this size). state: ENEMY_DORMANT / ENEMY_HUNTING / ENEMY_DISGUISED (a mimic still posing as a gift).
+/// kind indexes design/content.json enemies; radius = body radius (drawn size); state: ENEMY_DORMANT/HUNTING/DISGUISED/TELEGRAPH/ATTACK/RECOVER; target = telegraph anchor (line end, circle centre, lunge point) while telegraphing/attacking, else zero; prog 0-255 = telegraph progress; flags: ENEMY_FLAG_HEAVY while a heavy wind-up runs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EnemyView {
     pub id: u32,
@@ -140,6 +151,9 @@ pub struct EnemyView {
     pub pos: Vec3,
     pub radius: f32,
     pub state: u8,
+    pub target: Vec3,
+    pub prog: u8,
+    pub flags: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -148,7 +162,7 @@ pub struct ProjectileView {
     pub pos: Vec3,
 }
 
-/// A platform not in its normal state: TILE_WARN (about to crumble) or TILE_GONE (not solid). Platforms absent from the list are solid.
+/// A platform not in its normal state: TILE_WARN (about to fall), TILE_GONE (not solid), TILE_FRETTED (solid; slows and blocks abilities). Absent = normal.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TileState {
     pub id: u16,
@@ -219,7 +233,7 @@ pub enum ClientMsg {
 pub enum ServerMsg {
     Welcome { protocol_version: u16, player_id: u32, tick: u32 },
     Level { data: LevelData },
-    Snapshot { tick: u32, level: u32, last_input_seq: u32, you: ControllerState, players: Vec<PlayerView>, enemies: Vec<EnemyView>, gifts_taken: Vec<u16>, projectiles: Vec<ProjectileView>, tiles: Vec<TileState>, altars_used: Vec<u16> },
+    Snapshot { tick: u32, level: u32, last_input_seq: u32, you: ControllerState, players: Vec<PlayerView>, enemies: Vec<EnemyView>, gifts_taken: Vec<u16>, projectiles: Vec<ProjectileView>, tiles: Vec<TileState>, altars_used: Vec<u16>, level_phase: u8, golden_taken: Vec<u16>, collapse_ms: u32 },
     Pong { t: u32 },
     Error { code: u16, message: String },
     RunOver { summary: RunSummary },

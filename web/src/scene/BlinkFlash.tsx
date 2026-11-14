@@ -5,7 +5,7 @@ import type { JSX } from "react";
 import { useFrame } from "@react-three/fiber";
 import { AdditiveBlending } from "three";
 import type { Group, MeshBasicMaterial } from "three";
-import { CLASS_BLINKER } from "@/protocol/generated";
+import { CLASS_BULWARK } from "@/protocol/generated";
 import type { GameSession } from "@/game/session";
 import { classColor } from "./classColors";
 
@@ -33,14 +33,14 @@ export function BlinkFlash({ session }: { session: GameSession }): JSX.Element {
   const flashMats = useRef<(MeshBasicMaterial | null)[]>(
     Array.from({ length: MAX_FLASHES }, () => null),
   );
-  const color = classColor(CLASS_BLINKER);
+  const color = classColor(CLASS_BULWARK);
 
   useFrame((state) => {
     const t = state.clock.elapsedTime;
     const c = session.playerController();
     if (c) {
       const prev = prevFrames.current;
-      if (c.class === CLASS_BLINKER && c.abilityActiveFrames > prev && lastPos.current.ok) {
+      if (c.class === CLASS_BULWARK && c.abilityActiveFrames > prev && lastPos.current.ok) {
         let idx = -1;
         for (let i = 0; i < MAX_FLASHES; i += 1) {
           const sl = slots.current[i];

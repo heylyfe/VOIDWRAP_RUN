@@ -17,6 +17,8 @@ function state(x: number): ControllerState {
     abilityActiveFrames: 0,
     abilityDir: zero,
     class: 0,
+    wardFrames: 0,
+    staggerFrames: 0,
   };
 }
 

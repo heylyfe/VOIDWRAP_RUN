@@ -564,6 +564,10 @@ impl Run {
                 radius: e.params.size,
                 // DORMANT / HUNTING / DISGUISED (mimic still posing as a gift).
                 state: enemy_state(e),
+                // M3 (T-053): telegraph anchor / progress / heavy flag.
+                target: Vec3::ZERO,
+                prog: 0,
+                flags: 0,
             })
             .collect()
     }

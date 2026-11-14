@@ -1,0 +1,525 @@
+# M3 Design: enemy roster rework, Bulwark class, modular collapsing maps
+Ticket T-050 · 2026-11-14 · DESIGN (no code) · Supersedes nothing until merged
+
+Movement envelope (shared facts, do not re-derive): run 9 u/s, jump v=12 u/s, g=32 u/s², max jump height 2.25 u,
+coyote 7 frames, buffer 6 frames, max fall 40 u/s, player box 0.8×1.8×0.8. `Platform{kind}` kinds: NORMAL, CRUMBLE,
+and (new) JUMP_PAD. Gifts/altars are points on platform tops. Determinism: all rules below are functions of
+(level, rng_seed, platform list, player feet/velocity, timers). The server never reads camera direction.
+
+## 0. OVERSEER amendments (binding; they override the sections below where they conflict)
+A1. **Maps are MASSIVE networks, not short roads.** The human's reference shots show huge interconnected walkway
+    networks forming loops and grids with many junctions, several stacked layers on pillars joined by stairs and
+    ramps, towers above everything, and lots of small gifts lining the paths. Therefore (4.3): platform-top budget
+    `target_area = min(6000, 1400 + 260*level)` u^2 and `max_chunks = min(60, 14 + 3*level)`; junction cap is
+    removed (use `max_junctions = 4 + level`); after the budget is met, try to CLOSE LOOPS: for every pair of open
+    sockets that face each other within 12 u horizontally and |dy| <= 0.5, connect them with a generated straight
+    bridge (3-4 u wide) when the bridge does not overlap anything; only then seal the rest with dead ends. Chunks
+    may be rotated in 90 degree steps (sockets rotate with them) to multiply variety.
+A2. **Walkable stairs.** The controller gets automatic STEP-UP: when moving horizontally into a platform whose top is
+    at most STEP_HEIGHT = 0.55 u above the feet (and the player box fits above it), the player is lifted onto it
+    without jumping. Stairs in chunks therefore use risers of 0.5 u (walkable) instead of 1.0 u hops; long stairs
+    become smooth climbs ("ramps" are stairs of 0.25 u risers).
+A3. **Gift count follows the map:** `gifts = min(400, 46 + 10*(level-1) + 6*(players-1))`, and never more than one
+    gift per 9 u^2 of eligible platform top. Gifts are small (0.34 u) and line the paths (place along walkways
+    every 2.0-2.6 u where slots allow).
+A4. **Level 1 stays plain** (no event, no enemies - the human's rule). Random events (High Rise / Slick Ice /
+    Crumbling) stay as today from level 2; the escalation table (section 5) applies its own milestones from level
+    4 on; ignore its rows for levels 1-3.
+A5. **The class is named Bulwark (id `bulwark`)**, not "Bulwark" (an existing name elsewhere). Rules unchanged.
+A6. **Beacon:** stays walk-in (no E press); it sits on the spawn hub and opens when phase 2 starts.
+A7. **Performance:** maps of several hundred platforms: the sim World gets a uniform spatial grid (cell 8 u) for
+    collision queries; the client draws platforms with instanced meshes grouped by kind; gifts are instanced.
+A8. **Deferred to a later milestone:** zip-lines/rails, decorations with collision, difficulty tiers, variants.
+
+---
+
+## 1. Gifts and the two phases
+
+### 1.1 Gift count
+`gifts(level, players) = min(120, 46 + 6*(level-1) + 4*(players-1))`
+- Level 1 solo 46, 2-player 50, 4-player 58 (≈ the requested ~50 first round).
+- Level 8 solo 88; level 13+ hits the 120 cap (performance: ≤120 gift meshes + ≤120 golden gifts).
+- Count is computed once at level build; if a chunk offers fewer gift slots than the target, top up on random
+  eligible platform tops (rules below); if more, trim evenly at random (seeded).
+
+### 1.2 Gift size and pickup
+- Gift visual: 0.34 u glowing star-box; bobs ±0.08 u; pickup radius 1.1 u (sphere around player feet+0.9 u).
+- Golden gift: identical size/radius, golden material, value **1 gold each**, credited to the shared team pool.
+- (The old "≈5 golden × 5 gold = 25 g/level" assumption becomes ≈46 g/level solo L1, +6 g/level, 1.84× income.)
+
+### 1.3 Placement rules
+1. All gifts on platform tops, y = top + 0.3 u.
+2. Minimum mutual spacing 2.0 u (measured horizontally).
+3. ≥ 20% of gifts are "elevated" (platform top ≥ 2 u above its chunk entry-socket height) or on dead-end/high-route
+   slots. Enforced at build time; the validator counts them.
+4. Zero gifts on CRUMBLE platforms and zero on JUMP_PAD tops (launch race with pickup).
+5. Zero gifts within 2.5 u of the beacon dais center.
+6. Distribution across chunks ∝ platform area; stragglers are re-spread, never stacked.
+
+### 1.4 Phase 2 trigger and COLLAPSE
+- **Trigger:** the last uncollected gift is collected, by any player. Server sets `phase = COLLAPSE_PENDING`,
+  plays a 3.0 s siren + banner ("The void hungers — take the gold and run"), then beacon ignites and
+  `phase = COLLAPSING`.
+- **Spawn hub is exempt** from collapse (beacon lives there). Everything else falls, farthest-first.
+- **Order:** sort all non-hub platforms by distance from spawn-hub origin, descending; ties broken by `platform.id`
+  ascending (deterministic). Split into **6 batches**; batch *i* falls at `t = i * (D/6)` after phase 2 starts.
+  Inner ring (neighbors of the hub) is guaranteed to be in the last batch.
+- **Duration:** `D = max(30, 52 - 2*(level-1))` seconds. L1 52 s, L6 42 s, L11 32 s, L12+ 30 s. Per level tuning
+  knob; designed so a full sweep of golden gifts is possible only on low levels.
+- **Per-tile warning:** 3.0 s before a tile falls: it shakes, dust falls off its underside, a deep groan plays,
+  outline flashes amber→red. **2.0 s from level 9+** (see §5). After warning, the tile tilts and sinks over 1.2 s.
+- **Golden gifts:** phase 2 spawns one golden gift at **every collected-gift position** (they appear when the
+  siren starts, hovering at the same spots). A golden gift is collectable during its tile's warning; when the tile
+  **begins to fall** (warning ends), any uncollected golden gifts on it vanish forever. No refunds at level end.
+- **Pressure modifier in phase 2:** all enemies gain +10% move speed (tuning knob, applied as a multiplier).
+- **Beacon:** moved to the spawn hub dais. Phase 1: dormant, grey brazier, interact disabled. Phase 2: ignites with
+  a vertical light pillar; any player pressing E within 2.0 u of the dais completes the level **for the whole
+  team** and becomes a spectator. If every living player dies before anyone enters, the level is failed.
+
+### 1.5 New shop prices (all 7 items)
+Golden value 1 g. Prices doubled from alpha 2 (income ≈ 1.84×), stocks/kinds unchanged:
+
+| id | name | was | now |
+|---|---|---|---|
+| kept_flame | Kept Flame (+1 life) | 30 | 60 |
+| new_hand | New Hand (reroll) | 15 | 30 |
+| worn_treads | Worn Treads (+8% speed) | 12 | 24 |
+| spring_heel | Spring Heel (+6% jump) | 10 | 20 |
+| short_fuse | Short Fuse (-10% dash cd) | 14 | 28 |
+| wide_palm | Wide Palm (+15% reach) | 8 | 16 |
+| thin_veil | Thin Veil (-12% fog) | 9 | 18 |
+
+---
+
+## 2. Enemy roster (all 9 reworked; ids kept)
+
+**Global rules**
+- Deterministic server sim over (positions, platforms, player feet/velocity, timers). Server never uses camera.
+- One demanded skill per enemy; skills do not overlap. Targeting is per-enemy: nearest / random / behaviour-based.
+- Every lethal action has a telegraph of **0.6–2.5 s** (listed per enemy). Enemy cannot damage anyone in the first
+  4.0 s of a level; spawn slots are the 8 fixed ring positions around the hub (unchanged).
+- **Heavy mutex:** at most one "heavy" wind-up may run server-wide at a time. Heavy attacks are: gale_wight VOLLEY
+  and moteling INHALE. If a heavy is requested while another heavy is winding up, the second attacker's telegraph
+  timer freezes at its first frame for up to 2.0 s; if still blocked, it cancels and enters its cooldown (no free
+  pass). All clients observe identical heavy state (it's in the tick payload).
+- **Non-lethal enemies** deal no damage; they cause *Displacement* (knockback) or *Affliction* (slow + ability lockout).
+- Per-tick enemy payload (minimal): `eid u16 | kind u8 | state u8 | flags u8 | x,y,z f32×3 | target x,y,z f32×3 |
+  prog u8` = 30 bytes. `target` is meaningful only while telegraphing (else 0); `prog` is 0–255 telegraph progress
+  (255 = committed). `flags`: bit0 awake, bit1 heavy_windup, bit2 afflicted/fret source active. No animations, no
+  paths, no HP in the payload — clients animate from `state`/`prog` locally.
+- Enemy kind ids are renumbered in T-101 (old "chaser" semantics are gone).
+
+### pallbearer — The Pallbearer · threat 3
+Fantasy: a hearse that refuses to pass you. **Skill demanded: route planning — punishes backtracking.**
+Targeting: behaviour-based (nearest player's breadcrumb trail, sampled every 0.25 s, kept 4 s).
+States: `DORMANT` (wake at 4.5 s; lantern glows) → `HUNT` (drifts toward target's breadcrumb from 3.0 s ago at
+5.2 u/s, airborne, ignores platforms; trailing dust) → `KNEEL` (within 2.0 u of target's *current* position: stops,
+rears, 1.2 s rising toll) → `LUNGE` (11 u/s toward locked point for 0.45 s; contact lethal, radius 1.1 u) →
+`RECOVER` (2.0 s, 2 u/s drift, harmless) → `HUNT`. At level 14+: HUNT speed 6.0 u/s.
+Movement: airborne, passes through platforms, never descends below y=0.
+Hurt: lethal contact in LUNGE only; HUNT contact shoves 4 u/s (non-lethal).
+Telegraph (KNEEL, 1.2 s): lantern flare + ring drawn under target + a straight line pallbearer→target.
+Counterplay: keep moving forward; never farm backwards; cross perpendicular to its drift; at KNEEL, dash sideways.
+Solo: relentless — out-pace it with route discipline. Co-op: single-target; one player can be the unwilling guide
+while the team loots; it never switches mid-KNEEL.
+VISUAL: black-lacquered coffin-barge (stretched box) with brass lantern prow and hanging shroud, ember-crack seams;
+**deep crimson accent #ff3355**; idle = low bob/sway; attack = rear-up + lantern whiteout. Readable in fog via lantern
+glow. Primitives: box hull, cylinder lantern, plane shroud, point light.
+
+### snapshrike — Snapshrike · threat 4
+Fantasy: a thrown knife that learned hunger. **Skill demanded: perpendicular reflexes vs line dashes.**
+Targeting: nearest (horizontal).
+States: `STALK` (orbits at 4–7 u, 6.8 u/s) → `LOCK` (0.75 s; line drawn snapshrike→predicted intercept; tracks
+target for first 0.4 s, freezes for last 0.35 s) → `DASH` (13.5 u/s, 11 u max, 0.8 s; contact lethal radius 0.7 u;
+blocked by platform AABBs — dash ends early, `STUNNED` 0.6 s) → `RECOVER` (1.3 s, drift 1.5 u/s) → `STALK`.
+Dash-to-dash cooldown 2.2 s.
+Movement: airborne hover ≤0.5 u above surfaces; dash travels straight, no turning.
+Hurt: lethal contact during DASH only; STALK contact = shove 5 u/s.
+Telegraph (LOCK, 0.75 s): full-width red wedge along the dash line, snapping brighter in the frozen 0.35 s.
+Counterplay: sidestep when the line freezes; hide behind pillars to bait the early stop; jump over at close range.
+Solo: must be respected every dash. Co-op: nearest-target, so aggro is a hot potato — call your dash; no friendly
+fire (it does not hit non-targets).
+VISUAL: layered chitin shard-body (two angled cones), scythe forelimbs, comet tail of sparks; **scarlet accent
+#ff4436**; idle = shiver + tail whip; attack = compress → spring. Primitives: cone×2, blade planes, point light.
+
+### moteling — Moteling · threat 2
+Fantasy: a million motes that hush the world to hear you stop. **Skill demanded: stillness — pace control.**
+Targeting: behaviour-based (target = player with highest average horizontal speed over last 1.5 s, within 20 u;
+retarget only when it finishes an INHALE cycle or target dies).
+States: `WANDER` (3.6 u/s drift, harmless) → `ORBIT` (circles marked player at 5 u radius, 5.5 u/s; every 6.0 s
+begins INHALE) → `INHALE` (2.0 s; world-hush audio, collapsing indigo ring drawn around the marked player; ring
+tightens as prog→255; **HEAVY — mutex applies**) → at ring end: if marked player's horizontal speed > 1.0 u/s:
+`SHRIEK` (lethal 4 u radius centered on the marked player only; ring snap VFX) else harmless pass → `COOLDOWN`
+(4.0 s, slow drift) → `ORBIT`.
+Movement: weightless, ignores platforms, bobs.
+Hurt: lethal, single-target, only via SHRIEK. (Classified lethal; the stillness counter is always available.)
+Telegraph (INHALE, 2.0 s): collapsing ring + vignette on the marked client + falling-tone audio. ≥0.6 s ✓.
+Counterplay: freeze completely (velocity < 1.0 u/s) until the ring snaps; then resume. Dashing into it is safe.
+Solo: binary and fair. Co-op: only the marked player must stand still; the rest loot freely; it re-marks each cycle.
+VISUAL: orbiting dust sphere around a hollow dark core; **pale rose #ffc3d9 with magenta rim #ff5fa8**; idle = lazy
+orbit; attack = radial collapse then ring snap. Primitives: ~60 instanced small octahedrons + core sphere.
+
+### rift_warden — The Rift Warden · threat 2 · NON-LETHAL
+Fantasy: a doorway from a dead world, still holding its post. **Skill demanded: space control — play around
+displacement.**
+Targeting: nearest.
+States: `HAUNT` (hovers 1.6 u/s toward nearest player, phases through platforms; continuous 4 u/s shove on contact)
+→ within 4.0 u: `IGNITE` (1.1 s; storm-runes blaze, low groan) → `SHOVE` (radial push from its center: all players
+and enemies within 3.5 u are knocked directly away at 8 u/s + staggered 0.9 s — no dash/jump/ability; vertical
+component +2 u/s) → `SETTLE` (3.5 s cooldown, slow creep) → `HAUNT`.
+Movement: phases through everything, 1.6 u/s.
+Hurt: none. Displacement only. (Shoving players off a ledge is the real threat — emergent, readable by design.)
+Counterplay: fight it on wide platforms; when runes ignite, step perpendicular-behind cover; never on narrow bridges.
+Solo: a bully, not a killer. Co-op: it shoves enemies too — peel snapshrikes off a teammate; leash it with one player.
+VISUAL: two free-standing doorframe slabs + floating lintel, carved storm-runes, rust-iron with dried-blood patina;
+**rust-maroon accent #b0313f, magma cracks #ff5a3c**; idle = slabs drift, runes pulse slow; attack = runes white-out.
+Primitives: box slabs×2, box lintel, emissive rune planes, point light.
+
+### gale_wight — Gale Wight · threat 4
+Fantasy: the wind between platforms, loaded with a grudge. **Skill demanded: indirect-fire discipline — reposition
+under markers.**
+Targeting: random living player per shell.
+States: `CRUISE` (wander at map-top +6 u altitude, 7 u/s, ignores platforms; ≥4.0 s) → `VOLLEY`: for each of
+`shells = min(3, living_players)` (2 if solo): pick random living player → `MARK` (0.9 s; circle tracks the target
+with 0.35 s position lag) → `LOCK` (0.6 s; circle fixed) → `FALL` (shell spawns 12 u above, lands after 1.1 s;
+the circle persists on the ground) → impact: blast radius **2.1 u lethal**; ring 2.1–4.2 u: knockback 7 u/s away
+from impact. Downtime 3.5 s, back to `CRUISE`. Shells collide with platform AABBs (destroyed on impact with a top
+face): **standing under an overhang cancels a shell** (stacked maps are shelter).
+**HEAVY — mutex applies** to VOLLEY as a whole.
+Telegraph per shell: circle visible 1.5 s before impact (MARK+LOCK), then falling streak 1.1 s with whistle.
+Counterplay: keep moving; on LOCK, dash/jump ≥2.2 u; take shelter under a bridge; never stack in the open.
+Solo: 2 shells but 3.5 s spacing — patience beats speed. Co-op: targets spread; call out your circle; one player
+baiting draws shells off the gold-runner.
+VISUAL: tattered kite/manta of storm-grey cloth with ribbed throat sac and a cyclone-eye; **magenta-violet accent
+#d94fff, arc #b47aff**; idle = banking circles, wings folded; attack = sac inflates, shell crackles down.
+Primitives: custom cone/plane sail, torus throat, emissive eye sphere.
+
+### lantern_leech — Lantern Leech · threat 3
+Fantasy: its light is a promise it never intends to keep. **Skill demanded: bait discipline — lure management
+around pickups.**
+Targeting: behaviour-based (gift-pickup events).
+States: `PROWL` (3.2 u/s drift within 24 u of any player; harmless) → on any gift pickup within 30 u: `SIPHON`
+(lock the pickup point; accelerates to 9.5 u/s toward it over 1.6 s; 0.8 s before arrival it flares the destination
++ draws its path) → `GORGE` (sits 2.0 s on the point; rears back 0.6 s then its sting is lethal within 1.5 u —
+repeated sting attempts every 1.0 s while players remain) → `SLIDE` (leaves, 3.0 s minimum before next SIPHON).
+Only the newest pickup event re-targets it (no stacking, no queue).
+Movement: airborne glider, ignores platforms.
+Hurt: lethal sting, radius 1.5 u, only during GORGE.
+Telegraph: SIPHON flare 0.8 s + rear-back 0.6 s — both client-drawn (path line + flare + rear-back animation).
+Counterplay: listen for the wet chime; if you hear a pickup flare, step 2 u away and let it gorge on empty air;
+never autopilot through contested gifts.
+Solo: patience — bait, retreat, harvest after SLIDE. Co-op: one player baits, the rest harvest; it is the explicit
+"greed check" of the roster.
+VISUAL: translucent sac hanging from a paper-lantern disc, dangling threads, swaying; **ember-pink accent #ff7ab8,
+hot core #ffb3d1**; idle = slow lantern swing; attack = sac dilates, throat widens, sting. Readable as a floating lamp.
+Primitives: sphere sac (transparent), disc lantern (cylinder), line threads, point light.
+
+### turret — Bolt Sentry · threat 3
+Fantasy: it has been aiming at this spot since before you arrived. **Skill demanded: line-of-sight — bait the
+shot, break the lock.**
+Targeting: nearest player with clear line of sight (segment vs platform AABBs).
+Stationary (0 u/s), bolted to a platform.
+States: `SEEK` (rotates toward target) → LOS clear: `CHARGE` (0.95 s; thin aiming line drawn from muzzle to
+**predicted intercept** — target pos + vel × flight time — and audio whine; if LOS breaks during charge it fires at
+the last predicted point anyway) → `FIRE` (bolt 13 u/s, 0.35 u radius, lethal on player hit, destroyed on platform
+hit) → `VENT` (1.4 s smoke; cannot fire) → `SEEK`. Cycle ≈2.35 s.
+Movement: none.
+Hurt: lethal projectile, 0.35 u radius.
+Telegraph (CHARGE, 0.95 s): aim line + rising whine + lens flare growing with prog.
+Counterplay: break LOS during the 0.95 s or zigzag (prediction leads straight-line runners); use pillars; re-peek
+only in VENT; jump the bolt (it's flat at muzzle height +0.0).
+Solo: a positioning puzzle, never a chase. Co-op: two players jiggle alternately to keep it occupied — it only sees
+one of you.
+VISUAL: tripod brass mortar, single ocular lens, coiled springs, steam wisps; **ember-orange accent #ff8a3c, gold
+core #ffd07a**; idle = lens irises, steam puffs; attack = lens white-hot flare then bolt. Primitives: cylinder
+mortar, lens circle, tripod cones.
+
+### mimic — False Gift · threat 3
+Fantasy: it has been a gift for a long time, and it is patient. **Skill demanded: verification — look before you
+grab.**
+Targeting: proximity (nearest triggering player, radius 4.0 u).
+States: `CACHED` (sits as a gift prop; every 3.0 s it emits a 0.5 s magenta shimmer/outline, audible faint tear —
+the only tell) → player within 4.0 u: `HISS` (0.9 s; glitch anim, lid splits, audio tear) → `LUNGE` (8.5 u/s toward
+the triggering player for 0.6 s = 5.1 u range; contact lethal radius 0.7 u) → `SPENT` (2.5 s inert wobble, harmless)
+→ stays `SPENT`-like until a new player enters 4 u (then re-HISS). Never roams.
+Movement: none until LUNGE; LUNGE is ground-hugging hop.
+Hurt: lethal contact during LUNGE.
+Telegraph: CACHED shimmer (0.5 s, periodic) + HISS 0.9 s — glance-before-you-grab window.
+Counterplay: dash *through* suspicious gifts (dash outruns the lunge and safely reveals it); watch for the shimmer;
+in co-op, grab contested gifts while your partner watches for reveals.
+Solo: dash-poke every gift in drumbeat clusters. Co-op: split grab/watch roles.
+VISUAL: gift box in rotting satin with a breathing ribbon; lid splits into a jaw of glass teeth; **magenta accent
+#ff3df0, violet inner glow**; idle = stillness + shimmer; attack = lid peels, jaw lunges. Primitives: box, ribbon
+planes, jaw cones.
+
+### corrupter — Crumble Wisp · threat 2 · NON-LETHAL
+Fantasy: where it drifts, the floor forgets how to be a floor. **Skill demanded: terrain discipline — route under
+tile denial.**
+Targeting: behaviour-based (drifts to the platform nearest its current target player within 18 u).
+States: `DRIFT` (3.0 u/s toward marked platform; aura radius 2 u) → a platform inside its aura for >2.0 s becomes
+**FRETTED** (8 s): players standing on it are slowed 40% and cannot use abilities; visual black-green vein cracks
+crawling outward with a rasp audio (the 1.5 s spread is the tell) → `RE-FORM` (1.5 s, withdraws, drifts to next).
+It never damages. Fretted ≠ Crumble kind: the tile stays solid, it just debuffs.
+Movement: slow airborne drift, ignores platforms, 3.0 u/s.
+Hurt: none. Affliction only.
+Counterplay: don't anchor on fretted tiles; cross fast; loot elsewhere; it pairs evilly with the Crumbling event —
+expect it on crumble-heavy maps at higher levels.
+Solo: an annoyance that taxes greed — relocate and keep moving. Co-op: spread out; it can only fret one spot at a
+time; call out fretted tiles before your partner walks in.
+VISUAL: roiling black gauze knot with an ember-green heart and trailing threads; **sickly emerald accent #39ffb0,
+green-black core**; idle = thread lashes; attack = veins race across the floor outward. Primitives: icosahedron
+core, tube threads, emissive crack decal planes on marked floor.
+
+### 2.1 Attack mutex summary
+HEAVY = gale_wight VOLLEY, moteling INHALE. All other attacks are single-target or light and may overlap.
+Server enforces: one heavy wind-up at a time; delayed heavy waits ≤2.0 s then cancels to cooldown. Mutexes are
+per-level global, not per-player (prevents cross-team stunlock without removing pressure).
+
+### 2.2 Server → client per-tick enemy record
+`eid u16 | kind u8 | state u8 | flags u8 | x f32 | y f32 | z f32 | tx f32 | ty f32 | tz f32 | prog u8` = 30 B.
+No velocities (client extrapolates locally from `state`). `tx,ty,tz` = TELEGRAPH ANCHOR (dash line end, circle
+center, lunge target) — 0 when not telegraphing. `prog` 0–255 linear in the telegraph window. This is the only data
+the client needs to draw every telegraph in this section.
+
+---
+
+## 3. New class replacing Blinker — **BULWARK** (id `bulwark`)
+The Blinker is deleted (it was dash-with-steps). Bulwark's verb is **denial**, not movement.
+
+- Fantasy: "You do not dodge the storm. You become the doorway it breaks against."
+- Ability: **Aegis Bloom** — become rooted and unbreakable for 1.6 s; on cast, a pulse knocks everything around you
+  back.
+- Controls: `Shift / right mouse: Aegis Bloom`.
+- Rules (60 Hz frame math):
+  - Cast condition: `grounded == true` (no mid-air cast), cooldown ready.
+  - Cast → `WINDUP`: 8 frames (0.13 s), immobile, brief audio charge.
+  - On WINDUP end → `ACTIVE`: 96 frames (1.6 s). On ACTIVE frame 0: pulse, radius 3.0 u — every enemy and player
+    in radius is knocked directly away at 7 u/s + staggered 0.8 s (players: displacement only, no damage; enemies:
+    interrupts their current state → they enter their cooldown state). During ACTIVE: knockback immunity, gravity
+    zeroed (hover in place), speed forced 0, cannot jump/dash/use class abilities.
+  - ACTIVE end → cooldown: **16.0 s total from cast start** (i.e., 13.9 s after ACTIVE ends).
+  - `ability_dir` is unused by Bulwark (pulse is radial); cooldown counters reuse existing u16 frame counter field.
+    **One new field is proposed: `ward_frames: u16`** (ACTIVE countdown) in the shared controller.
+- Good at: shrugging off snapshrike chains, turrets, rift_warden shoving you into the void, mimic lunges, and
+  punishing enemies that closed in (pulse peel). Anchors co-op revives in the open.
+- One weakness (load-bearing): **rooted and perimeter-blind** — Bulwark cannot move, and **Aegis does not stop
+  gale_wight shells** (indirect fire ignores the ward; the blast is lethal inside it). Against artillery you must
+  reposition, not plant. Also cannot collect gifts while ACTIVE? — allowed to collect; immobility is the cost.
+- Why not another dash: dash/grapple/glide all move you through danger; Bulwark makes you a safe spot. It interacts
+  with the roster (beats nearest-target chasers and contact threats, loses to zone/artillery) instead of copying Striker.
+
+---
+
+## 4. Modular maps
+
+### 4.1 Chunk format (JSON, one file per chunk under `assets/chunks/`)
+```json
+{
+  "chunk": "stair_of_embers",
+  "version": 1,
+  "size": [12, 6, 5],
+  "footprint": { "w": 12, "d": 5 },
+  "sockets": [
+    { "id": "a", "pos": [0, 0, 2.5],  "facing": "S" },
+    { "id": "b", "pos": [12, 6, 2.5], "facing": "N" }
+  ],
+  "platforms": [
+    { "kind": "NORMAL", "min": [0, -0.5, 0], "max": [3, 0, 5] }
+  ],
+  "gift_slots": [ { "pos": [1.5, 0.3, 2.5], "elevated": false } ],
+  "enemy_slots": [],
+  "altar_slots": [],
+  "min_level": 1, "difficulty": 1, "tags": ["stairs", "climb6"]
+}
+```
+- `platforms`: AABBs relative to chunk origin. `kind`: `NORMAL` | `CRUMBLE` | `JUMP_PAD`. JUMP_PAD adds a constant
+  `launch_vel: 16.0 u/s` vertical launch (reaches +4.0 u apex) on touch; pads survive collapse.
+- `sockets`: `pos` = the walk-off plane point; `facing` ∈ {N,E,S,W}. Entry socket of one chunk connects to exit
+  socket of another only if facings are opposite, `|Δy| ≤ 0.5 u`, and the connection plane positions coincide.
+- Height changes *between* chunks happen inside chunks (stairs/pads). Cross-chunk hop ≤1 u rise is allowed as a
+  stitch (Δ=1.0 with gap ≤2.0 u, within envelope).
+- Stacking: two chunks may overlap in XZ only if **≥ 4.0 u vertical clearance** between overlapping platform AABBs
+  (enables two-level bridges and over-under routes). Otherwise placement is rejected.
+- Minimum walkable width **3.0 u** everywhere; **6.0 u** in hub/junction chunks. Enforced by validator (narrowest
+  platform cross-section along the path).
+- Gift slots follow §1.3 (none on CRUMBLE/JUMP_PAD, spacing, elevated quota).
+- Altar slots: 0–2 per chunk; never on spawn hub.
+- **Hop envelope table** (plain jump, 9 u/s run; design max = physics max − 0.75 u margin; `twin_feather`/Glider
+  add +2.25 u apex and widen every row by ~0 u):
+
+| Δy landing | physics max gap | **design max gap** |
+|---|---|---|
+| -4.0 u | 9.0 u | 8.0 u |
+| -3.0 u | 8.5 u | 7.5 u |
+| -2.0 u | 8.0 u | 7.0 u |
+| -1.0 u | 7.4 u | 6.5 u |
+|  0.0 u | 6.75 u | 6.0 u |
+| +0.5 u | 6.35 u | 5.5 u |
+| +1.0 u | 5.9 u | 5.0 u |
+| +1.5 u | 5.3 u | 4.5 u |
+| +2.0 u | 4.5 u | 4.0 u |
+| +2.25 u | 3.4 u | 3.0 u |
+Δ > +2.25 u: air jump / JUMP_PAD / chunk-internal stairs only.
+
+### 4.2 Catalog (25 chunks)
+Sizes are X×Z footprint; sizes in u. All gift counts approximate per §1.1 fill rules.
+
+1. **CH-01 Sundered Gate** — spawn hub. 16×14 u plaza, central beacon dais (spawn ring for the 8 enemy slots), four
+   sockets N/E/S/W at y=0. Flat. Beacon dais is exempt from collapse. difficulty 1, min 1, gifts 8, enemy ring: yes.
+2. **CH-02 Hollow Market** — crossroads hub. 12×12 u, sunken −1 u center bowl with 4 low planters (cover vs
+   gale_wight), sockets N/E/S/W y=0. difficulty 1, min 1, gifts 7.
+3. **CH-03 Grand Span Junction** — wide junction, 3 exits (N/E/W), 14×8 u, ring of 4 short pillars mid-span, y=0.
+   difficulty 2, min 3, gifts 6.
+4. **CH-04 Twin Terrace** — two-level hub, 12×10 u. Lower terrace y=0, upper y=4.0, staircases at both ends,
+   exits y=0 (2) and y=4.0 (2). difficulty 2, min 4, gifts 9. Pairs naturally under/over bridges via the 4 u rule.
+5. **CH-05 Stair of Embers** — straight stair climb, 12×5 u. 6 steps of 1.0 u rise (hop Δ=1.0, gap 0 — steps are
+   adjacent), entry y=0, exit y=+6.0. Gifts on 2 steps (elevated). difficulty 1, min 1, gifts 5.
+6. **CH-06 Descent of Sighs** — dip-and-return, 12×6 u. Bowl down to −5.0 via 5 steps, ramped return; entry and
+   exit both y=0. difficulty 1, min 2, gifts 5.
+7. **CH-07 The Coil** — spiral tower, 7 u Ø core. 8 platforms around the core climbing 9.0 u, entry at base y=0,
+   exit at top y=+9.0. Hop chain Δ≈1.1 u, gap ≤2.0 u — inside envelope. Needs clear ring ≥6 u around core.
+   difficulty 3, min 5, gifts 8 (5 elevated).
+8. **CH-08 Twin-Span Bridge** — stacked two-level bridge, 16×5 u. Low road y=0, high road y=+4.5 (≥4 u clearance
+   rule), two interior jump steps connect them (Δ=+2.25 u, gap 3.0 u). Exits at y=0 and y=4.5, both ends.
+   difficulty 2, min 3, gifts 7 (3 high route). The two roads are *different* connections — high road is optional.
+9. **CH-09 Jump-Pad Lift** — vertical lift, 5×5 u. Entry y=0; pad A launches to a staging plate at y=4.0; pad B
+   launches to exit y=8.0. Two `JUMP_PAD` platforms + 2 normal plates. difficulty 2, min 2, gifts 4 (2 staging).
+10. **CH-10 The High Silo** — heavy lift, 6×6 u. Entry y=0; three pad stages (4 u each) to exit y=12.0.
+    difficulty 3, min 6, gifts 6 (all elevated). High-route feeder.
+11. **CH-11 The Long Drop** — long drop, 14×8 u. Entry ledge y=0; 10.0 u fall; two catch platforms (Δ −4.0 u each,
+    design gap ≤6.5 u); exit y=−10.0. difficulty 2, min 2, gifts 6.
+12. **CH-12 Chute of Bells** — zig-zag drop, 10×8 u. Three catch platforms descending 6.0 u total; each hop
+    Δ −2.0 u, gap 5.0 u. difficulty 1, min 1, gifts 5.
+13. **CH-13 Fork of Tongues** — Y junction, 12×12 u. Entry S y=0; exits N and E. Wide central tongue platform.
+    difficulty 2, min 2, gifts 5.
+14. **CH-14 Split Howl** — 2-exit branch, 10×8 u. Entry W y=0; exits N and E, both y=0. difficulty 2, min 3,
+    gifts 5, one altar slot.
+15. **CH-15 Tri-Crown** — 3-exit height junction, 12×10 u. Exits stacked at y=0, y=+3.0, y=−3.0 (upper exit via
+    2 steps, lower via a 2-hop drop). difficulty 3, min 5, gifts 6.
+16. **CH-16 The Miser's Loft** — dead-end gift pocket, 6×6 u. Single entry, 8 gifts, 1 altar slot, no exit (socket
+    sealed with a gift pile). difficulty 1, min 1.
+17. **CH-17 Briar Cache** — dead-end pocket, 8×8 u. Single entry; floor ring of CRUMBLE (1.5 s crumble); 9 gifts,
+    2 altar slots. difficulty 3, min 5.
+18. **CH-18 Gilded Nook** — dead-end high pocket, 6×6 u, entry over a 2.0 u gap hop (Δ=0, gap 2.0 — trivially
+    inside envelope, but players miss it); 6 elevated gifts. difficulty 2, min 4.
+19. **CH-19 Ashen Crossing** — crumble bridge, 14×4 u over void. Two NORMAL ends, 4 CRUMBLE mids (crumbling on
+    touch is a per-platform timer, 1.5 s). Entry/exit y=0. difficulty 3, min 4, gifts 4.
+20. **CH-20 Rotting Switchback** — S-curve crumble bridge, 16×8 u. Two bends, 7 CRUMBLE platforms + 1 NORMAL
+    mid-refuge. difficulty 3, min 6, gifts 5.
+21. **CH-21 The High Road** — optional high route, 12×6 u. Main traverse y=0; parallel catwalk y=+4.0 (entry hop
+    Δ=+2.0, gap 4.0 u; air jump or a step-up ledge); catwalk drops to exit or back down. difficulty 2, min 3,
+    gifts 6 (4 catwalk).
+22. **CH-22 Widow's Catwalk** — thin high route, 14×3 u (exactly at the 3 u minimum width) at y=+6.0 above a lower
+    traverse; drop-down exit; grapple-free choke point. difficulty 3, min 7, gifts 7 (all catwalk).
+23. **CH-23 Gift Meadow** — flat rest bowl, 12×12 u, ringed by 0.5 u berms (cover), open floor. difficulty 1,
+    min 1, gifts 9.
+24. **CH-24 Cinder Switchyard** — bounce gallery, 14×8 u, 3 JUMP_PADs arranged for lateral chaining
+    (pad→pad gaps ≤4.5 u horizontal); entry y=0 exit y=0. difficulty 2, min 5, gifts 6.
+25. **CH-25 Hanging Gallery** — pillared hall, 18×8 u. 6 pillars (2.5×2.5 u) break line-of-sight/falling shells;
+    entry S y=0 exit N y=0; ceiling optional y=+5.0 catwalk (≥4 u clearance). difficulty 2, min 4, gifts 7.
+
+### 4.3 Assembly algorithm
+1. `seed = hash64(run_seed, level)`; RNG = xorshift64*. Everything re-rolls from seed.
+2. Place **CH-01** (levels 1–2) or a random hub from {CH-01, CH-02} at origin, facing S. Open socket list = exits.
+3. Budget: `target_area = min(650, 240 + 35*level) u²` of platform top area; `max_chunks = min(14, 5 + level)`.
+4. Loop until budget met or budget impossible: pick an open socket, weighted toward lower difficulty for levels 1–4,
+   toward catalog average later (weight = 1/(1 + max(0, difficulty − level_tier))). Pick a random eligible chunk:
+   `min_level ≤ level`, footprint non-overlapping (§4.1 rules; vertical stacking allowed), facing matches the
+   socket, `|Δy| ≤ 0.5`. Place it (trials: ≤40 candidates per socket; on failure leave socket open and retry other
+   sockets). Append new sockets.
+5. Branch cap: at most 3 junction chunks per level (CH-03/13/14/15) — keeps size predictable.
+6. **Sealing:** when budget is met, any remaining open sockets are closed with a random dead-end chunk
+   (CH-16/17/18, min_level ≤ level) matched by facing; if none fits the height, snap via a rotated CH-09/CH-10,
+   else connect back to the spawn hub's spare inlet to form a loop. The spawn hub always has 4 inlets.
+7. **No overlap guarantee:** maintain a placed-chunk AABB list (per floor band); every candidate is AABB-tested
+   before placement; stacking follows §4.1. Deterministic order of operations → identical maps per seed.
+8. **Completability:** the existing physics bot (60 Hz controller) must path from spawn to **every gift slot and
+   both beacon sides**; otherwise regenerate with `seed+1` (≤40 attempts). Fallback: CH-02 + two CH-05 stacked —
+   always passes. Bot result + seed are logged in the level-build record.
+9. Gift placement: distribute `gifts(level, players)` across placed gift slots (elevated quota ≥20%); shortfall is
+   topped up on random eligible platform tops (not CRUMBLE/JUMP_PAD, ≥2.0 u spacing, ≥2.5 u from beacon).
+10. Enemy spawns: unchanged 8 fixed hub-ring slots; phase-2 +10% speed applies; collapse exempts the hub.
+
+---
+
+## 5. Escalation schedule
+Events stack; every event has a banner line. Collapse speed uses §1.4; enemy gains are cumulative.
+
+| Lvl | Event | Effect |
+|---|---|---|
+| 1 | High Rise (existing) | Taller gaps; base roster draft |
+| 2 | Slick Ice (existing) | Friction 0.25 |
+| 3 | Crumbling (existing) | Platforms crumble underfoot; altars appear (L3+) |
+| 4 | Ashen Unlock | CH-19/CH-20 become eligible; **Second Step**: +1 copy of the most-voted enemy |
+| 5 | Tall Order | CH-07/CH-10 eligible; Moteling INHALE 2.0→1.8 s |
+| 6 | Crowded Wake | +1 Pallbearer (if drafted); all drafted enemies +1 every 3 levels thereafter (cap +6) |
+| 7 | Catwalk Season | CH-22 eligible |
+| 8 | Bombardier | Gale Wight shells 2→3; parish use of CH-25 more likely |
+| 9 | Short Warning | Collapse per-tile warning 3.0→2.0 s |
+| 10 | Second Front | +1 copy per 2 drafted enemy types (floor, max +4); greater curses in shop |
+| 12 | Grey Tide | Fog density +25% (multiplies with thinning_shroud etc.) |
+| 14 | Swifter Wake | Pallbearer HUNT 5.2→6.0 u/s |
+| 15 | Elder Models | Variants unlock: Snapshrike LOCK 0.75→0.60 s; Turret CHARGE 0.95→0.80 s |
+| 17 | Hunger | Collapse D −3 s (floor still 30) |
+| 18 | Deep Night | Mimic shimmer interval 3.0→2.2 s; fog +15% |
+| 20 | Full Chorus | All drafted enemies +1 copy; altar cap 5/level |
+| 25+ | Endless | Per level beyond 25: collapse −1 s (floor 25), enemy speed +5% per 5 levels |
+
+---
+
+## 6. Implementation slices (7 tickets, disjoint files)
+
+**T-101 Protocol (fields & constants)** — Files: `shared/protocol/constants.*`, `shared/protocol/messages.*` (or the
+repo's actual protocol module — lead to confirm roots).
+Inputs: §1 values, §2.2 payload, §4 JUMP_PAD. Outputs: constants `GIFT_CAP 120, GIFT_PICKUP_R 1.1, GIFT_COUNT_BASE 46,
+GIFT_COUNT_PER_LEVEL 6, GIFT_COUNT_PER_PLAYER 4, GOLD_PER_GIFT 1, COLLAPSE_D_MAX 52, COLLAPSE_D_MIN 30,
+COLLAPSE_BATCHES 6, TILE_WARN_S 3.0, TILE_WARN_LATE_S 2.0, FALL_TIME_S 1.2, PAD_LAUNCH_VEL 16.0,
+PHASE2_ENEMY_SPEED_MUL 1.10`; enum `PlatformKind{NORMAL,CRUMBLE,JUMP_PAD}`; enemy `kind` renumbered; telegraph
+states enum; `EnemyTick{eid,kind,state,flags,pos,target,prog}`; `phase` enum on level state; server msg
+`GoldGiftBurst`, `CollapseBatch{batch,platform_ids[]}`, `BeaconIgnited`. Acceptance: codecs round-trip; payload ≤
+40 B/enemy; unknown-kind msg rejected without disconnect.
+
+**T-102 Sim controller (Bulwark + jump pads)** — Files: `shared/sim/controller.*`.
+Inputs: T-101 constants, §3. Outputs: `bulwark` class kit; JUMP_PAD contact → `vel.y = 16.0` (horizontal ×0.6);
+`ward_frames: u16` wired into the deterministic checkpoints; Aegis WINDUP/ACTIVE/pulse rules exactly as §3.
+Acceptance: 60 Hz checksum test unchanged for non-Bulwark classes; pad apex = 4.0 u ±0.05; ward ignores knockback
+in a bot test; envelope jumps in §4.1 remain completable; replay determinism across two runs.
+
+**T-103 Sim hazards (9 enemies)** — Files: `shared/sim/enemies/*.*` (one module per enemy + shared state enum).
+Inputs: §2. Outputs: all nine state machines; breadcrumb buffer for pallbearer; fretting + 8 s debuff for corrupter;
+heavy mutex (`heavy_busy_until`); phase-2 speed multiplier; per-enemy tests with seeded RNG.
+Acceptance: telegraph audit (every lethal transition preceded by ≥0.6 s telegraph state); mutex test (VOLLEY and
+INHALE never concurrent in 10k simulated seconds); rift_warden/corrupter inflict zero damage in bot soak; pallbearer
+lunge blocked by LOS rules? (no — lunge ignores LOS; check breadcrumb correctness); 1000 seeded level soak, zero
+NaNs, zero deadlocks.
+
+**T-104 Levelgen (chunk system)** — Files: `tools/levelgen/*`, `assets/chunks/*.json` (25 files), validator.
+Inputs: §4 catalog + rules. Outputs: chunk schema loader, socket matcher, AABB/4 u-stacking placer, budget walker,
+dead-end sealer, physics-bot verification, gift filler, JSON catalog.
+Acceptance: all 25 chunks pass schema validation; 200 seeded assemblies per level 1–20 all bot-verified completable;
+zero overlapping footprints with <4 u clearance; determinism (same seed → same map hash); budget within ±10%;
+elevated-gift quota ≥20% in 100% of outputs.
+
+**T-105 Server run/game (gifts, collapse, beacon, shop)** — Files: `server/run/*`, `server/shop.*`, event table.
+Inputs: T-101 payload/messages, §1, §5. Outputs: gift count/placement, phase state machine, farthest-first batch
+collapse, golden burst spawn, vanish-on-fall, beacon flow (one entrant wins, spectator), gold pool accounting, new
+shop prices, escalation table, level-build record log.
+Acceptance: scripted E2E — collect all gifts → siren → 6 batches in farthest-first order → goldens == collected
+count → beacon entry completes for all; uncollected goldens on falling tiles vanish; collapse D matches formula at
+levels 1/6/11; shop charges new prices; events fire at listed levels.
+
+**T-106 Client visuals** — Files: `client/render/gifts.*`, `client/render/enemies/*`, `client/hud/*`, `client/vfx/*`.
+Inputs: §1–§4 visual briefs + payload. Outputs: smaller gift mesh (0.34 u) and golden variant; enemy models from
+three.js primitives with accent colours; telegraph renderer (ring, line, wedge, shimmer, aim line) driven by
+`prog`; collapse shake + falling tile anim; beacon dormant/active; JUMP_PAD visuals; ward dome; gold HUD counter.
+Acceptance: snapshot scene per enemy × telegraph state; enemies readable in max fog (bright-pixel contrast check);
+frame time <16.6 ms with 120 gifts + 8 enemies + collapse VFX on mid-tier GPU; telegraphs match server timing
+(±50 ms).
+
+**T-107 Content & docs** — Files: `design/content.json`, `design/M3_DESIGN.md` (links), `README` event banners.
+Inputs: T-105/106 landed values. Outputs: content.json — 9 enemies renamed/rewritten (ids kept), blinker removed,
+Bulwark added, shop prices ×2, events at §5, gold note; removal note for blinker (no dangling ids); banner texts.
+Acceptance: JSON schema validates; no occurrence of `blinker` outside the removal note; all new event ids reachable
+in a test run; doc references check out.
+
+**Dependency order:** T-101 → (T-102, T-103, T-104, T-105) → T-106 → T-107. T-105 needs T-101+T-103+T-104.

@@ -2,7 +2,7 @@
 /* eslint-disable */
 import { Reader, Writer } from "./codec";
 
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 export const TICK_HZ = 20;
 export const PHYSICS_HZ = 60;
 export const MAX_INPUTS_PER_MSG = 32;
@@ -31,7 +31,6 @@ export const PLAYER_WAITING = 3;
 export const DEATH_PROJECTILE = 2;
 export const CLASS_STRIKER = 0;
 export const CLASS_GRAPPLER = 1;
-export const CLASS_BLINKER = 2;
 export const CLASS_GLIDER = 3;
 export const EVENT_NONE = 0;
 export const EVENT_HIGH_RISE = 1;
@@ -48,6 +47,16 @@ export const NOTICE_ALTAR = 0;
 export const NOTICE_BOUGHT = 1;
 export const NOTICE_EVENT = 2;
 export const MAX_ITEM_LEN = 32;
+export const CLASS_BULWARK = 2;
+export const PLATFORM_JUMP_PAD = 2;
+export const TILE_FRETTED = 3;
+export const LEVEL_COLLECT = 0;
+export const LEVEL_COLLAPSE_PENDING = 1;
+export const LEVEL_COLLAPSING = 2;
+export const ENEMY_TELEGRAPH = 3;
+export const ENEMY_ATTACK = 4;
+export const ENEMY_RECOVER = 5;
+export const ENEMY_FLAG_HEAVY = 1;
 
 export interface Vec3 {
   x: number;
@@ -137,7 +146,7 @@ export function decodeInputFrame(bytes: Uint8Array): InputFrame {
   return v;
 }
 
-/** Complete kinematic character state. Must contain everything the step function reads so client reconciliation is exact. class: CLASS_* - which ability BTN_ABILITY triggers (striker dash, grappler grapple, blinker blink, glider glide). */
+/** Complete kinematic character state. Must contain everything the step function reads so client reconciliation is exact. class: CLASS_* - which ability BTN_ABILITY triggers (striker dash, grappler grapple, blinker blink, glider glide). ward_frames: Bulwark ward countdown (rooted, knockback-immune). stagger_frames: after a shove, no jump/ability/dash input is honoured. */
 export interface ControllerState {
   pos: Vec3;
   vel: Vec3;
@@ -150,6 +159,8 @@ export interface ControllerState {
   abilityActiveFrames: number;
   abilityDir: Vec3;
   class: number;
+  wardFrames: number;
+  staggerFrames: number;
 }
 export function writeControllerState(w: Writer, v: ControllerState): void {
   writeVec3(w, v.pos);
@@ -163,6 +174,8 @@ export function writeControllerState(w: Writer, v: ControllerState): void {
   w.u8(v.abilityActiveFrames);
   writeVec3(w, v.abilityDir);
   w.u8(v.class);
+  w.u16(v.wardFrames);
+  w.u8(v.staggerFrames);
 }
 export function readControllerState(r: Reader): ControllerState {
   return {
@@ -177,6 +190,8 @@ export function readControllerState(r: Reader): ControllerState {
     abilityActiveFrames: r.u8(),
     abilityDir: readVec3(r),
     class: r.u8(),
+    wardFrames: r.u16(),
+    staggerFrames: r.u8(),
   };
 }
 export function encodeControllerState(v: ControllerState): Uint8Array<ArrayBuffer> {
@@ -359,13 +374,16 @@ export function decodePlayerView(bytes: Uint8Array): PlayerView {
   return v;
 }
 
-/** kind indexes design/content.json enemies; radius is the hit sphere radius (the client draws the body at this size). state: ENEMY_DORMANT / ENEMY_HUNTING / ENEMY_DISGUISED (a mimic still posing as a gift). */
+/** kind indexes design/content.json enemies; radius = body radius (drawn size); state: ENEMY_DORMANT/HUNTING/DISGUISED/TELEGRAPH/ATTACK/RECOVER; target = telegraph anchor (line end, circle centre, lunge point) while telegraphing/attacking, else zero; prog 0-255 = telegraph progress; flags: ENEMY_FLAG_HEAVY while a heavy wind-up runs. */
 export interface EnemyView {
   id: number;
   kind: number;
   pos: Vec3;
   radius: number;
   state: number;
+  target: Vec3;
+  prog: number;
+  flags: number;
 }
 export function writeEnemyView(w: Writer, v: EnemyView): void {
   w.u32(v.id);
@@ -373,6 +391,9 @@ export function writeEnemyView(w: Writer, v: EnemyView): void {
   writeVec3(w, v.pos);
   w.f32(v.radius);
   w.u8(v.state);
+  writeVec3(w, v.target);
+  w.u8(v.prog);
+  w.u8(v.flags);
 }
 export function readEnemyView(r: Reader): EnemyView {
   return {
@@ -381,6 +402,9 @@ export function readEnemyView(r: Reader): EnemyView {
     pos: readVec3(r),
     radius: r.f32(),
     state: r.u8(),
+    target: readVec3(r),
+    prog: r.u8(),
+    flags: r.u8(),
   };
 }
 export function encodeEnemyView(v: EnemyView): Uint8Array<ArrayBuffer> {
@@ -421,7 +445,7 @@ export function decodeProjectileView(bytes: Uint8Array): ProjectileView {
   return v;
 }
 
-/** A platform not in its normal state: TILE_WARN (about to crumble) or TILE_GONE (not solid). Platforms absent from the list are solid. */
+/** A platform not in its normal state: TILE_WARN (about to fall), TILE_GONE (not solid), TILE_FRETTED (solid; slows and blocks abilities). Absent = normal. */
 export interface TileState {
   id: number;
   state: number;
@@ -702,7 +726,7 @@ export function decodeClientMsg(bytes: Uint8Array): ClientMsg {
 export type ServerMsg =
   | { type: "Welcome"; protocolVersion: number; playerId: number; tick: number }
   | { type: "Level"; data: LevelData }
-  | { type: "Snapshot"; tick: number; level: number; lastInputSeq: number; you: ControllerState; players: PlayerView[]; enemies: EnemyView[]; giftsTaken: number[]; projectiles: ProjectileView[]; tiles: TileState[]; altarsUsed: number[] }
+  | { type: "Snapshot"; tick: number; level: number; lastInputSeq: number; you: ControllerState; players: PlayerView[]; enemies: EnemyView[]; giftsTaken: number[]; projectiles: ProjectileView[]; tiles: TileState[]; altarsUsed: number[]; levelPhase: number; goldenTaken: number[]; collapseMs: number }
   | { type: "Pong"; t: number }
   | { type: "Error"; code: number; message: string }
   | { type: "RunOver"; summary: RunSummary }
@@ -735,6 +759,9 @@ export function writeServerMsg(w: Writer, v: ServerMsg): void {
       w.vec(v.projectiles, (x) => writeProjectileView(w, x));
       w.vec(v.tiles, (x) => writeTileState(w, x));
       w.vec(v.altarsUsed, (x) => w.u16(x));
+      w.u8(v.levelPhase);
+      w.vec(v.goldenTaken, (x) => w.u16(x));
+      w.u32(v.collapseMs);
       return;
     case "Pong":
       w.u32(3);
@@ -778,7 +805,7 @@ export function readServerMsg(r: Reader): ServerMsg {
     case 1:
       return { type: "Level", data: readLevelData(r) };
     case 2:
-      return { type: "Snapshot", tick: r.u32(), level: r.u32(), lastInputSeq: r.u32(), you: readControllerState(r), players: r.vec(() => readPlayerView(r)), enemies: r.vec(() => readEnemyView(r)), giftsTaken: r.vec(() => r.u16()), projectiles: r.vec(() => readProjectileView(r)), tiles: r.vec(() => readTileState(r)), altarsUsed: r.vec(() => r.u16()) };
+      return { type: "Snapshot", tick: r.u32(), level: r.u32(), lastInputSeq: r.u32(), you: readControllerState(r), players: r.vec(() => readPlayerView(r)), enemies: r.vec(() => readEnemyView(r)), giftsTaken: r.vec(() => r.u16()), projectiles: r.vec(() => readProjectileView(r)), tiles: r.vec(() => readTileState(r)), altarsUsed: r.vec(() => r.u16()), levelPhase: r.u8(), goldenTaken: r.vec(() => r.u16()), collapseMs: r.u32() };
     case 3:
       return { type: "Pong", t: r.u32() };
     case 4:

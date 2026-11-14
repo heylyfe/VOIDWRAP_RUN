@@ -3,7 +3,7 @@
   "constants": {
     "PROTOCOL_VERSION": [
       "u16",
-      6
+      7
     ],
     "TICK_HZ": [
       "u32",
@@ -117,10 +117,6 @@
       "u8",
       1
     ],
-    "CLASS_BLINKER": [
-      "u8",
-      2
-    ],
     "CLASS_GLIDER": [
       "u8",
       3
@@ -184,6 +180,46 @@
     "MAX_ITEM_LEN": [
       "u8",
       32
+    ],
+    "CLASS_BULWARK": [
+      "u8",
+      2
+    ],
+    "PLATFORM_JUMP_PAD": [
+      "u8",
+      2
+    ],
+    "TILE_FRETTED": [
+      "u8",
+      3
+    ],
+    "LEVEL_COLLECT": [
+      "u8",
+      0
+    ],
+    "LEVEL_COLLAPSE_PENDING": [
+      "u8",
+      1
+    ],
+    "LEVEL_COLLAPSING": [
+      "u8",
+      2
+    ],
+    "ENEMY_TELEGRAPH": [
+      "u8",
+      3
+    ],
+    "ENEMY_ATTACK": [
+      "u8",
+      4
+    ],
+    "ENEMY_RECOVER": [
+      "u8",
+      5
+    ],
+    "ENEMY_FLAG_HEAVY": [
+      "u8",
+      1
     ]
   },
   "types": [
@@ -241,7 +277,7 @@
     },
     {
       "name": "ControllerState",
-      "$comment": "Complete kinematic character state. Must contain everything the step function reads so client reconciliation is exact. class: CLASS_* - which ability BTN_ABILITY triggers (striker dash, grappler grapple, blinker blink, glider glide).",
+      "$comment": "Complete kinematic character state. Must contain everything the step function reads so client reconciliation is exact. class: CLASS_* - which ability BTN_ABILITY triggers (striker dash, grappler grapple, blinker blink, glider glide). ward_frames: Bulwark ward countdown (rooted, knockback-immune). stagger_frames: after a shove, no jump/ability/dash input is honoured.",
       "struct": [
         [
           "pos",
@@ -285,6 +321,14 @@
         ],
         [
           "class",
+          "u8"
+        ],
+        [
+          "ward_frames",
+          "u16"
+        ],
+        [
+          "stagger_frames",
           "u8"
         ]
       ]
@@ -415,7 +459,7 @@
     },
     {
       "name": "EnemyView",
-      "$comment": "kind indexes design/content.json enemies; radius is the hit sphere radius (the client draws the body at this size). state: ENEMY_DORMANT / ENEMY_HUNTING / ENEMY_DISGUISED (a mimic still posing as a gift).",
+      "$comment": "kind indexes design/content.json enemies; radius = body radius (drawn size); state: ENEMY_DORMANT/HUNTING/DISGUISED/TELEGRAPH/ATTACK/RECOVER; target = telegraph anchor (line end, circle centre, lunge point) while telegraphing/attacking, else zero; prog 0-255 = telegraph progress; flags: ENEMY_FLAG_HEAVY while a heavy wind-up runs.",
       "struct": [
         [
           "id",
@@ -436,6 +480,18 @@
         [
           "state",
           "u8"
+        ],
+        [
+          "target",
+          "Vec3"
+        ],
+        [
+          "prog",
+          "u8"
+        ],
+        [
+          "flags",
+          "u8"
         ]
       ]
     },
@@ -454,7 +510,7 @@
     },
     {
       "name": "TileState",
-      "$comment": "A platform not in its normal state: TILE_WARN (about to crumble) or TILE_GONE (not solid). Platforms absent from the list are solid.",
+      "$comment": "A platform not in its normal state: TILE_WARN (about to fall), TILE_GONE (not solid), TILE_FRETTED (solid; slows and blocks abilities). Absent = normal.",
       "struct": [
         [
           "id",
@@ -763,6 +819,21 @@
                 "vec",
                 "u16"
               ]
+            ],
+            [
+              "level_phase",
+              "u8"
+            ],
+            [
+              "golden_taken",
+              [
+                "vec",
+                "u16"
+              ]
+            ],
+            [
+              "collapse_ms",
+              "u32"
             ]
           ]
         ],
@@ -920,7 +991,9 @@
               "y": 0,
               "z": 1
             },
-            "class": 2
+            "class": 2,
+            "ward_frames": 12,
+            "stagger_frames": 3
           },
           "players": [
             {
@@ -949,7 +1022,14 @@
                 "z": -3
               },
               "radius": 0.75,
-              "state": 2
+              "state": 3,
+              "target": {
+                "x": 4,
+                "y": 0,
+                "z": -2
+              },
+              "prog": 128,
+              "flags": 1
             }
           ],
           "gifts_taken": [
@@ -974,11 +1054,21 @@
             {
               "id": 9,
               "state": 2
+            },
+            {
+              "id": 11,
+              "state": 3
             }
           ],
           "altars_used": [
             1
-          ]
+          ],
+          "level_phase": 2,
+          "golden_taken": [
+            1,
+            4
+          ],
+          "collapse_ms": 41500
         }
       }
     },

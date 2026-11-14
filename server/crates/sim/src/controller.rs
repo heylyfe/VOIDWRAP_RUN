@@ -5,7 +5,7 @@
 //! dash class ability. Collision is axis-separated AABB against [`World`].
 //!
 //! M2 classes (`ControllerState.class`, CLASS_*): CLASS_STRIKER dashes (the M1
-//! ability), CLASS_GLIDER glides, CLASS_BLINKER blinks and CLASS_GRAPPLER
+//! ability), CLASS_GLIDER glides, CLASS_BULWARK blinks and CLASS_GRAPPLER
 //! grapples. Unknown values behave like CLASS_STRIKER. Glide: holding
 //! BTN_ABILITY while airborne and falling caps the fall speed at
 //! `GLIDE_FALL_SPEED`, multiplies the horizontal air-speed limit by
@@ -46,7 +46,7 @@
 use crate::tuning::*;
 use crate::world::{World, overlaps};
 use protocol::{
-    Aabb, BTN_ABILITY, BTN_JUMP, CLASS_BLINKER, CLASS_GLIDER, CLASS_GRAPPLER, CLASS_STRIKER, ControllerState,
+    Aabb, BTN_ABILITY, BTN_JUMP, CLASS_BULWARK, CLASS_GLIDER, CLASS_GRAPPLER, CLASS_STRIKER, ControllerState,
     InputFrame, Tuning, Vec3,
 };
 
@@ -64,6 +64,8 @@ pub fn spawn_state(pos: Vec3) -> ControllerState {
         ability_active_frames: 0,
         ability_dir: Vec3::ZERO,
         class: protocol::CLASS_STRIKER,
+        ward_frames: 0,
+        stagger_frames: 0,
     }
 }
 
@@ -104,7 +106,7 @@ pub fn step(state: &mut ControllerState, input: &InputFrame, world: &World) {
 /// How `state.class` selects the BTN_ABILITY behaviour. Unknown values behave like CLASS_STRIKER.
 fn effective_class(class: u8) -> u8 {
     match class {
-        CLASS_STRIKER | CLASS_GRAPPLER | CLASS_BLINKER | CLASS_GLIDER => class,
+        CLASS_STRIKER | CLASS_GRAPPLER | CLASS_BULWARK | CLASS_GLIDER => class,
         _ => CLASS_STRIKER,
     }
 }
@@ -162,7 +164,7 @@ pub fn step_with(state: &mut ControllerState, input: &InputFrame, world: &World,
                 state.ability_active_frames = DASH_FRAMES;
                 state.ability_cooldown_frames = ability_cooldown;
             }
-            CLASS_BLINKER => blinked = blink(state, input, world, ability_cooldown),
+            CLASS_BULWARK => blinked = blink(state, input, world, ability_cooldown),
             CLASS_GRAPPLER => try_grapple(state, input, world, ability_cooldown),
             _ => {} // CLASS_GLIDER: BTN_ABILITY is a hold-to-glide, not a press action
         }
@@ -374,7 +376,7 @@ fn overlaps_any_solid(world: &World, bounds: &Aabb) -> bool {
     world.solids.iter().any(|solid| overlaps(bounds, solid))
 }
 
-/// CLASS_BLINKER: teleport up to `BLINK_DISTANCE` horizontally in the input
+/// CLASS_BULWARK: teleport up to `BLINK_DISTANCE` horizontally in the input
 /// direction (or the horizontal velocity) sweeping in [`BLINK_SWEEP_STEP`]
 /// increments. Stops at the last position whose player box overlaps no solid
 /// platform. With no direction nothing happens and no cooldown starts.
@@ -1246,7 +1248,7 @@ mod tests {
     fn blinker_teleports_up_to_blink_distance() {
         let w = flat_world();
         let mut s = spawn_state(Vec3::ZERO);
-        s.class = CLASS_BLINKER;
+        s.class = CLASS_BULWARK;
         step_with(&mut s, &idle(0), &w, &Tuning::default());
         assert!(s.grounded);
         step_with(&mut s, &run_x(1, BTN_ABILITY), &w, &Tuning::default());
@@ -1278,7 +1280,7 @@ mod tests {
             gone: vec![],
         };
         let mut s = spawn_state(Vec3::ZERO);
-        s.class = CLASS_BLINKER;
+        s.class = CLASS_BULWARK;
         step_with(&mut s, &idle(0), &w, &Tuning::default());
         assert!(s.grounded);
         step_with(&mut s, &run_x(1, BTN_ABILITY), &w, &Tuning::default());
@@ -1296,7 +1298,7 @@ mod tests {
     fn blinker_with_no_direction_does_nothing() {
         let w = flat_world();
         let mut s = spawn_state(Vec3::ZERO);
-        s.class = CLASS_BLINKER;
+        s.class = CLASS_BULWARK;
         step_with(&mut s, &idle(0), &w, &Tuning::default());
         let before = s.pos.clone();
         step_with(&mut s, &input(1, 0, 0, BTN_ABILITY), &w, &Tuning::default());
@@ -1309,7 +1311,7 @@ mod tests {
     fn blink_uses_horizontal_velocity_when_no_input() {
         let w = flat_world();
         let mut s = spawn_state(Vec3::ZERO);
-        s.class = CLASS_BLINKER;
+        s.class = CLASS_BULWARK;
         for i in 0..3 {
             step_with(&mut s, &run_x(i, 0), &w, &Tuning::default());
         }
@@ -1325,7 +1327,7 @@ mod tests {
     fn blink_clamps_negative_fall_speed_to_zero() {
         let w = flat_world();
         let mut s = spawn_state(Vec3::new(0.0, 30.0, 0.0));
-        s.class = CLASS_BLINKER;
+        s.class = CLASS_BULWARK;
         for i in 0..5 {
             step_with(&mut s, &idle(i), &w, &Tuning::default());
         }
