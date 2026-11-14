@@ -76,11 +76,18 @@ fn sense(id: u32, x: f32, y: f32, z: f32) -> PlayerSense {
         feet: v3(x, y, z),
         vel: v3(0.0, 0.0, 0.0),
         warded: false,
+        ..PlayerSense::default()
     }
 }
 
 fn sense_vel(id: u32, feet: Vec3, vel: Vec3, warded: bool) -> PlayerSense {
-    PlayerSense { id, feet, vel, warded }
+    PlayerSense {
+        id,
+        feet,
+        vel,
+        warded,
+        ..PlayerSense::default()
+    }
 }
 
 fn tick(
@@ -1099,4 +1106,101 @@ fn turret_standing_on_a_floor_fires_at_a_player_in_the_open() {
         killed,
         "a turret standing on a floor must be able to shoot a standing player 8 u away"
     );
+}
+
+// ── Registry brains (T-074 / T-075) run in the live hazard pass ──────────────────
+//
+// The eleven new enemies were authored as pure step functions. These tests prove the
+// hazard pass actually calls them: without the `is_registry_brain` branch they would
+// stand still forever and every assertion below would fail.
+
+#[test]
+fn registry_brains_are_stepped_by_the_hazard_pass() {
+    use sim::rules::{BEHAVIOR_COIL, BEHAVIOR_LURE, BEHAVIOR_REWIND};
+
+    let level = empty_level(7);
+    let world = World::from_level(&level);
+
+    // Rewind (batch A) trembles, then replays the nearest player's path: it must move.
+    let mut hz = Hazards::new();
+    warm(&mut hz, &level, &world);
+    let mut enemies = vec![enemy(1, BEHAVIOR_REWIND, 0.0, 0.0, 0.0)];
+    let start = enemies[0].pos;
+    let players = vec![sense(1, 6.0, 0.0, 0.0)];
+    for _ in 0..120 {
+        tick(&mut hz, &mut enemies, &level, &world, &players, &[]);
+    }
+    assert!(
+        (enemies[0].pos.x - start.x).abs() + (enemies[0].pos.z - start.z).abs() > 0.05,
+        "rewind must move once its tremble ends, got {:?}",
+        enemies[0].pos
+    );
+
+    // Coil (batch B) winds and then leaps: it must leave its start position.
+    let mut hz = Hazards::new();
+    warm(&mut hz, &level, &world);
+    let mut enemies = vec![enemy(2, BEHAVIOR_COIL, 0.0, 0.0, 0.0)];
+    let start = enemies[0].pos;
+    let players = vec![sense(1, 1.0, 0.0, 0.0)];
+    for _ in 0..240 {
+        tick(&mut hz, &mut enemies, &level, &world, &players, &[]);
+    }
+    assert!(
+        (enemies[0].pos.x - start.x).abs() + (enemies[0].pos.z - start.z).abs() > 0.05,
+        "coil must leap after winding, got {:?}",
+        enemies[0].pos
+    );
+
+    // Lure (batch B) flares at a nearby player and shoves them: a Shove effect must appear.
+    let mut hz = Hazards::new();
+    warm(&mut hz, &level, &world);
+    let mut enemies = vec![enemy(3, BEHAVIOR_LURE, 0.0, 0.0, 0.0)];
+    let players = vec![sense(1, 0.5, 0.0, 0.0)];
+    let mut shoved = false;
+    for _ in 0..120 {
+        let fx = tick(&mut hz, &mut enemies, &level, &world, &players, &[]);
+        if fx.iter().any(|e| matches!(e, HazardEffect::Shove { player: 1, .. })) {
+            shoved = true;
+            break;
+        }
+    }
+    assert!(shoved, "the lure's flare must shove the player who triggered it");
+}
+
+#[test]
+fn coil_overtunes_and_peal_only_kills_an_overtuned_player() {
+    use sim::rules::{BEHAVIOR_COIL, BEHAVIOR_PEAL};
+
+    let level = empty_level(11);
+    let world = World::from_level(&level);
+
+    // Coil's shockwave reports OVERTUNED for the player standing in it.
+    let mut hz = Hazards::new();
+    warm(&mut hz, &level, &world);
+    let mut enemies = vec![enemy(1, BEHAVIOR_COIL, 0.0, 0.0, 0.0)];
+    let players = vec![sense(1, 0.8, 0.0, 0.0)];
+    let mut overtuned = false;
+    for _ in 0..240 {
+        let fx = tick(&mut hz, &mut enemies, &level, &world, &players, &[]);
+        if fx.iter().any(|e| matches!(e, HazardEffect::Overtuned { player: 1 })) {
+            overtuned = true;
+            break;
+        }
+    }
+    assert!(overtuned, "coil's shockwave must report OVERTUNED");
+
+    // Peal rings beside the closest player. A clean player is never killed by it.
+    let mut hz = Hazards::new();
+    warm(&mut hz, &level, &world);
+    let mut enemies = vec![enemy(2, BEHAVIOR_PEAL, 0.0, 0.0, 0.0)];
+    let clean = vec![sense(1, 1.0, 0.0, 0.0)];
+    let mut killed_clean = false;
+    for _ in 0..400 {
+        let fx = tick(&mut hz, &mut enemies, &level, &world, &clean, &[]);
+        if kills(&fx).contains(&1) {
+            killed_clean = true;
+            break;
+        }
+    }
+    assert!(!killed_clean, "peal must not kill a player who is not Overtuned");
 }

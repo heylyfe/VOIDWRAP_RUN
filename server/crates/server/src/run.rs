@@ -1128,6 +1128,7 @@ mod tests {
             feet: touching,
             vel: Vec3::new(0.0, 0.0, 0.0),
             warded: false,
+            ..PlayerSense::default()
         }];
         let effects = run
             .hazards

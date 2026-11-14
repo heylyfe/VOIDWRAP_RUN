@@ -75,6 +75,12 @@ struct Player {
     cause: u8,
     /// The class the player chose (CLASS_*); copied into the controller state at every spawn/respawn.
     class: u8,
+    /// Ticks of OVERTUNED left (Coil's shockwave, Peal's ring). Peal's ring is lethal only while set.
+    overtuned_ticks: u16,
+    /// Ticks of Blight's infection left. Slows the victim and pauses Rewind's and Kite's timers.
+    infected_ticks: u16,
+    /// True on the tick a jump pad launched this player (cleanses Blight, escapes Lure).
+    pad_launched: bool,
 }
 
 impl Player {
@@ -353,6 +359,9 @@ impl Game {
                         mode,
                         cause: DEATH_VOID,
                         class,
+                        overtuned_ticks: 0,
+                        infected_ticks: 0,
+                        pad_launched: false,
                     });
                 }
                 self.send(
@@ -499,6 +508,7 @@ impl Game {
 
         // 1. Movement (lobby and playing).
         for p in self.conns.values_mut().filter_map(|c| c.player.as_mut()) {
+            p.pad_launched = false;
             p.tokens = (p.tokens + STEPS_PER_TICK).min(MAX_STEP_TOKENS);
             if !p.active() {
                 // Spectators' inputs are acknowledged and dropped (their camera is client-side).
@@ -520,6 +530,11 @@ impl Game {
                     altar_notices.push(pair);
                 }
                 controller::step_with(&mut p.state, &f, &self.run.world, &tuning);
+                // A pad launch is the only way to leave the ground faster than a jump
+                // (PAD_LAUNCH_VEL 16 vs JUMP_VELOCITY 12); the controller reports no flag.
+                if p.state.vel.y >= sim::tuning::PAD_LAUNCH_VEL - 0.5 {
+                    p.pad_launched = true;
+                }
                 p.last_applied_seq = f.seq;
                 p.tokens -= 1;
                 stepped += 1;
@@ -646,8 +661,20 @@ impl Game {
                 feet: p.state.pos,
                 vel: p.state.vel,
                 warded: p.state.ward_frames > 0,
+                class: p.class,
+                jump_launched: p.pad_launched,
+                used_ability: p.state.ability_active_frames > 0,
+                used_support_ability: p.class == protocol::CLASS_BULWARK && p.state.ability_active_frames > 0,
+                gliding: p.class == CLASS_GLIDER && p.state.ability_active_frames > 0 && !p.state.grounded,
+                overtuned_ticks: p.overtuned_ticks,
+                infected_ticks: p.infected_ticks,
             })
             .collect();
+        // Registry brains read the phase and the run's permanents.
+        let coil_permanent = self.run.drafted_enemies.iter().any(|id| id == "coil");
+        self.run
+            .hazards
+            .set_run_context(self.run.level_phase == protocol::LEVEL_COLLAPSING, coil_permanent);
         let effects = self.run.hazards.step(
             &mut self.run.enemies,
             &self.run.world,
@@ -658,6 +685,8 @@ impl Game {
         );
         let mut shoves: Vec<(u32, Vec3, u8)> = Vec::new();
         let mut kills: BTreeMap<u32, u8> = BTreeMap::new();
+        let mut overtuned: Vec<u32> = Vec::new();
+        let mut infected: Vec<u32> = Vec::new();
         for effect in effects {
             match effect {
                 sim::hazards::HazardEffect::Kill { player, cause } => {
@@ -668,7 +697,21 @@ impl Game {
                     vel,
                     stagger_ticks,
                 } => shoves.push((player, vel, stagger_ticks)),
+                sim::hazards::HazardEffect::Overtuned { player } => overtuned.push(player),
+                sim::hazards::HazardEffect::Infect { player } => infected.push(player),
             }
+        }
+        // Debuffs the registry brains applied this tick. OVERTUNED is what makes Peal's
+        // ring lethal; the infection slows the victim and pauses Rewind's and Kite's timers.
+        for p in self.conns.values_mut().filter_map(|c| c.player.as_mut()) {
+            if overtuned.contains(&p.id) {
+                p.overtuned_ticks = sim::rules::enemies::OVERTUNED_TICKS as u16;
+            }
+            if infected.contains(&p.id) {
+                p.infected_ticks = sim::rules::enemies::blight::BLIGHT_INFECTION_TICKS as u16;
+            }
+            p.overtuned_ticks = p.overtuned_ticks.saturating_sub(1);
+            p.infected_ticks = p.infected_ticks.saturating_sub(1);
         }
 
         // Bulwark Aegis Bloom: on the pulse frame the sim knocks enemies back; other ACTIVE, unwarded

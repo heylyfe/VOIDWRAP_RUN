@@ -22,11 +22,12 @@ use crate::rules::enemies::peal::{PEAL_CHIME_TICKS, PEAL_REST_TICKS, PealPhase};
 use crate::rules::enemies::rewind::{REWIND_FADE_TICKS, REWIND_TREMBLE_TICKS, RewindPhase};
 use crate::rules::enemies::r#static::{STATIC_VANISH_TICKS, StaticPhase};
 use crate::rules::enemies::warden::{WARDEN_FRENZY_WIND_TICKS, WARDEN_RECOVER_TICKS, WARDEN_WIND_TICKS, WardenPhase};
+use crate::rules::enemies::{EnemyAction, EnemyClass, HitKind, PlayerSample, PlayerSnapshot, StepContext, TickContext};
 use crate::rules::{
     Brain, CorrupterBrain, CorrupterPhase, ENEMY_HIT_FORGIVENESS, Enemy, GalePhase, GaleWightBrain, LanternLeechBrain,
-    LeechPhase, MimicBrain, MimicPhase, MotelingBrain, MotelingPhase, PallbearerBrain, PallbearerPhase, RiftPhase,
-    RiftWardenBrain, SnapshrikeBrain, SnapshrikePhase, TurretBrain, TurretPhase, aabb_distance, dir_normalized,
-    distance, flat_direction, horizontal_distance, move_toward, player_centre, segment_intersects_aabb,
+    LeechPhase, MimicBrain, MimicPhase, MotelingBrain, MotelingPhase, PallbearerBrain, PallbearerPhase, PlayerStatus,
+    RiftPhase, RiftWardenBrain, SnapshrikeBrain, SnapshrikePhase, TurretBrain, TurretPhase, aabb_distance,
+    dir_normalized, distance, flat_direction, horizontal_distance, move_toward, player_centre, segment_intersects_aabb,
     sphere_hits_player_box,
 };
 use crate::world::World;
@@ -177,6 +178,38 @@ pub struct PlayerSense {
     /// True while Bulwark's Aegis is active: immune to every Kill and Shove
     /// except gale_wight shell blasts.
     pub warded: bool,
+    /// The player's class (`CLASS_*`); drives the registry's class interactions.
+    pub class: u8,
+    /// True on the tick this player launched off a jump pad (cleanses Blight, escapes Lure).
+    pub jump_launched: bool,
+    /// True on the tick this player used their class ability (answers Metronome, cuts Kite).
+    pub used_ability: bool,
+    /// True on the tick this player used a support-class ability (cleanses Blight).
+    pub used_support_ability: bool,
+    /// True while the glider ability is held and the player is falling.
+    pub gliding: bool,
+    /// Ticks of OVERTUNED left on this player (0 = not overtuned).
+    pub overtuned_ticks: u16,
+    /// Ticks of Blight's infection left on this player (0 = clean).
+    pub infected_ticks: u16,
+}
+
+impl Default for PlayerSense {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            feet: Vec3::new(0.0, 0.0, 0.0),
+            vel: Vec3::new(0.0, 0.0, 0.0),
+            warded: false,
+            class: protocol::CLASS_STRIKER,
+            jump_launched: false,
+            used_ability: false,
+            used_support_ability: false,
+            gliding: false,
+            overtuned_ticks: 0,
+            infected_ticks: 0,
+        }
+    }
 }
 
 /// Something an enemy (or its projectile) did to a player this tick.
@@ -187,6 +220,14 @@ pub enum HazardEffect {
     /// Knockback velocity (u/s); the server writes it into the player's velocity.
     /// `stagger_ticks` is in server ticks (0 = no stagger).
     Shove { player: u32, vel: Vec3, stagger_ticks: u8 },
+    /// Apply OVERTUNED for [`crate::rules::enemies::OVERTUNED_TICKS`] ticks. The server
+    /// stores the remaining ticks on the player and feeds them back through
+    /// [`PlayerSense::overtuned_ticks`]; Peal's ring is lethal only while it is set.
+    Overtuned { player: u32 },
+    /// Apply Blight's infection. The server stores the remaining ticks and feeds them
+    /// back through [`PlayerSense::infected_ticks`]; the infection slows the victim and
+    /// pauses Rewind's and Kite's timers.
+    Infect { player: u32 },
 }
 
 /// A flying projectile: turret bolts and falling gale-wight shells.
@@ -226,6 +267,39 @@ struct Ctx<'a> {
     damage_ok: bool,
     /// Snapshot of every enemy's start-of-tick position; index matches the `enemies` slice.
     positions: &'a [Vec3],
+    /// Tick index since the level started, for the registry brains.
+    tick: u32,
+    /// True during the collapse phase.
+    collapse: bool,
+    /// True when `coil` is a permanent in the run (`peal_lethal_when_overtuned`).
+    coil_permanent: bool,
+    /// Batch-A view of the players (T-074 brains).
+    snapshots: &'a [PlayerSnapshot],
+    /// Batch-B view of the players (T-075 brains).
+    samples: &'a [PlayerSample<'a>],
+}
+
+impl Ctx<'_> {
+    /// Batch-A context for one registry brain tick.
+    fn step_ctx(&self) -> StepContext<'_> {
+        StepContext {
+            tick: self.tick,
+            players: self.snapshots,
+            gifts: &self.level.gifts,
+            collapse: self.collapse,
+            coil_permanent: self.coil_permanent,
+        }
+    }
+
+    /// Batch-B context for one registry brain tick.
+    fn tick_ctx(&self) -> TickContext<'_> {
+        TickContext {
+            players: self.samples,
+            collapse_phase: self.collapse,
+            map_min: self.level.spawn,
+            map_max: self.level.beacon,
+        }
+    }
 }
 
 /// Owns projectiles and tile states. Call [`Hazards::step`] once per server tick.
@@ -242,6 +316,10 @@ pub struct Hazards {
     pending_enemy_shoves: Vec<(usize, Vec3)>,
     rng: u64,
     rng_seeded: bool,
+    /// True during the collapse phase; set by the server through [`Hazards::set_run_context`].
+    collapse: bool,
+    /// True when `coil` is a permanent in the run; set by the server.
+    coil_permanent: bool,
 }
 
 impl Hazards {
@@ -263,6 +341,17 @@ impl Hazards {
     /// enemy speed multiplier (1.0 or 1.1). Effects are ordered by enemy spawn
     /// order, then by player order. The first 4.0 s of a level and dormant
     /// enemies never produce effects.
+    /// Tell the hazard pass about run-level state the registry brains read.
+    ///
+    /// `collapse` gates the brains that behave differently in the exit window
+    /// (Warden frenzies, Lure re-dorms aggressively, Overlook's path goes public);
+    /// `coil_permanent` enables the `peal_lethal_when_overtuned` synergy hook.
+    /// Call once per tick before [`Hazards::step`].
+    pub fn set_run_context(&mut self, collapse: bool, coil_permanent: bool) {
+        self.collapse = collapse;
+        self.coil_permanent = coil_permanent;
+    }
+
     pub fn step(
         &mut self,
         enemies: &mut [Enemy],
@@ -288,6 +377,29 @@ impl Hazards {
         // Snapshot positions so the rift warden can find its neighbours without
         // holding a second live borrow of the enemy slice.
         let enemy_positions: Vec<Vec3> = enemies.iter().map(|enemy| enemy.pos).collect();
+        // The registry brains (T-074 / T-075) read two different player views; build both once.
+        let snapshots: Vec<PlayerSnapshot> = players
+            .iter()
+            .map(|p| PlayerSnapshot {
+                id: p.id,
+                feet: p.feet,
+                class: enemy_class(p.class),
+                status: PlayerStatus::default(),
+                dashing: false,
+            })
+            .collect();
+        let samples: Vec<PlayerSample<'_>> = players
+            .iter()
+            .map(|p| PlayerSample {
+                id: p.id,
+                feet: p.feet,
+                class: class_name(p.class),
+                jump_launched: p.jump_launched,
+                used_ability: p.used_ability,
+                used_support_ability: p.used_support_ability,
+                gliding: p.gliding,
+            })
+            .collect();
         let ctx = Ctx {
             world,
             level,
@@ -296,6 +408,11 @@ impl Hazards {
             speed_mul,
             damage_ok,
             positions: &enemy_positions,
+            tick: self.ticks_elapsed,
+            collapse: self.collapse,
+            coil_permanent: self.coil_permanent,
+            snapshots: &snapshots,
+            samples: &samples,
         };
         let mut fx: Vec<HazardEffect> = Vec::new();
         for i in 0..enemies.len() {
@@ -691,6 +808,140 @@ fn push_capped<T>(entries: &mut Vec<(u32, Vec<T>)>, id: u32, value: T, cap: usiz
     }
 }
 
+/// True for the eleven brains added by T-074 / T-075, which own their own step functions.
+fn is_registry_brain(brain: &Brain) -> bool {
+    matches!(
+        brain,
+        Brain::Rewind(_)
+            | Brain::Warden(_)
+            | Brain::Peal(_)
+            | Brain::Kite(_)
+            | Brain::Static(_)
+            | Brain::Blight(_)
+            | Brain::Metronome(_)
+            | Brain::Overlook(_)
+            | Brain::Chorus(_)
+            | Brain::Coil(_)
+            | Brain::Lure(_)
+    )
+}
+
+/// Map a `CLASS_*` id onto the registry's four-class enum.
+fn enemy_class(class: u8) -> EnemyClass {
+    match class {
+        protocol::CLASS_GRAPPLER => EnemyClass::Grappler,
+        protocol::CLASS_BULWARK => EnemyClass::Bulwark,
+        protocol::CLASS_GLIDER => EnemyClass::Glider,
+        _ => EnemyClass::Striker,
+    }
+}
+
+/// Map a `CLASS_*` id onto the string the batch-B brains compare against.
+fn class_name(class: u8) -> &'static str {
+    match class {
+        protocol::CLASS_GRAPPLER => "grappler",
+        protocol::CLASS_BULWARK => "bulwark",
+        protocol::CLASS_GLIDER => "glider",
+        _ => "striker",
+    }
+}
+
+/// Advance one registry brain and apply what it reports.
+///
+/// Batch A (Rewind, Warden, Peal, Kite, Static) reports through [`EnemyAction`]:
+/// motion, an optional teleport, and hits. Batch B (Blight, Metronome, Overlook,
+/// Chorus, Coil, Lure) reports through its own step structs; the parts that map
+/// onto a [`HazardEffect`] are applied here, the rest (Chorus's instrument gifts,
+/// Overlook's drawn path) are read by the server from the brain directly.
+fn step_registry_brain(e: &mut Enemy, ctx: &Ctx, fx: &mut Vec<HazardEffect>) {
+    let pos = e.pos;
+    let params = e.params.clone();
+    let step_ctx = ctx.step_ctx();
+    let tick_ctx = ctx.tick_ctx();
+
+    // Batch A: one `EnemyAction` per tick.
+    let action = match &mut e.brain {
+        Brain::Rewind(b) => crate::rules::enemies::rewind::step(b, &pos, &params, &step_ctx),
+        Brain::Warden(b) => crate::rules::enemies::warden::step(b, &pos, &params, &step_ctx),
+        Brain::Peal(b) => crate::rules::enemies::peal::step(b, &pos, &params, &step_ctx),
+        Brain::Kite(b) => crate::rules::enemies::kite::step(b, &pos, &params, &step_ctx),
+        Brain::Static(b) => crate::rules::enemies::r#static::step(b, &pos, &params, &step_ctx),
+        _ => EnemyAction::idle(),
+    };
+    if let Some(to) = action.teleport {
+        e.pos = to;
+    } else {
+        e.pos.x += action.motion.x;
+        e.pos.y += action.motion.y;
+        e.pos.z += action.motion.z;
+    }
+    for hit in &action.hits {
+        match hit.kind {
+            HitKind::Lethal => fx.push(HazardEffect::Kill {
+                player: hit.player_id,
+                cause: DEATH_ENEMY,
+            }),
+            HitKind::Overtuned => fx.push(HazardEffect::Overtuned { player: hit.player_id }),
+        }
+    }
+
+    // Batch B: each brain has its own step struct.
+    let mut next = e.pos;
+    match &mut e.brain {
+        Brain::Blight(b) => {
+            let out = crate::rules::enemies::blight::step_blight(&mut next, b, &tick_ctx);
+            for id in out.newly_infected {
+                fx.push(HazardEffect::Infect { player: id });
+            }
+        }
+        Brain::Metronome(b) => {
+            let out = crate::rules::enemies::metronome::step_metronome(&next, b, &tick_ctx);
+            if let Some(id) = out.struck {
+                fx.push(HazardEffect::Kill {
+                    player: id,
+                    cause: DEATH_ENEMY,
+                });
+            }
+        }
+        Brain::Overlook(b) => {
+            let out = crate::rules::enemies::overlook::step_overlook(&mut next, b, &tick_ctx);
+            if out.marked_hit
+                && let Some(id) = b.marked
+            {
+                fx.push(HazardEffect::Kill {
+                    player: id,
+                    cause: DEATH_ENEMY,
+                });
+            }
+        }
+        Brain::Chorus(b) => {
+            // Instrument gifts are spawned by the server from `ChorusStep::instruments_to_spawn`;
+            // the sim has no gift-spawn channel, so the count is left on the brain.
+            let _ = crate::rules::enemies::chorus::step_chorus(&mut next, b, &tick_ctx, 0);
+        }
+        Brain::Coil(b) => {
+            let out = crate::rules::enemies::coil::step_coil(&mut next, b, &tick_ctx);
+            for id in out.overtuned_ids {
+                fx.push(HazardEffect::Overtuned { player: id });
+            }
+        }
+        Brain::Lure(b) => {
+            let out = crate::rules::enemies::lure::step_lure(&mut next, b, &tick_ctx);
+            if let Some(blasts) = out.shockwave {
+                for (player, impulse) in blasts {
+                    fx.push(HazardEffect::Shove {
+                        player,
+                        vel: impulse,
+                        stagger_ticks: 8,
+                    });
+                }
+            }
+        }
+        _ => {}
+    }
+    e.pos = next;
+}
+
 fn step_one(h: &mut Hazards, index: usize, e: &mut Enemy, ctx: &Ctx, fx: &mut Vec<HazardEffect>) {
     if e.knock_ticks > 0 {
         e.pos.x += e.knock_vel.x * DT;
@@ -701,6 +952,12 @@ fn step_one(h: &mut Hazards, index: usize, e: &mut Enemy, ctx: &Ctx, fx: &mut Ve
     }
     if e.active_in > 0 {
         e.active_in -= 1;
+        return;
+    }
+    // The eleven registry brains (T-074 / T-075) own their own step functions and
+    // report through `EnemyAction` / their per-enemy step structs.
+    if is_registry_brain(&e.brain) {
+        step_registry_brain(e, ctx, fx);
         return;
     }
     let id = e.id;
@@ -717,8 +974,7 @@ fn step_one(h: &mut Hazards, index: usize, e: &mut Enemy, ctx: &Ctx, fx: &mut Ve
         Brain::Turret(b) => turret_step(h, &mut e.pos, b, speed_mul, ctx),
         Brain::Mimic(b) => mimic_step(&mut e.pos, b, speed_mul, ctx, fx),
         Brain::Corrupter(b) => corrupter_step(h, &mut e.pos, b, speed_mul, &home, ctx),
-        // The five registry brains are stepped by the server through `Brain::step`
-        // (see `rules::Brain::step`); the sim's hazard pass leaves them where they are.
+        // Unreachable: `is_registry_brain` sends these to `step_registry_brain` above.
         Brain::Rewind(_)
         | Brain::Warden(_)
         | Brain::Peal(_)

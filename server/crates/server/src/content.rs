@@ -5,8 +5,10 @@
 use protocol::Tuning;
 use serde::Deserialize;
 use sim::rules::{
-    BEHAVIOR_CORRUPTER, BEHAVIOR_GALE_WIGHT, BEHAVIOR_LANTERN_LEECH, BEHAVIOR_MIMIC, BEHAVIOR_MOTELING,
-    BEHAVIOR_PALLBEARER, BEHAVIOR_RIFT_WARDEN, BEHAVIOR_SNAPSHRIKE, BEHAVIOR_TURRET, EnemyParams,
+    BEHAVIOR_BLIGHT, BEHAVIOR_CHORUS, BEHAVIOR_COIL, BEHAVIOR_CORRUPTER, BEHAVIOR_GALE_WIGHT, BEHAVIOR_KITE,
+    BEHAVIOR_LANTERN_LEECH, BEHAVIOR_LURE, BEHAVIOR_METRONOME, BEHAVIOR_MIMIC, BEHAVIOR_MOTELING, BEHAVIOR_OVERLOOK,
+    BEHAVIOR_PALLBEARER, BEHAVIOR_PEAL, BEHAVIOR_REWIND, BEHAVIOR_RIFT_WARDEN, BEHAVIOR_SNAPSHRIKE, BEHAVIOR_STATIC,
+    BEHAVIOR_TURRET, BEHAVIOR_WARDEN, EnemyParams,
 };
 use std::collections::BTreeMap;
 
@@ -504,6 +506,17 @@ fn behavior_from_str(s: &str) -> u8 {
         "turret" => BEHAVIOR_TURRET,
         "mimic" => BEHAVIOR_MIMIC,
         "corrupter" => BEHAVIOR_CORRUPTER,
+        "rewind" => BEHAVIOR_REWIND,
+        "warden" => BEHAVIOR_WARDEN,
+        "peal" => BEHAVIOR_PEAL,
+        "kite" => BEHAVIOR_KITE,
+        "static" => BEHAVIOR_STATIC,
+        "blight" => BEHAVIOR_BLIGHT,
+        "metronome" => BEHAVIOR_METRONOME,
+        "overlook" => BEHAVIOR_OVERLOOK,
+        "chorus" => BEHAVIOR_CHORUS,
+        "coil" => BEHAVIOR_COIL,
+        "lure" => BEHAVIOR_LURE,
         _ => BEHAVIOR_PALLBEARER,
     }
 }
@@ -564,6 +577,34 @@ mod tests {
     }
 
     #[test]
+    fn every_enemy_behavior_string_maps_to_its_own_brain() {
+        // The registry's migration note warned that unknown behaviour strings degrade to the
+        // pallbearer brain. That is a silent failure: the enemy spawns, renders and validates, it
+        // just does the wrong thing. Every entry must map to a distinct BEHAVIOR_* constant.
+        let c = Content::load().unwrap();
+        let mut seen = std::collections::BTreeSet::new();
+        for e in &c.enemies {
+            let b = behavior_from_str(&e.params.behavior);
+            assert_eq!(
+                b,
+                behavior_from_str(&e.id),
+                "{}: params.behavior {:?} does not map to its own brain",
+                e.id,
+                e.params.behavior
+            );
+            assert!(
+                seen.insert(b),
+                "{}: behaviour {b} is claimed by more than one enemy",
+                e.id
+            );
+        }
+        assert_eq!(seen.len(), c.enemies.len());
+        assert_eq!(behavior_from_str("pallbearer"), BEHAVIOR_PALLBEARER);
+        assert_eq!(behavior_from_str("lure"), BEHAVIOR_LURE);
+        assert_eq!(behavior_from_str("not_an_enemy"), BEHAVIOR_PALLBEARER);
+    }
+
+    #[test]
     fn enemy_params_apply_curses() {
         let mut m = RunMods::default();
         m.apply(
@@ -605,6 +646,17 @@ mod tests {
             ("turret", BEHAVIOR_TURRET),
             ("mimic", BEHAVIOR_MIMIC),
             ("corrupter", BEHAVIOR_CORRUPTER),
+            ("rewind", BEHAVIOR_REWIND),
+            ("warden", BEHAVIOR_WARDEN),
+            ("peal", BEHAVIOR_PEAL),
+            ("kite", BEHAVIOR_KITE),
+            ("static", BEHAVIOR_STATIC),
+            ("blight", BEHAVIOR_BLIGHT),
+            ("metronome", BEHAVIOR_METRONOME),
+            ("overlook", BEHAVIOR_OVERLOOK),
+            ("chorus", BEHAVIOR_CHORUS),
+            ("coil", BEHAVIOR_COIL),
+            ("lure", BEHAVIOR_LURE),
         ];
         for (name, want) in cases {
             assert_eq!(m.enemy_params(&stats(name)).behavior, want, "{name}");
