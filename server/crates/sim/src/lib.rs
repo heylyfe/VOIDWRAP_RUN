@@ -10,6 +10,7 @@ pub mod controller;
 pub mod hazards;
 pub mod levelgen;
 pub mod levels;
+pub mod pattern;
 pub mod rules;
 pub mod tuning;
 pub mod world;

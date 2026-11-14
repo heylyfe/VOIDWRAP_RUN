@@ -52,6 +52,10 @@ const GIFT_AREA_PER: f32 = 9.0;
 const GIFT_ELEVATED_QUOTA: f32 = 0.2;
 /// Path to the shared chunk catalog, relative to this source file.
 const CHUNK_CATALOG_JSON: &str = include_str!("../../../../design/chunks.json");
+/// Patterns authored by T-070. Merged into the catalog at load time.
+const PATTERNS_A_JSON: &str = include_str!("../../../../design/patterns-a.json");
+/// Patterns authored by T-071. Merged into the catalog at load time.
+const PATTERNS_B_JSON: &str = include_str!("../../../../design/patterns-b.json");
 
 /// Output of a successful generation pass.
 #[derive(Debug, Clone)]
@@ -525,12 +529,94 @@ pub fn parse_catalog(json: &str) -> Result<Catalog, String> {
     Ok(Catalog { version: 1, chunks })
 }
 
-/// The shared catalog, parsed once. A malformed catalog degrades generation to the
-/// built-in fallback map instead of panicking.
+/// Parses the pattern metadata of every chunk in `cat`, in catalog order.
+///
+/// The returned vector is index-aligned with `cat.chunks`: `pattern_metas(cat)[i]`
+/// describes `cat.chunks[i]`. That alignment is what lets a
+/// [`crate::pattern::CompositionPlan`] store catalog indices instead of ids.
+pub fn pattern_metas(cat: &Catalog) -> Vec<crate::pattern::PatternMeta> {
+    cat.chunks
+        .iter()
+        .map(|c| crate::pattern::PatternMeta::from_tags(&c.id, c.role, c.min_level, c.difficulty as u8, &c.tags))
+        .collect()
+}
+
+/// Error returned by [`merge_catalog_json`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CatalogError {
+    /// A source was not valid JSON.
+    Json(String),
+    /// A source did not have the `{ "version": 1, "chunks" | "patterns": [...] }` shape.
+    Shape,
+    /// Two sources declared the same pattern id.
+    DuplicateId(String),
+}
+
+impl std::fmt::Display for CatalogError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CatalogError::Json(message) => write!(f, "catalog source is not valid JSON: {message}"),
+            CatalogError::Shape => write!(
+                f,
+                "catalog source must be {{ \"version\": 1, \"chunks\" | \"patterns\": [ ... ] }}"
+            ),
+            CatalogError::DuplicateId(id) => write!(f, "duplicate pattern id: {id}"),
+        }
+    }
+}
+
+impl std::error::Error for CatalogError {}
+
+/// Merges the three catalog files into one `{ "version": 1, "chunks": [...] }`
+/// document that the existing catalog parser can consume unchanged.
+///
+/// `sources` holds the raw text of `design/chunks.json`, `design/patterns-a.json`
+/// and `design/patterns-b.json`, in that order. Both key names (`chunks` and
+/// `patterns`) are accepted in any source, empty sources are skipped, and a
+/// duplicate `id` across sources is an error — that is the check
+/// `validate-content` reports.
+pub fn merge_catalog_json(sources: &[&str]) -> Result<String, CatalogError> {
+    let mut merged: Vec<serde_json::Value> = Vec::new();
+    let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for source in sources {
+        if source.trim().is_empty() {
+            continue;
+        }
+        let root: serde_json::Value = serde_json::from_str(source).map_err(|e| CatalogError::Json(e.to_string()))?;
+        let entries = root
+            .get("chunks")
+            .or_else(|| root.get("patterns"))
+            .and_then(serde_json::Value::as_array)
+            .ok_or(CatalogError::Shape)?;
+        for entry in entries {
+            let id = entry
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or(CatalogError::Shape)?
+                .to_string();
+            if !seen.insert(id.clone()) {
+                return Err(CatalogError::DuplicateId(id));
+            }
+            merged.push(entry.clone());
+        }
+    }
+    let mut root = serde_json::Map::new();
+    root.insert("version".to_string(), serde_json::Value::from(1));
+    root.insert("chunks".to_string(), serde_json::Value::Array(merged));
+    serde_json::to_string(&serde_json::Value::Object(root)).map_err(|e| CatalogError::Json(e.to_string()))
+}
+
+/// The shared catalog, parsed once from the three catalog files merged into one
+/// document. A malformed catalog degrades generation to the built-in fallback map
+/// instead of panicking.
 fn catalog() -> Result<&'static Catalog, String> {
     static CATALOG: OnceLock<Result<Catalog, String>> = OnceLock::new();
     CATALOG
-        .get_or_init(|| parse_catalog_lenient(CHUNK_CATALOG_JSON))
+        .get_or_init(|| {
+            let merged = merge_catalog_json(&[CHUNK_CATALOG_JSON, PATTERNS_A_JSON, PATTERNS_B_JSON])
+                .map_err(|e| e.to_string())?;
+            parse_catalog_lenient(&merged)
+        })
         .as_ref()
         .map_err(|e| e.clone())
 }
@@ -1584,6 +1670,19 @@ fn assemble_level(
     let tier = level_tier(level);
     let high_rise = event == EVENT_HIGH_RISE;
 
+    // --- T-069 composition plan. Derived from the run seed (not the attempt seed) so every
+    // regeneration attempt of one run walks the same pattern order; the geometry RNG still
+    // varies per attempt. A catalog with no pattern tags yields an empty plan and the walk
+    // keeps the pre-T-069 weighted picks.
+    let metas = pattern_metas(cat);
+    let plan = if metas.iter().any(|m| m.is_tagged()) {
+        crate::pattern::CompositionPlan::build_with_len(&metas, run_seed, level, players, max_chunks, tier)
+    } else {
+        crate::pattern::CompositionPlan::empty(run_seed, level, players)
+    };
+    let mut cursor = plan.cursor();
+    cursor.skip(1); // entry 0 is the hub, placed below
+
     // --- hub at the origin (unrotated).
     let hub_choices: Vec<usize> = cat
         .chunks
@@ -1595,12 +1694,18 @@ fn assemble_level(
     if hub_choices.is_empty() {
         return None;
     }
-    let hub_weights: Vec<f32> = hub_choices
-        .iter()
-        .map(|&i| chunk_weight(&cat.chunks[i], tier, false))
-        .collect();
-    let hub_pick = weighted_pick(&mut rng, &hub_weights)?;
-    let hub_chunk = &cat.chunks[hub_choices[hub_pick]];
+    let hub_ci = match plan.hub_index() {
+        Some(index) if hub_choices.contains(&index) => index,
+        _ => {
+            let hub_weights: Vec<f32> = hub_choices
+                .iter()
+                .map(|&i| chunk_weight(&cat.chunks[i], tier, false))
+                .collect();
+            let hub_pick = weighted_pick(&mut rng, &hub_weights)?;
+            hub_choices[hub_pick]
+        }
+    };
+    let hub_chunk = &cat.chunks[hub_ci];
     let hub_geom = build_geometry(hub_chunk, 0, Vec3::new(0.0, 0.0, 0.0));
     let beacon = hub_geom.beacon?; // hubs are guaranteed a beacon by parse_catalog
     let enemy_spawns = hub_geom.enemy_slots.clone();
@@ -1643,6 +1748,7 @@ fn assemble_level(
             junctions_used,
             max_junctions_u,
             &mut rng,
+            Some(&mut cursor),
         )
         .map(|(p, used)| (oi, p, used));
         if placed.is_none() && consecutive_failures >= 8 {
@@ -1661,6 +1767,7 @@ fn assemble_level(
                     junctions_used,
                     max_junctions_u,
                     &mut rng,
+                    Some(&mut cursor),
                 ) {
                     placed = Some((k, p, used));
                     break;
@@ -2405,9 +2512,15 @@ const BUDGET_ACCEPT: f32 = 0.7;
 /// growth loop when the budget is already at least [`BUDGET_ACCEPT`] filled.
 const STALL_LIMIT: u32 = 48;
 
-/// Tries to place one chunk on `anchor` (up to [`CANDIDATE_TRIALS`] weighted random picks;
-/// each pick checks every socket of that chunk in all four rotations against the coarse
-/// grid). Returns the placement and the index of the chunk socket that joined to `anchor`.
+/// Tries to place one chunk on `anchor` (up to [`CANDIDATE_TRIALS`] picks; each pick
+/// checks every socket of that chunk in all four rotations against the coarse grid).
+/// Returns the placement and the index of the chunk socket that joined to `anchor`.
+///
+/// When `cursor` is `Some`, each pick is the next entry of the T-069 composition plan
+/// that satisfies the role/level/junction predicate; entries that do not fit are
+/// consumed. Once the plan is exhausted (or when `cursor` is `None`) the pick falls
+/// back to today's `chunk_weight` draw, so an untagged catalog behaves exactly as
+/// before.
 #[allow(clippy::too_many_arguments)]
 fn try_place(
     cat: &Catalog,
@@ -2420,31 +2533,41 @@ fn try_place(
     junctions_used: u32,
     max_junctions_u: u32,
     rng: &mut Rng,
+    mut cursor: Option<&mut crate::pattern::PlanCursor<'_>>,
 ) -> Option<(Placement, usize)> {
+    let eligible = |c: &Chunk| {
+        c.min_level <= level
+            && match c.role {
+                ChunkRole::Path => true,
+                ChunkRole::Junction => junctions_used < max_junctions_u,
+                ChunkRole::Hub | ChunkRole::DeadEnd => false,
+            }
+    };
     for _ in 0..CANDIDATE_TRIALS {
-        let eligible: Vec<usize> = cat
-            .chunks
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| {
-                c.min_level <= level
-                    && match c.role {
-                        ChunkRole::Path => true,
-                        ChunkRole::Junction => junctions_used < max_junctions_u,
-                        ChunkRole::Hub | ChunkRole::DeadEnd => false,
-                    }
-            })
-            .map(|(i, _)| i)
-            .collect();
-        if eligible.is_empty() {
-            return None;
-        }
-        let weights: Vec<f32> = eligible
-            .iter()
-            .map(|&i| chunk_weight(&cat.chunks[i], tier, high_rise))
-            .collect();
-        let chosen = weighted_pick(rng, &weights)?;
-        let ci = eligible[chosen];
+        let ci = match cursor
+            .as_mut()
+            .and_then(|cur| cur.next_matching(|i| eligible(&cat.chunks[i])))
+        {
+            Some(i) => i,
+            None => {
+                let choices: Vec<usize> = cat
+                    .chunks
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| eligible(c))
+                    .map(|(i, _)| i)
+                    .collect();
+                if choices.is_empty() {
+                    return None;
+                }
+                let weights: Vec<f32> = choices
+                    .iter()
+                    .map(|&i| chunk_weight(&cat.chunks[i], tier, high_rise))
+                    .collect();
+                let chosen = weighted_pick(rng, &weights)?;
+                choices[chosen]
+            }
+        };
         let chunk = &cat.chunks[ci];
         let mut valid: Vec<(Placement, usize)> = Vec::new();
         for (si, _) in chunk.sockets.iter().enumerate() {

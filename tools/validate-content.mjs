@@ -218,8 +218,39 @@ for (const t of THEMES) {
   range("grain", 0, 0.08); range("scanlines", 0, 0.15);
 }
 
+// Pattern catalogs: design/chunks.json plus the two authored pattern files. Ids must be
+// unique across all three, because the sim crate merges them into one catalog at load time.
+const PATTERN_FILES = ["design/chunks.json", "design/patterns-a.json", "design/patterns-b.json"];
+const patternIds = new Map();
+let patternCount = 0;
+for (const file of PATTERN_FILES) {
+  let doc;
+  try {
+    doc = JSON.parse(readFileSync(file, "utf8"));
+  } catch (e) {
+    if (e.code === "ENOENT") continue; // a missing pattern file is not an error
+    err(`${file}: ${e.message}`);
+    continue;
+  }
+  const list = doc.chunks ?? doc.patterns;
+  if (!Array.isArray(list)) {
+    err(`${file}: expected a "chunks" or "patterns" array`);
+    continue;
+  }
+  for (const entry of list) {
+    patternCount += 1;
+    const id = entry?.id;
+    if (typeof id !== "string" || !ID.test(id)) {
+      err(`${file}: bad pattern id ${JSON.stringify(id)}`);
+      continue;
+    }
+    if (patternIds.has(id)) err(`${file}: duplicate pattern id ${id} (also in ${patternIds.get(id)})`);
+    else patternIds.set(id, file);
+  }
+}
+
 if (errors.length) {
   console.error(`validate-content: ${path}: ${errors.length} problem(s)\n  ${errors.join("\n  ")}`);
   process.exit(1);
 }
-console.log(`validate-content: ${path} ok (${c.enemies.length} enemies, ${c.upgrades.length} upgrades, ${c.curses.length} curses, ${c.classes.length} classes, ${c.shop.length} shop items, ${c.events.length} events, ${(c.milestones ?? []).length} milestones, ${c.altars.length} altars; fastest enemy worst case ${(fastest * worstMul).toFixed(1)} u/s vs player ${PLAYER_SPEED})`);
+console.log(`validate-content: ${path} ok (${c.enemies.length} enemies, ${c.upgrades.length} upgrades, ${c.curses.length} curses, ${c.classes.length} classes, ${c.shop.length} shop items, ${c.events.length} events, ${(c.milestones ?? []).length} milestones, ${c.altars.length} altars, ${patternCount} patterns; fastest enemy worst case ${(fastest * worstMul).toFixed(1)} u/s vs player ${PLAYER_SPEED})`);
