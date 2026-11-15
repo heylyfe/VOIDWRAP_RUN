@@ -1305,3 +1305,92 @@ fall y=-17.21; levels: 1)`.
    always fatal. This is the harshest knob in the game and it is now measurable.
    It is a balance change, so it needs the owner's call — but the *measurement*
    (death rate per level per mode) is a legitimate Cycle 14 ticket.
+
+---
+
+## Refinement Cycle 14 — 2026-11-15
+
+Baseline re-run before any ticket: pattern audit 16/16, economy audit 8/8,
+playthrough 8 pass / 3 skip / 0 fail. All three Cycle 13 candidates taken, in the
+order the log ranked them.
+
+**This cycle changed no game content.** Every ticket is measurement. That is the
+right shape after two cycles of content work: the audits were the thing that had
+drifted, and three of them were passing for reasons that had nothing to do with the
+game being correct.
+
+### T-132 — PASS, `a1278ca`
+
+Three shipped bugs had the same shape: a piece that parses, validates, is counted by
+`validate-content`, and **never reaches a level** — `platform_kind_from_str` missing
+`"TRIPMINE"`, `verify_socket` rejecting ramps, `mech:fork` on a two-socket path. The
+strict-parse count assertion catches the first two. An *eligibility* filter is
+invisible to it, and invisible to every rate metric, because a piece with no
+placements contributes to no rate.
+
+New metric `7.catalog-coverage`: reads the catalog ids from `design/`, collects
+every id that reaches a plan, fails on any id that never appears (and on any plan id
+that is not in the catalog). Negative-tested with a deliberately ineligible pattern —
+it fails and names the offender. Pattern audit **16/16 -> 17/17**.
+
+### T-133 — PASS, `89521b3`
+
+Audited the remaining 7 economy and 16 pattern metrics for the T-126/T-127 shape.
+Four found:
+
+| metric | was | now |
+|---|---|---|
+| `4.greater_curse_rate` | `definitions >= 3` | `drafts over 50 levels in [3, 8]` and `pool >= drafts` |
+| `5.hazard_tags` | `total > 0` | every tag in `>= 20 %` of levels |
+| `7.patterns_per_level` | `median >= 3` | `median in [10, 60]` |
+| `3.pedestal_pool` | `pool@1 >= 3` | 6 conditions across levels 1/10/20 + capacity |
+
+`4.greater_curse_rate` was the worst: named `_rate`, measured a count of
+*definitions*, so a run could reach level 50 without ever being offered one and the
+metric would pass. Both new bands negative-tested — a degraded greater-curse pool
+fails, and stripping hazard tags drops `hazard:fog` to 19.3 % of levels and fails.
+
+### T-134 — PASS, `84aa8d2`
+
+`6.enemy-frequencies.never-offered` reported **PASS** whenever the roster was absent,
+and the roster is always absent because the dump carries generic `spawn` markers, not
+enemy types. A metric that can never fail, printed as a pass, is worse than no
+metric: it looks like coverage.
+
+The pattern audit gained a `SKIP` line type and uses it there, naming the check that
+can measure the thing. That check is `3.pedestal_pool` in the economy audit, which
+already reads the registry: **every enemy must be reachable by level 20 in all four
+modes, and every enemy must have `selection_cap >= 1`**. Negative-tested with
+`min_level = 40` and `selection_cap = 0`; both fail and name the offenders.
+
+### Gates
+
+`just verify` green: 246 sim tests, 151 server tests, 317 vitest (36 files), clippy
+`-D warnings`, protocol-gen `--check`, check-names (639 files), validate-content
+(20 enemies, 10 upgrades, 19 curses, 4 classes, 34 shop items, 3 events,
+15 milestones, 4 altars, 10 achievements, 140 patterns).
+
+`just verify-live --port 7979` **PASS 5/5**. Pattern audit **17 lines, 0 failed,
+1 skipped**. Economy audit **8/8**. Voting real smoke **3/3**. Playthrough
+**8 pass / 3 skip / 0 fail**.
+
+### Release
+
+`v0.26.0-alpha.1`.
+
+### Top 3 candidates for Cycle 15
+
+1. **The playthrough bot's edge handling.** T-130 proved the bots fall off the map
+   and the game is not killing them unfairly. The death log now records position and
+   velocity at the moment of death, so the next attempt can distinguish "fell at an
+   edge" (no ground probe) from "fell at a seam" (probe says ground, collision
+   disagrees). Those have different fixes, and the log can tell them apart.
+2. **`5.heights` at 3.59 % against a 5 % ceiling.** This is the last metric with a
+   threshold that was *raised* rather than fixed (2 % -> 5 % by owner decision in
+   T-119). The offending heights live in the frozen `design/chunks.json`. Worth
+   measuring which chunks contribute and whether any of them are cheap to fix.
+3. **The `1.pattern-repeat.within-level` ceiling of 35 %.** Measured 10.42 %, so
+   there is 3.4x headroom. Either the ceiling is far too loose or the composition
+   engine is far better than the metric expects. Worth measuring what redundancy
+   would look like if the bag's `recent_divisor` were relaxed — that is a real
+   variety knob, not just a threshold.

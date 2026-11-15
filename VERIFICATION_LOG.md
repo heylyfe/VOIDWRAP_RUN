@@ -1116,3 +1116,39 @@ audit **8/8**. Voting real smoke **3/3**. Playthrough **8 pass / 3 skip /
 ### Release
 
 `v0.25.0-alpha.1`.
+
+## Refinement Cycle 14 — `v0.26.0-alpha.1`
+
+A measurement-only cycle: no game content changed. Three audits were passing for
+reasons unrelated to the game being correct.
+
+| Ticket | Verdict | Commit | Evidence |
+|---|---|---|---|
+| T-132 catalog coverage | **PASS** | `a1278ca` | new `7.catalog-coverage`; 140/140 patterns reach a plan; negative-tested |
+| T-133 metric thresholds | **PASS** | `89521b3` | 4 metrics tightened; both new bands negative-tested |
+| T-134 enemy registry coverage | **PASS** | `84aa8d2` | dead check -> SKIP; every enemy reachable by level 20, cap >= 1, all 4 modes |
+| T-135 regression gate | **PASS** | this commit | every kit re-run, no regressions |
+
+### Gates
+
+`just verify` green: 246 sim, 151 server, 317 vitest (36 files), clippy
+`-D warnings`, protocol-gen `--check`, check-names (639 files), validate-content
+(20 enemies, 10 upgrades, 19 curses, 4 classes, 34 shop items, 3 events,
+15 milestones, 4 altars, 10 achievements, 140 patterns).
+
+`just verify-live --port 7979` **PASS 5/5**. Pattern audit **17 lines, 0 failed,
+1 skipped**. Economy audit **8/8**. Voting real smoke **3/3**. Playthrough
+**8 pass / 3 skip / 0 fail**.
+
+### Parked
+
+- Playthrough `level-progression` / `vote` / `shop` stay skipped: the bots fall off
+  the map before level 2 (T-130). The death log now distinguishes an edge fall from
+  a seam fall, which is the next attempt's starting point.
+- `ch04_twin_terrace` / `ch06_descent_of_sighs` / `ch15_tri_crown` remain outside the
+  reference band, all ramp-forced.
+- Starting lives = 0 is a balance decision, still the top tuning note.
+
+### Release
+
+`v0.26.0-alpha.1`.
