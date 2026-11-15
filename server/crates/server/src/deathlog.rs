@@ -5,12 +5,30 @@
 //!
 //! ```json
 //! {"tick":812,"level":3,"player":2,"cause":0,"x":4.5,"y":-17.2,"z":-9.0,
-//!  "vx":0.0,"vy":-14.8,"vz":0.0,"kill_y":-16.0,"lives":1,"out":false}
+//!  "vx":0.0,"vy":-14.8,"vz":0.0,"kill_y":-16.0,"lives":1,"out":false,
+//!  "note":"void","seed":7,"ground_dist":0.0,"ground_inset":0.12}
 //! ```
 //!
 //! `cause` is the protocol death constant (`DEATH_VOID` = 0, `DEATH_ENEMY` = 1).
 //! `out` is true when the death ended the run for that player (no spare lives left)
 //! rather than costing a shared life.
+//!
+//! `ground_dist` and `ground_inset` are what separate the two ways a player falls,
+//! and they are measured at the **last position where the player had ground
+//! contact**, not at the death position. That distinction matters: a fall from a
+//! platform at y=0 to a kill plane at y=-16 takes about a second, during which a
+//! player moving 6 u/s drifts 6 u sideways. Measuring at the death position would
+//! report that drift as distance from the platform and make every fall look like an
+//! edge fall. Measuring where they left the ground does not.
+//!
+//! - `ground_dist` is the horizontal distance from that last grounded position to
+//!   the nearest platform footprint. It is ~0 whenever the player was standing on
+//!   something, which is the normal case.
+//! - `ground_inset` is how far *inside* that platform's footprint the position was:
+//!   the distance to the nearest of its four sides. A player who walked off the
+//!   edge left from `inset` ~0. A player who fell through a seam left from well
+//!   inside the platform, so a large `inset` on a void death is the signature of a
+//!   collision bug rather than a navigation one.
 //!
 //! This exists because the playthrough harness could see *that* its bots died but
 //! not *where* or *why*: the snapshot carries position, not cause, and the server's
@@ -27,9 +45,6 @@ use std::sync::{Mutex, OnceLock};
 use protocol::Vec3;
 
 /// The open log file, or `None` when `VOIDWRAP_DEATH_LOG` is unset.
-///
-/// `Err` records that the path was configured but could not be opened, so the
-/// warning is emitted once instead of on every death.
 fn sink() -> &'static Option<Mutex<File>> {
     static SINK: OnceLock<Option<Mutex<File>>> = OnceLock::new();
     SINK.get_or_init(|| {
@@ -70,6 +85,12 @@ pub struct Death<'a> {
     pub out: bool,
     /// Free-form tag for the caller's own context (e.g. "void", "enemy", "spare").
     pub note: &'a str,
+    /// The run seed, so a death can be replayed against the same level.
+    pub seed: u32,
+    /// Horizontal distance from the last grounded position to the nearest platform footprint.
+    pub ground_dist: f32,
+    /// How far inside that platform's footprint the last grounded position was.
+    pub ground_inset: f32,
 }
 
 /// Append one death to the log. A no-op when the log is disabled.
@@ -77,8 +98,11 @@ pub fn record(d: Death<'_>) {
     let Some(sink) = sink() else { return };
     let Ok(mut file) = sink.lock() else { return };
     let line = format!(
-        "{{\"tick\":{},\"level\":{},\"player\":{},\"cause\":{},\"x\":{:.3},\"y\":{:.3},\"z\":{:.3},\
-         \"vx\":{:.3},\"vy\":{:.3},\"vz\":{:.3},\"kill_y\":{:.3},\"lives\":{},\"out\":{},\"note\":\"{}\"}}\n",
+        concat!(
+            "{{\"tick\":{},\"level\":{},\"player\":{},\"cause\":{},\"x\":{:.3},\"y\":{:.3},\"z\":{:.3},",
+            "\"vx\":{:.3},\"vy\":{:.3},\"vz\":{:.3},\"kill_y\":{:.3},\"lives\":{},\"out\":{},",
+            "\"note\":\"{}\",\"seed\":{},\"ground_dist\":{:.3},\"ground_inset\":{:.3}}}\n"
+        ),
         d.tick,
         d.level,
         d.player,
@@ -93,6 +117,9 @@ pub fn record(d: Death<'_>) {
         d.lives,
         d.out,
         d.note,
+        d.seed,
+        d.ground_dist,
+        d.ground_inset,
     );
     // A diagnostic must never take the tick loop down.
     if let Err(err) = file.write_all(line.as_bytes()) {
@@ -119,6 +146,9 @@ mod tests {
             lives: 0,
             out: true,
             note: "test",
+            seed: 1,
+            ground_dist: 0.0,
+            ground_inset: 0.0,
         });
     }
 }

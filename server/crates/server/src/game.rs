@@ -89,6 +89,11 @@ struct Player {
     wreath: Option<sim::greater::Wreath>,
     /// Ticks of Tithe's slow left (T-084).
     tithe_slow: sim::greater::TitheSlow,
+    /// Where this player last had ground contact (T-136). A fall is measured from
+    /// here, not from the death position: a 16 u drop takes about a second, and a
+    /// player moving 6 u/s drifts 6 u sideways in that time, which would make every
+    /// fall look like an edge fall.
+    last_ground: Vec3,
 }
 
 impl Player {
@@ -498,6 +503,7 @@ impl Game {
                         pad_launched: false,
                         wreath: None,
                         tithe_slow: sim::greater::TitheSlow::default(),
+                        last_ground: Vec3::ZERO,
                     });
                 }
                 self.send(
@@ -807,6 +813,11 @@ impl Game {
                 }
             } else {
                 p.starved_ticks = 0;
+            }
+            // T-136: remember where ground contact was last real, so a fall can be
+            // measured from the edge the player actually left.
+            if p.state.grounded {
+                p.last_ground = p.state.pos;
             }
         }
         for (upgrade, curse) in altar_notices {
@@ -1122,6 +1133,10 @@ impl Game {
             // harness could see that its bots died but not what killed them, which is
             // why the level-progression, vote and shop checks stayed parked.
             let out = self.run.lives == 0;
+            // T-136: how far the nearest platform footprint is, so the log can tell an
+            // edge fall (nothing nearby) from a seam fall (a platform right there that
+            // the collision layer did not catch).
+            let (ground_dist, ground_inset) = nearest_platform(&self.run.world, p.last_ground);
             deathlog::record(deathlog::Death {
                 tick: self.tick,
                 level: self.run.level_num,
@@ -1133,6 +1148,9 @@ impl Game {
                 lives: self.run.lives,
                 out,
                 note: if cause == DEATH_VOID { "void" } else { "enemy" },
+                seed: self.run.seed,
+                ground_dist,
+                ground_inset,
             });
             if self.run.lives > 0 {
                 self.run.lives -= 1;
@@ -1282,6 +1300,32 @@ pub async fn run(mut rx: mpsc::Receiver<GameEvent>, mut game: Game, game_state: 
             },
         }
     }
+}
+
+/// Nearest platform footprint to `pos`: horizontal distance to its XZ bounds, and
+/// that platform's top height minus `pos.y`.
+///
+/// A death with `dist` near zero means a platform was directly overhead or beside the
+/// player and the collision layer still let them through -- a seam bug. A death with
+/// a large `dist` means they walked off the map -- a navigation bug. T-136.
+fn nearest_platform(world: &sim::world::World, pos: Vec3) -> (f32, f32) {
+    let mut best = (f32::INFINITY, 0.0_f32);
+    for platform in &world.platforms {
+        let b = &platform.bounds;
+        let dx = (b.min.x - pos.x).max(pos.x - b.max.x).max(0.0);
+        let dz = (b.min.z - pos.z).max(pos.z - b.max.z).max(0.0);
+        let dist = (dx * dx + dz * dz).sqrt();
+        if dist < best.0 {
+            // How far inside the footprint: the distance to the nearest of the four
+            // sides. Negative when the point is outside, which `dist` already covers.
+            let inset = (pos.x - b.min.x)
+                .min(b.max.x - pos.x)
+                .min(pos.z - b.min.z)
+                .min(b.max.z - pos.z);
+            best = (dist, inset);
+        }
+    }
+    best
 }
 
 #[cfg(test)]
