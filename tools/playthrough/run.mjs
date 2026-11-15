@@ -1497,6 +1497,19 @@ async function main() {
       ? 'Draft frames: ' + drafts + ', answered: ' + draftAnswers
       : 'skipped: the run was not in the first lobby when the clients joined, so no draft '
         + 'was due (Restart only resets a run that is over)');
+  // T-159/T-161: the pre-match poll gates the level-1 draft, so a bot that never answers it
+  // never gets a level. The bot has answered `PollOpen` since T-159, but nothing reported it,
+  // which made the poll a check that could not fail: a live sweep exercised it silently and a
+  // regression would have shown up only as a mysterious missing level. Two questions are asked
+  // (theme, then difficulty), so the floor is two opens and two answers.
+  const pollOpens = all.filter((m) => m.variant === 'PollOpen').length;
+  const pollResults = all.filter((m) => m.variant === 'PollResult').length;
+  const pollAnswers = clients.reduce((n, c) => n + (c.polls || 0), 0);
+  push('poll', firstLobby ? pollOpens >= 2 && pollAnswers >= 2 && pollResults >= 2 : null,
+    firstLobby
+      ? 'PollOpen frames: ' + pollOpens + ', answered: ' + pollAnswers
+        + ', PollResult frames: ' + pollResults + ' (expected 2 of each: theme then difficulty)'
+      : 'skipped: the run was not in the first lobby when the clients joined, so no poll was due');
   gate('vote', variants.has('VoteOpen'), 'VoteOpen frames: ' + all.filter((m) => m.variant === 'VoteOpen').length);
   gate('shop', variants.has('Shop'), 'Shop frames: ' + all.filter((m) => m.variant === 'Shop').length);
   push('phase-coverage', phases.size >= 2, 'distinct phases: ' + phases.size + ' [' + [...phases].join(',') + ']');
