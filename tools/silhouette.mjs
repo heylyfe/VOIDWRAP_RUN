@@ -387,7 +387,9 @@ async function main() {
           maxIou: MAX_IOU,
           minFill: MIN_FILL,
           measured: measured.map(({ mask, shape, ...rest }) => rest),
-          pairs: pairs.slice(0, 40),
+          // All 190 pairs, so a specific pair can be looked up from the artifact
+          // instead of re-running the capture (T-157 needed peal/coil by name).
+          pairs,
         },
         null,
         2,

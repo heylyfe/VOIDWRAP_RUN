@@ -71,6 +71,15 @@ export function isEnemyKind(kind: number): boolean {
 }
 
 /** Unknown/missing kinds fall back to the pallbearer look (never crash a render). */
+/**
+ * Look for a behaviour id. The Blender-authored models (T-157) need their accent at
+ * runtime rather than as a literal in the .tsx, so the palette table stays the single
+ * source of truth for emissive trim.
+ */
+export function enemyLookForBehavior(behavior: EnemyBehaviorId): EnemyLook {
+  return ENEMY_LOOKS.find((l) => l.behavior === behavior) ?? FALLBACK_LOOK;
+}
+
 export function enemyLookFor(kind: number | undefined): EnemyLook {
   if (kind === undefined) return FALLBACK_LOOK;
   const look = ENEMY_LOOKS[kind];

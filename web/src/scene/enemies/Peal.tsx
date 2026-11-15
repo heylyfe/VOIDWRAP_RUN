@@ -1,29 +1,61 @@
 "use client";
 
-import { useRef } from "react";
+import { Suspense, useRef } from "react";
 import type { JSX } from "react";
 import { useFrame } from "@react-three/fiber";
+import { useGLTF } from "@react-three/drei";
 import type { Group, Mesh, MeshStandardMaterial } from "three";
-import { DoubleSide } from "three";
 import { ENEMY_ATTACK, ENEMY_DORMANT, ENEMY_TELEGRAPH } from "@/protocol/generated";
 import type { EnemyModelProps } from "../enemyLook";
-import { clamp01, prog01, yawToward } from "../enemyLook";
+import { clamp01, enemyLookForBehavior, prog01, yawToward } from "../enemyLook";
 
-const SHELL_H = 1.15;
+const MODEL_URL = "/models/peal.glb";
+const LOOK = enemyLookForBehavior("peal");
+
+/** A glTF node's translation as an R3F position tuple. */
+function at(node: Mesh): [number, number, number] {
+  return [node.position.x, node.position.y, node.position.z];
+}
 
 /**
- * Peal — a bronze bell whose two shell halves swing open at the lip as the ring
- * charges. Accent #9d0208 (oxblood bell-mouth). Unit-radius model; the parent scales by
- * body radius. Idle: slow sway. Telegraph (PEAL): lip opens and the mouth glows.
- * Attack (the ring): the shell clangs through a full open-shut arc.
+ * Peal — a wide squat bronze bell whose two shell halves swing apart at the lip as
+ * the ring charges. Accent #9d0208 (oxblood bell-mouth).
+ *
+ * T-157 rebuilt the silhouette: the old tall column read as the same shape as Coil
+ * (fixed-frame IoU 0.780 against a roster p90 of 0.432). It is now a squat flared
+ * trapezoid with the clapper hanging clear below the lip, so the outline has a
+ * bottom-centre tail nothing else in the roster has.
+ *
+ * The geometry is authored in `tools/blender/scripts/peal.py` and exported to
+ * `web/public/models/peal.glb`; the script is the source of truth and the `.glb` is a
+ * committed build artifact. Blender is not a CI dependency. The animation below is
+ * unchanged in intent and drives the named nodes that script emits.
  */
 export function Peal({ anim }: EnemyModelProps): JSX.Element {
+  // The glb is fetched, so the first frame suspends. Without this boundary a single
+  // unloaded model would blank the whole canvas.
+  return (
+    <Suspense fallback={null}>
+      <PealModel anim={anim} />
+    </Suspense>
+  );
+}
+
+function PealModel({ anim }: EnemyModelProps): JSX.Element {
+  const { nodes } = useGLTF(MODEL_URL);
+  const shellL = nodes.peal_shell_l as Mesh;
+  const shellR = nodes.peal_shell_r as Mesh;
+  const clapper = nodes.peal_clapper as Mesh;
+  const lip = nodes.peal_lip as Mesh;
+  const glow = nodes.peal_glow as Mesh;
+  const crown = nodes.peal_crown as Mesh;
+
   const root = useRef<Group>(null);
   const inner = useRef<Group>(null);
-  const leftHalf = useRef<Group>(null);
-  const rightHalf = useRef<Group>(null);
-  const clapper = useRef<Group>(null);
-  const lipMesh = useRef<Mesh>(null);
+  const shellLRef = useRef<Group>(null);
+  const shellRRef = useRef<Group>(null);
+  const clapperRef = useRef<Group>(null);
+  const lipRef = useRef<Mesh>(null);
   const lipMat = useRef<MeshStandardMaterial>(null);
   const glowMat = useRef<MeshStandardMaterial>(null);
   const shellMats = useRef<(MeshStandardMaterial | null)[]>([]);
@@ -44,34 +76,29 @@ export function Peal({ anim }: EnemyModelProps): JSX.Element {
       r.rotation.y = yawToward(a.ex, a.ez, a.tx, a.tz);
     }
 
-    // How open the mouth is: telegraph winds it open; attack clangs open→shut.
-    const open = telegraph
-      ? p
-      : attack
-        ? Math.sin(clamp01(p) * Math.PI)
-        : 0;
+    // How open the mouth is: telegraph winds it open; attack clangs open then shut.
+    const open = telegraph ? p : attack ? Math.sin(clamp01(p) * Math.PI) : 0;
 
-    if (leftHalf.current) leftHalf.current.rotation.z = -open * 0.42;
-    if (rightHalf.current) rightHalf.current.rotation.z = open * 0.42;
+    if (shellLRef.current) shellLRef.current.rotation.z = -open * 0.42;
+    if (shellRRef.current) shellRRef.current.rotation.z = open * 0.42;
     if (inner.current) {
       inner.current.position.y = Math.sin(t * 1.7) * 0.06;
       inner.current.rotation.x = winding ? -p * 0.22 : 0;
       inner.current.rotation.z = Math.sin(t * 0.8) * 0.03;
     }
-    if (clapper.current) {
-      clapper.current.rotation.z = Math.sin(t * (winding ? 11 : 1.6)) *
-        (winding ? 0.35 + p * 0.75 : 0.12);
+    if (clapperRef.current) {
+      clapperRef.current.rotation.z =
+        Math.sin(t * (winding ? 11 : 1.6)) * (winding ? 0.35 + p * 0.75 : 0.12);
     }
-    if (lipMesh.current) {
+    if (lipRef.current) {
+      // The lip ring lies in the XZ plane after the glTF Y-up conversion.
       const s = 1 + open * 0.18;
-      lipMesh.current.scale.set(s, s, 1);
+      lipRef.current.scale.set(s, 1, s);
     }
     if (lipMat.current) {
-      lipMat.current.emissiveIntensity =
-        (0.9 + Math.sin(t * 2.6) * 0.25 + open * 3.2) * dim;
+      lipMat.current.emissiveIntensity = (0.9 + Math.sin(t * 2.6) * 0.25 + open * 3.2) * dim;
     }
     if (glowMat.current) {
-      glowMat.current.opacity = (0.18 + open * 0.72) * dim;
       glowMat.current.emissiveIntensity = (1 + open * 2.6) * dim;
     }
     for (const m of shellMats.current) {
@@ -84,77 +111,60 @@ export function Peal({ anim }: EnemyModelProps): JSX.Element {
       ref={(m) => {
         shellMats.current[slot] = m;
       }}
-      color="#2a2118"
-      emissive="#9d0208"
+      color="#a8845a"
+      emissive={LOOK.accent}
       emissiveIntensity={0.18}
-      roughness={0.35}
-      metalness={0.75}
-      side={DoubleSide}
+      roughness={0.45}
+      metalness={0.55}
     />
   );
 
   return (
     <group ref={root}>
       <group ref={inner}>
-        {/* crown */}
-        <mesh position={[0, 0.66, 0]}>
-          <cylinderGeometry args={[0.09, 0.14, 0.22, 10]} />
-          <meshStandardMaterial color="#3a2c1c" roughness={0.4} metalness={0.8} />
-        </mesh>
-        <mesh position={[0, 0.82, 0]}>
-          <sphereGeometry args={[0.085, 10, 8]} />
-          <meshStandardMaterial color="#4a3823" roughness={0.35} metalness={0.85} />
+        <mesh geometry={crown.geometry} position={at(crown)}>
+          <meshStandardMaterial
+            color="#9d0208"
+            emissive={LOOK.accent}
+            emissiveIntensity={2.5}
+            roughness={0.45}
+            metalness={0.55}
+            toneMapped={false}
+          />
         </mesh>
         {/* two shell halves, pivoting at the crown so the lip splays open */}
-        <group ref={leftHalf} position={[0, 0.56, 0]}>
-          <mesh position={[0, -SHELL_H / 2, 0]}>
-            <cylinderGeometry args={[0.24, 0.62, SHELL_H, 12, 1, true, 0, Math.PI]} />
-            {shellMaterial(0)}
-          </mesh>
+        <group ref={shellLRef} position={at(shellL)}>
+          <mesh geometry={shellL.geometry}>{shellMaterial(0)}</mesh>
         </group>
-        <group ref={rightHalf} position={[0, 0.56, 0]}>
-          <mesh position={[0, -SHELL_H / 2, 0]}>
-            <cylinderGeometry args={[0.24, 0.62, SHELL_H, 12, 1, true, Math.PI, Math.PI]} />
-            {shellMaterial(1)}
-          </mesh>
+        <group ref={shellRRef} position={at(shellR)}>
+          <mesh geometry={shellR.geometry}>{shellMaterial(1)}</mesh>
         </group>
         {/* lip ring — the mouth rim */}
-        <mesh ref={lipMesh} position={[0, 0.56 - SHELL_H, 0]} rotation={[Math.PI / 2, 0, 0]}>
-          <torusGeometry args={[0.62, 0.075, 10, 24]} />
+        <mesh ref={lipRef} geometry={lip.geometry} position={at(lip)}>
           <meshStandardMaterial
             ref={lipMat}
-            color="#33241a"
-            emissive="#9d0208"
+            color="#7a6242"
+            emissive={LOOK.accent}
             emissiveIntensity={0.9}
-            roughness={0.3}
-            metalness={0.8}
+            roughness={0.55}
+            metalness={0.45}
             toneMapped={false}
           />
         </mesh>
         {/* inner mouth glow */}
-        <mesh position={[0, 0.56 - SHELL_H + 0.02, 0]} rotation={[Math.PI / 2, 0, 0]}>
-          <circleGeometry args={[0.5, 20]} />
+        <mesh geometry={glow.geometry} position={at(glow)}>
           <meshStandardMaterial
             ref={glowMat}
-            color="#1a0505"
-            emissive="#ffb0a8"
+            color="#ffd9a0"
+            emissive={LOOK.glow}
             emissiveIntensity={1}
-            transparent
-            opacity={0.2}
-            side={DoubleSide}
             toneMapped={false}
-            depthWrite={false}
           />
         </mesh>
-        {/* clapper */}
-        <group ref={clapper} position={[0, 0.45, 0]}>
-          <mesh position={[0, -0.375, 0]}>
-            <cylinderGeometry args={[0.035, 0.035, 0.75, 6]} />
-            <meshStandardMaterial color="#20160e" roughness={0.45} metalness={0.7} />
-          </mesh>
-          <mesh position={[0, -0.78, 0]}>
-            <sphereGeometry args={[0.14, 10, 8]} />
-            <meshStandardMaterial color="#241a10" roughness={0.4} metalness={0.75} />
+        {/* clapper — hangs clear of the lip, which is what gives the outline its tail */}
+        <group ref={clapperRef} position={at(clapper)}>
+          <mesh geometry={clapper.geometry}>
+            <meshStandardMaterial color="#7a6242" roughness={0.55} metalness={0.45} />
           </mesh>
         </group>
       </group>
