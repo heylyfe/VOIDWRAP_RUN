@@ -27,6 +27,14 @@ import type { LevelData, Platform, TileState, Vec3 } from "@/protocol/generated"
 import { useGameStore } from "@/game/store";
 import { COMMON } from "./theme";
 import { isStragglerWindow } from "./straggler";
+import {
+  BEAM_COLOR,
+  GOLD_BODY,
+  GOLD_BOW,
+  GOLD_EMISSIVE,
+  GOLD_RIBBON,
+  SPARKLE_COLOR,
+} from "./giftPalette";
 
 /** Side length of a gift (design: 0.34 u). Golden gifts are identical in size. */
 const GIFT_SIZE = 0.34;
@@ -38,10 +46,6 @@ const SPIN_RAD_PER_S = 0.9;
 const SPARKLE_LIFT = 0.34;
 const SPARKLE_RADIUS = 0.085;
 
-const GOLD_BODY = "#ffd75e";
-const GOLD_RIBBON = "#8f6a10";
-const GOLD_BOW = "#fff6c8";
-const GOLD_EMISSIVE = "#ffc63f";
 const GOLD_EMISSIVE_INTENSITY = 1.5;
 /**
  * Normal gifts now glow like golden ones (DO 1): pushed above 1.0 so the
@@ -50,17 +54,19 @@ const GOLD_EMISSIVE_INTENSITY = 1.5;
  * sparkle so they remain distinct.
  */
 const NORMAL_EMISSIVE_INTENSITY = 1.35;
-const SPARKLE_COLOR = "#fff3b0";
 /**
  * T-112: when at most this fraction of a level's normal gifts is left, every
  * remaining gift gets a vertical beam so the endgame is not "wander an empty level
- * looking for one gift". A beam, not a colour change: colour already carries
- * normal-vs-golden, and LURE's shimmer wears the normal glow (JUDGMENT CALL 2), so
- * a third colour would collide with both.
+ * looking for one gift".
+ *
+ * T-146: the beam has its own colour (`giftPalette.BEAM_COLOR`). It used to be
+ * `#dfe6ff`, byte-identical to the normal gift glow and therefore to LURE's shimmer --
+ * so the marker that says "this one is real" wore the fake's colour. The beam's colour
+ * is now measured against the normal glow, the golden gift, the beacon and every enemy
+ * accent in `giftPalette.test.ts`.
  */
 const BEAM_WIDTH = 0.07;
 const BEAM_HEIGHT = 7;
-const BEAM_COLOR = "#dfe6ff";
 
 interface GiftAssets {
   box: BoxGeometry;
