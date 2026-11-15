@@ -236,6 +236,14 @@
     "PLATFORM_RAMP_NZ": [
       "u8",
       6
+    ],
+    "PLATFORM_TRAMPOLINE": [
+      "u8",
+      7
+    ],
+    "PLATFORM_TRIPMINE": [
+      "u8",
+      8
     ]
   },
   "types": [
@@ -558,7 +566,7 @@
     },
     {
       "name": "RunSummary",
-      "$comment": "End-of-run stats. cause is one of DEATH_VOID / DEATH_ENEMY.",
+      "$comment": "End-of-run stats. cause is one of DEATH_VOID / DEATH_ENEMY. code is the cosmetic death-screen code drawn from the achievement pool (empty when none was earned).",
       "struct": [
         [
           "level_reached",
@@ -571,6 +579,10 @@
         [
           "cause",
           "u8"
+        ],
+        [
+          "code",
+          "string"
         ]
       ]
     },
@@ -1205,7 +1217,8 @@
           "summary": {
             "level_reached": 12,
             "gifts_collected": 57,
-            "cause": 1
+            "cause": 1,
+            "code": "VW-ALPHA-0001"
           }
         }
       }

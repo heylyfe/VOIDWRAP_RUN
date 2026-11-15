@@ -62,6 +62,8 @@ pub const PLATFORM_RAMP_PX: u8 = 3;
 pub const PLATFORM_RAMP_NX: u8 = 4;
 pub const PLATFORM_RAMP_PZ: u8 = 5;
 pub const PLATFORM_RAMP_NZ: u8 = 6;
+pub const PLATFORM_TRAMPOLINE: u8 = 7;
+pub const PLATFORM_TRIPMINE: u8 = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Vec3 {
@@ -181,12 +183,13 @@ pub struct ShopItem {
     pub stock: u8,
 }
 
-/// End-of-run stats. cause is one of DEATH_VOID / DEATH_ENEMY.
+/// End-of-run stats. cause is one of DEATH_VOID / DEATH_ENEMY. code is the cosmetic death-screen code drawn from the achievement pool (empty when none was earned).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunSummary {
     pub level_reached: u32,
     pub gifts_collected: u32,
     pub cause: u8,
+    pub code: String,
 }
 
 /// Movement multipliers from upgrades/curses. Applied identically by the server and the WASM predictor. friction_mul scales ground acceleration/braking (EVENT_ICE lowers it).

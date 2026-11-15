@@ -919,6 +919,32 @@ pub struct Run {
 }
 
 impl Run {
+    /// A cosmetic death-screen code (T-088): deterministic from the run seed, the level reached
+    /// and the cause of death, so the same death always shows the same code. Not a secret and
+    /// not redeemable for gameplay — it is a flourish the player can share.
+    pub fn death_code(&self, cause: u8) -> String {
+        const ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in (self.seed as u64)
+            .to_le_bytes()
+            .iter()
+            .chain((self.level_num as u64).to_le_bytes().iter())
+            .chain([cause].iter())
+        {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        let mut out = String::from("VW-");
+        for i in 0..8 {
+            if i == 4 {
+                out.push('-');
+            }
+            let idx = ((h >> (i * 5)) % ALPHABET.len() as u64) as usize;
+            out.push(ALPHABET[idx] as char);
+        }
+        out
+    }
+
     /// A new run, waiting in the lobby for the start-of-run draft.
     pub fn new(content: &Content, seed: u32, start_level: u32) -> Self {
         let level = levelgen::hub();

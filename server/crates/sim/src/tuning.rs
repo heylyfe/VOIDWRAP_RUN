@@ -70,6 +70,13 @@ pub const PAD_LAUNCH_VEL: f32 = 16.0;
 /// PLATFORM_JUMP_PAD: multiplier applied to horizontal velocity on launch.
 pub const PAD_HORIZONTAL_VEL_MUL: f32 = 0.6;
 
+/// PLATFORM_TRAMPOLINE: vertical launch velocity applied on contact (units/s). Higher than a jump
+/// pad so it opens vertical routes a pad cannot.
+pub const TRAMPOLINE_LAUNCH_VEL: f32 = 26.0;
+/// PLATFORM_TRAMPOLINE: multiplier applied to horizontal velocity on launch. Above 1.0 so the arc
+/// carries further than the run-up, unlike a pad which kills horizontal speed.
+pub const TRAMPOLINE_HORIZONTAL_VEL_MUL: f32 = 1.15;
+
 /// TILE_FRETTED: multiplier applied to the ground run speed while standing on a fretted platform.
 pub const FRETTED_SPEED_MUL: f32 = 0.6;
 

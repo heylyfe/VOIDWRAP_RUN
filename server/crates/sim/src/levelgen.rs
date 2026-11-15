@@ -329,12 +329,13 @@ fn vec3(v: [f32; 3]) -> Vec3 {
 
 /// Map a level-file platform kind name to its `PLATFORM_*` constant.
 ///
-/// Recognised names are `NORMAL`, `CRUMBLE`, `JUMP_PAD`, `RAMP_PX`, `RAMP_NX`,
-/// `RAMP_PZ` and `RAMP_NZ`. Anything else falls back to `PLATFORM_NORMAL`.
+/// Recognised names are `NORMAL`, `CRUMBLE`, `JUMP_PAD`, `TRAMPOLINE`, `RAMP_PX`,
+/// `RAMP_NX`, `RAMP_PZ` and `RAMP_NZ`. Anything else falls back to `PLATFORM_NORMAL`.
 fn platform_kind_from_str(name: &str) -> Option<u8> {
     match name {
         "CRUMBLE" => Some(protocol::PLATFORM_CRUMBLE),
         "JUMP_PAD" => Some(protocol::PLATFORM_JUMP_PAD),
+        "TRAMPOLINE" => Some(protocol::PLATFORM_TRAMPOLINE),
         "RAMP_PX" => Some(protocol::PLATFORM_RAMP_PX),
         "RAMP_NX" => Some(protocol::PLATFORM_RAMP_NX),
         "RAMP_PZ" => Some(protocol::PLATFORM_RAMP_PZ),
@@ -2295,7 +2296,12 @@ pub fn validate(level: &LevelData) -> Result<(), String> {
 
     // Kinds.
     for p in platforms {
-        if p.kind != PLATFORM_NORMAL && p.kind != PLATFORM_CRUMBLE && p.kind != PLATFORM_JUMP_PAD && !is_ramp(p.kind) {
+        if p.kind != PLATFORM_NORMAL
+            && p.kind != PLATFORM_CRUMBLE
+            && p.kind != PLATFORM_JUMP_PAD
+            && p.kind != protocol::PLATFORM_TRAMPOLINE
+            && !is_ramp(p.kind)
+        {
             return Err(format!("platform {} has unknown kind {}", p.id, p.kind));
         }
     }

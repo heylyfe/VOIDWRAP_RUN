@@ -61,6 +61,8 @@ export const PLATFORM_RAMP_PX = 3;
 export const PLATFORM_RAMP_NX = 4;
 export const PLATFORM_RAMP_PZ = 5;
 export const PLATFORM_RAMP_NZ = 6;
+export const PLATFORM_TRAMPOLINE = 7;
+export const PLATFORM_TRIPMINE = 8;
 
 export interface Vec3 {
   x: number;
@@ -506,22 +508,25 @@ export function decodeShopItem(bytes: Uint8Array): ShopItem {
   return v;
 }
 
-/** End-of-run stats. cause is one of DEATH_VOID / DEATH_ENEMY. */
+/** End-of-run stats. cause is one of DEATH_VOID / DEATH_ENEMY. code is the cosmetic death-screen code drawn from the achievement pool (empty when none was earned). */
 export interface RunSummary {
   levelReached: number;
   giftsCollected: number;
   cause: number;
+  code: string;
 }
 export function writeRunSummary(w: Writer, v: RunSummary): void {
   w.u32(v.levelReached);
   w.u32(v.giftsCollected);
   w.u8(v.cause);
+  w.string(v.code);
 }
 export function readRunSummary(r: Reader): RunSummary {
   return {
     levelReached: r.u32(),
     giftsCollected: r.u32(),
     cause: r.u8(),
+    code: r.string(),
   };
 }
 export function encodeRunSummary(v: RunSummary): Uint8Array<ArrayBuffer> {

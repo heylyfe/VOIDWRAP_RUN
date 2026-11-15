@@ -15,6 +15,7 @@ pub mod mode;
 pub mod pattern;
 pub mod radar;
 pub mod rules;
+pub mod tripmine;
 pub mod tuning;
 pub mod world;
 

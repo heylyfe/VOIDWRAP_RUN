@@ -1852,14 +1852,15 @@ fn standing_on_fretted(state: &ControllerState, world: &World) -> bool {
     }
 }
 
-/// PLATFORM_JUMP_PAD: launch once when (or while) standing on a pad.
+/// Launch the player off a launcher platform they are standing on.
 ///
-/// Sets `vel.y = PAD_LAUNCH_VEL` and multiplies horizontal velocity by
-/// [`PAD_HORIZONTAL_VEL_MUL`]. After the launch the player is airborne
-/// (`vel.y > 0`), which makes a repeated launch on the same contact impossible;
-/// a new landing is a new contact. Pads stay solid. `movement_locked` (dash /
-/// grapple / ward in flight) suppresses the launch; it fires on the first
-/// physics frame afterwards instead.
+/// Two platform kinds launch: `PLATFORM_JUMP_PAD` throws the player straight up and kills most
+/// of the horizontal speed, while `PLATFORM_TRAMPOLINE` throws them higher and *keeps* the
+/// horizontal speed (slightly boosted) so the arc carries further than the run-up. Any other
+/// platform kind is not a launcher and returns `false`.
+///
+/// The launch leaves the player airborne, so a repeat needs a fresh landing: that is the
+/// "launch once per contact" property.
 fn launch_pad_if_contact(state: &mut ControllerState, world: &World, movement_locked: bool) -> bool {
     if movement_locked {
         return false;
@@ -1867,17 +1868,20 @@ fn launch_pad_if_contact(state: &mut ControllerState, world: &World, movement_lo
     let Some(index) = standing_platform(state, world) else {
         return false;
     };
-    let is_pad = world
-        .platforms
-        .get(index)
-        .map(|p| p.kind == protocol::PLATFORM_JUMP_PAD)
-        .unwrap_or(false);
-    if !is_pad {
+    let Some(kind) = world.platforms.get(index).map(|platform| platform.kind) else {
         return false;
-    }
-    state.vel.y = PAD_LAUNCH_VEL;
-    state.vel.x *= PAD_HORIZONTAL_VEL_MUL;
-    state.vel.z *= PAD_HORIZONTAL_VEL_MUL;
+    };
+    let (launch_vel, horizontal_mul) = match kind {
+        protocol::PLATFORM_JUMP_PAD => (PAD_LAUNCH_VEL, PAD_HORIZONTAL_VEL_MUL),
+        protocol::PLATFORM_TRAMPOLINE => (
+            crate::tuning::TRAMPOLINE_LAUNCH_VEL,
+            crate::tuning::TRAMPOLINE_HORIZONTAL_VEL_MUL,
+        ),
+        _ => return false,
+    };
+    state.vel.y = launch_vel;
+    state.vel.x *= horizontal_mul;
+    state.vel.z *= horizontal_mul;
     true
 }
 

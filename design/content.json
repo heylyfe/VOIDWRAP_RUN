@@ -540,6 +540,26 @@
       "threat": 4,
       "greater": true,
       "mods": { "fog_density_mul": 1.6 }
+    },
+    {
+      "id": "more_trampolines",
+      "name": "Spring Floor",
+      "flavor": "The ground has decided to throw you somewhere else.",
+      "effect": "more trampolines in every generated level",
+      "rarity": "rare",
+      "threat": 3,
+      "greater": false,
+      "mods": { "gravity_mul": 1.05 }
+    },
+    {
+      "id": "minefield",
+      "name": "Minefield",
+      "flavor": "Someone has been very busy under the floorboards.",
+      "effect": "tripmines appear in every generated level",
+      "rarity": "rare",
+      "threat": 4,
+      "greater": false,
+      "mods": { "enemy_aggro_mul": 1.1 }
     }
   ],
   "classes": [

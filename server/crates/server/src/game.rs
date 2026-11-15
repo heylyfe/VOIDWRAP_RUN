@@ -1096,6 +1096,7 @@ impl Game {
                 level_reached: self.run.level_num,
                 gifts_collected: self.run.gifts_collected,
                 cause,
+                code: self.run.death_code(cause),
             };
             self.send(id, &ServerMsg::RunOver { summary });
         }
