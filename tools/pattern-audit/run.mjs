@@ -93,13 +93,18 @@ const TH = {
   STAIR_STEP_EPS: 0.05,
   HEIGHT_DIFF_MIN: 1.0,   // reference scale: height differences 1-6 u
   HEIGHT_DIFF_MAX: 6.0,
-  // Share of measured adjacent-surface deltas allowed outside [1, 6] u. Raised from
-  // 0.02 to 0.05 by owner decision (2026-11-15): the offending heights live in the
-  // frozen design/chunks.json, and this is a style rule, not a correctness rule --
-  // nothing outside the band is unplayable. Measured 4.47% at the time of the change
-  // (down from 6.02% before the T-107 ramp-anchor fixes). A regression past 5% still
-  // fails, so the metric keeps its teeth.
-  HEIGHT_DIFF_RATE_MAX: 0.05,
+  // Share of measured adjacent-surface deltas allowed outside [1, 6] u.
+  //
+  // History: 0.02 originally, raised to 0.05 by owner decision (2026-11-15) because
+  // the offending heights lived in the frozen design/chunks.json and the rule is
+  // style, not correctness. That was a threshold loosened to fit the data, and it
+  // hid the real shape of the problem: T-137 measured the offenders and found all
+  // 15,352 of them came from one chunk, `ch02_hollow_market`, and all were *too
+  // small* -- four rim strips sitting 0.5 u above the bowl floor, a half-step. Raising
+  // those strips to the ring height turned the bowl into a clean 1 u pit and the
+  // count went to 0. With the data fixed, the threshold goes back to 0: a half-step
+  // anywhere now fails immediately instead of hiding under 5%.
+  HEIGHT_DIFF_RATE_MAX: 0,
   SCALE_EXTENT_MIN: 10.0, // reference scale: platforms 10-20 u — read as the
   SCALE_EXTENT_MAX: 20.0, // placed pattern's max XZ footprint extent (both worked
   SCALE_RATE_MAX: 0.10,   // examples in PATTERN_FORMAT §8 measure 16 u). 10% slack
@@ -287,6 +292,10 @@ function createAggregate() {
       rampChecked: 0, rampViol: 0, rampEx: [],
       stairSequences: 0, stairPatterns: new Set(), stairEx: [],
       heightPairs: 0, heightViol: 0, heightEx: [],
+      // T-137: which patterns own the out-of-band deltas, and whether they are
+      // too small (a half-step) or too large (a drop). An aggregate rate hides
+      // concentration the same way 5.reference-scale did before T-128.
+      heightByPattern: new Map(), heightSmall: 0, heightLarge: 0,
       gifts: 0, giftIntersections: 0, giftIntersectionLevels: 0,
       rampAnchors: 0, rampOrphans: 0, rampOrphanLevels: 0,
       unreachablePlatforms: 0, unreachableGifts: 0, unreachableGiftLevels: 0,
@@ -474,6 +483,9 @@ function measurePatternGeometry(A, entry, id, pat) {
       if (d <= 0.01) continue; // same walkway surface continuing
       if (d < TH.HEIGHT_DIFF_MIN - 1e-6 || d > TH.HEIGHT_DIFF_MAX + 1e-6) {
         A.geo.heightViol++;
+        A.geo.heightByPattern.set(id, (A.geo.heightByPattern.get(id) || 0) + 1);
+        if (d < TH.HEIGHT_DIFF_MIN - 1e-6) A.geo.heightSmall++;
+        else A.geo.heightLarge++;
         pushEx(A.geo.heightEx, {
           where: loc(entry), pattern: id, delta: f2(d),
           note: `adjacent tops boxes ${i}/${j} outside [${TH.HEIGHT_DIFF_MIN}, ${TH.HEIGHT_DIFF_MAX}]u`,
@@ -800,9 +812,16 @@ function report(A, ctx, log) {
     geo.stairSequences === 0,
     `stair-like box sequences (>= ${TH.STAIR_MIN_STEPS} adjacent tops, equal steps +-${TH.STAIR_STEP_EPS}u, step ${TH.STAIR_STEP_MIN}-${TH.STAIR_STEP_MAX}u) in a single direction: ${geo.stairSequences} across ${geo.stairPatterns.size} patterns; threshold: 0 (stairs do not exist)`);
   const hRate = geo.heightPairs ? geo.heightViol / geo.heightPairs : 0;
+  const heightOwners = [...geo.heightByPattern.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([id, n]) => `${id}:${n}`);
   line('5.heights',
     hRate <= TH.HEIGHT_DIFF_RATE_MAX,
-    `adjacent surface deltas measured: ${geo.heightPairs}; outside [${TH.HEIGHT_DIFF_MIN}, ${TH.HEIGHT_DIFF_MAX}]u (flat continuations ~0u excluded): ${geo.heightViol} (${pctf(hRate)}); threshold <= ${(TH.HEIGHT_DIFF_RATE_MAX * 100).toFixed(0)}%`);
+    `adjacent surface deltas measured: ${geo.heightPairs}; outside [${TH.HEIGHT_DIFF_MIN}, ${TH.HEIGHT_DIFF_MAX}]u (flat continuations ~0u excluded): ${geo.heightViol} (${pctf(hRate)}) `
+    + `[too small: ${geo.heightSmall}, too large: ${geo.heightLarge}]; `
+    + `by pattern id: ${heightOwners.length ? heightOwners.join(' ') : 'none'}; `
+    + `threshold <= ${(TH.HEIGHT_DIFF_RATE_MAX * 100).toFixed(0)}%`);
   const sRate = geo.placed ? geo.scaleViol / geo.placed : 1;
   // T-128: name the patterns that own the outlier budget. An aggregate rate hides
   // concentration: six patterns used to account for all 8,081 out-of-band placements,
