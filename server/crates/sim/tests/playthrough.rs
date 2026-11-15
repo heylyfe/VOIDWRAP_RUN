@@ -16,14 +16,14 @@
 //! diagnostic, `cargo test --test playthrough -- --ignored`): the generated-map gate is now
 //! `every_graph_edge_kind_is_physically_doable`, which proves every KIND of edge the platform
 //! graph admits is performable with the real controller in a minimal two-platform world (plus
-//! representative step-up / stair / drop cases).
+//! representative step-up / ramp / drop cases).
 //!
 //! Standing on a platform reports the smallest matching footprint, so a platform set
 //! flush into a larger same-height floor does not shadow it forever.
 //!
 //! - Walk/step edge (touching, rise <= 0.55 u): any touching flat or lower target — a long
 //!   drop onto a lower touching platform (rise <= -0.55 u, incl. -4.5 u falls), a 0.5 u
-//!   stair step or 1.0 u tread up or down onto a big platform, or a flat flush neighbour —
+//!   ramp foot or 1.0 u tread up or down onto a big platform, or a flat flush neighbour —
 //!   steer at a point on the target's top at least player-half-width + 0.3 u beyond the
 //!   current platform's footprint edge in the travel direction, and keep full input there
 //!   until grounded on the target — never stop at the shared edge. Step-ups rely on the
@@ -156,7 +156,7 @@ fn ray_exit_t(p: &Platform, cx: f32, cz: f32, ux: f32, uz: f32) -> f32 {
 /// A point on `nxt`'s top at least `clearance` beyond `cur`'s footprint boundary in the
 /// direction of travel: the exit point of the ray from `cur`'s centre along `dir`, pushed
 /// `clearance` further out, clamped onto `nxt`'s top inset by `inset`. Used for touching
-/// edges (flat, drops of any depth, and 0.5 u stair steps / 1.0 u treads up or down):
+/// edges (flat, drops of any depth, and 0.5 u ramp feet / 1.0 u treads up or down):
 /// steering there walks the bot off the edge; the bot keeps steering there until it is
 /// grounded on the lower platform (the route only advances once it is).
 fn beyond_edge_point(cur: &Platform, nxt: &Platform, dir: (f32, f32), clearance: f32, inset: f32) -> (f32, f32) {
@@ -387,7 +387,7 @@ impl Bot {
                             None => (gx, gz),
                         };
                         // Touching edge (flat, a drop of any depth incl. long falls, or a
-                        // 0.5 u stair step / 1.0 u tread up or down onto a big platform):
+                        // 0.5 u ramp foot / 1.0 u tread up or down onto a big platform):
                         // steer at a point on the target's top at least half-width + 0.3 u
                         // beyond the current platform's footprint edge in the travel
                         // direction, and keep full input there until grounded on the
@@ -933,7 +933,7 @@ fn report_case(label: &str, out: &EdgeSim, failures: &mut Vec<String>) {
 /// released on the way down, timed so the player is grounded or within coyote frames
 /// at A's edge — ~1.4 u before the edge for a flush B above step height, else the
 /// last ~0.3 u; pad buckets never press BTN_JUMP; success = grounded on B's top
-/// within 3 s). Representative 0.5 u step-up, 4-step (0.5 u rise, 1 u tread) stair and
+/// within 3 s). Representative 0.5 u step-up, a 2.0 u ramp over 4.0 u, and
 /// touching -6.0 u drop cases are simulated the same way, plus three hand cases that
 /// fix the physics by construction: rise +1.0 gap 0.0 (jump ~1.4 u before the face and
 /// keep running), rise +2.0 gap 2.0 (held running jump at the edge; ride up B's face
@@ -1046,25 +1046,6 @@ fn every_graph_edge_kind_is_physically_doable() {
             (0.0, 4.0, -2.0, 2.0),
         );
         report_case("step-up-0.5", &out, &mut failures);
-    }
-    // 2) Stair: 4 risers of 0.5 u with 1.0 u treads (walked, never jumped).
-    {
-        let a = rect_platform(&proto, -12.0, 0.0, -1.0, 0.0, -2.0, 2.0);
-        let mut plats = vec![a];
-        for k in 0..4u32 {
-            let top = (k as f32 + 1.0) * 0.5;
-            let min_x = k as f32 * 1.0;
-            plats.push(rect_platform(&proto, min_x, min_x + 1.0, top - 1.0, top, -2.0, 2.0));
-        }
-        let out = simulate_controller(
-            plats,
-            (-11.0, 1.0, 0.0),
-            (3.5, 0.0),
-            SimMode::Walk,
-            2.0,
-            (3.0, 4.0, -2.0, 2.0),
-        );
-        report_case("stair 4x(0.5 up, 1.0 tread)", &out, &mut failures);
     }
     // 3) Touching -6.0 u drop (walked off the edge, never jumped).
     {

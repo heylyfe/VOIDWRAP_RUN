@@ -1774,10 +1774,24 @@ impl Run {
         self.phase == PHASE_PLAYING && self.level_phase != LEVEL_COLLECT
     }
 
-    /// Collect gifts the player at `feet` touches. In LEVEL_COLLECT the remaining normal gifts are gathered
-    /// (the last one starts phase 2). From LEVEL_COLLAPSE_PENDING on, golden gifts sitting at the positions of
-    /// the collected normal gifts are collected instead (1 gold each, same gift ids, `golden_taken` lists them).
-    /// Returns the gift positions collected this call (the sim uses them for the pickup events).
+    /// The greater curses active on this run that carry a runtime mechanic (T-084).
+    pub fn greater_mechanics(&self) -> Vec<sim::greater::GreaterCurse> {
+        self.curses
+            .iter()
+            .filter_map(|id| sim::greater::GreaterCurse::from_id(id))
+            .collect()
+    }
+
+    /// True while Hush is active: the HUD gift hint is off and the fog is thick (T-084).
+    ///
+    /// The fog half already runs through the curse's `fog_density_mul`; this flag is what the HUD
+    /// reads to hide the gift hint, and the client half is parked (see T-084 NOTES), so only tests
+    /// exercise it today.
+    #[allow(dead_code)]
+    pub fn hush_active(&self) -> bool {
+        self.curses.iter().any(|id| id == "hush")
+    }
+
     pub fn collect_gifts(&mut self, feet: &Vec3) -> Vec<Vec3> {
         let mut picked = Vec::new();
         if self.phase != PHASE_PLAYING {
@@ -1792,6 +1806,9 @@ impl Run {
                 if rules::gift_touched_within(feet, gift, radius) {
                     self.gifts_taken.push(gift.id);
                     self.gifts_collected = self.gifts_collected.saturating_add(1);
+                    if self.curses.iter().any(|c| c == "tithe") {
+                        self.currency = self.currency.saturating_sub(sim::greater::TITHE_PER_GIFT);
+                    }
                     picked.push(gift.pos);
                 }
             }

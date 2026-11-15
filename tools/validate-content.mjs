@@ -35,7 +35,12 @@ function checkText(where, field, v, max) {
   else if (v.length > max) err(`${where}.${field}: ${v.length} > ${max} chars`);
 }
 function checkMods(where, mods, greater) {
-  if (!mods || typeof mods !== "object" || Object.keys(mods).length === 0) return err(`${where}: no mods`);
+  // A greater curse may be driven entirely by a runtime mechanic (T-084: wreath, tithe), so an empty mod
+  // map is legal there. Every other card still has to move at least one number.
+  if (!mods || typeof mods !== "object" || Object.keys(mods).length === 0) {
+    if (greater) return;
+    return err(`${where}: no mods`);
+  }
   const [lo, hi] = greater ? [0.4, 2.0] : [0.5, 1.6];
   for (const [k, v] of Object.entries(mods)) {
     if (MUL.includes(k)) {

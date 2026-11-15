@@ -4,7 +4,7 @@
 //!
 //! The record shape is the contract in `tools/pattern-audit/README.md`. `patterns[].platforms`
 //! is the pattern's OWN local geometry from the catalog, not its placed world position: the
-//! audit's geometry metrics (ramp rules, stair sequences, height deltas, reference scale) are
+//! audit's geometry metrics (ramp rules, ramp sequences, height deltas, reference scale) are
 //! properties of the pattern, and the placed level is already covered by `validate()`.
 //!
 //! Levels are generated for the three shipped player counts (1, 4, 8) so the audit sees the

@@ -510,6 +510,36 @@
       "threat": 3,
       "greater": false,
       "mods": { "gift_spacing_mul": 0.6 }
+    },
+    {
+      "id": "wreath",
+      "name": "Wreath",
+      "flavor": "Something lays a cold ring on your head and begins to grieve for you.",
+      "effect": "a wreath cries on a player; pad or glider shakes it off",
+      "rarity": "rare",
+      "threat": 5,
+      "greater": true,
+      "mods": {}
+    },
+    {
+      "id": "tithe",
+      "name": "Tithe",
+      "flavor": "Every gift you lift is weighed, and something takes its cut.",
+      "effect": "each gift costs 1 currency; at zero you are slowed",
+      "rarity": "rare",
+      "threat": 4,
+      "greater": true,
+      "mods": {}
+    },
+    {
+      "id": "hush",
+      "name": "Hush",
+      "flavor": "The fog leans in close and puts a finger to its lips.",
+      "effect": "gift hint off, fog thickens; radar or a callout counters it",
+      "rarity": "rare",
+      "threat": 4,
+      "greater": true,
+      "mods": { "fog_density_mul": 1.6 }
     }
   ],
   "classes": [

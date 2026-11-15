@@ -21,8 +21,8 @@ use crate::matchmaker_client::GameStateHandle;
 use crate::run::{Run, ShopError, ShopPurchase};
 use protocol::{
     BTN_ABILITY, BTN_INTERACT, BTN_JUMP, CARD_ENEMY, CLASS_GLIDER, CLASS_STRIKER, ClientMsg, ControllerState,
-    DEATH_VOID, EVENT_NONE, InputFrame, MAX_DRAFT_PICKS, MAX_INPUTS_PER_MSG, MAX_NAME_LEN, NOTICE_ALTAR, NOTICE_BOUGHT,
-    NOTICE_EVENT, PHASE_ENEMY_DRAFT, PHASE_OVER, PHASE_PLAYING, PHYSICS_HZ, PLAYER_ACTIVE, PLAYER_DEAD,
+    DEATH_ENEMY, DEATH_VOID, EVENT_NONE, InputFrame, MAX_DRAFT_PICKS, MAX_INPUTS_PER_MSG, MAX_NAME_LEN, NOTICE_ALTAR,
+    NOTICE_BOUGHT, NOTICE_EVENT, PHASE_ENEMY_DRAFT, PHASE_OVER, PHASE_PLAYING, PHYSICS_HZ, PLAYER_ACTIVE, PLAYER_DEAD,
     PLAYER_FINISHED, PLAYER_WAITING, PROTOCOL_VERSION, PlayerView, RunSummary, ServerMsg, ShopItem, TICK_HZ, Vec3,
 };
 use sim::controller;
@@ -83,6 +83,10 @@ struct Player {
     infected_ticks: u16,
     /// True on the tick a jump pad launched this player (cleanses Blight, escapes Lure).
     pad_launched: bool,
+    /// The Wreath crying on this player (T-084); `None` when clean.
+    wreath: Option<sim::greater::Wreath>,
+    /// Ticks of Tithe's slow left (T-084).
+    tithe_slow: sim::greater::TitheSlow,
 }
 
 impl Player {
@@ -475,6 +479,8 @@ impl Game {
                         overtuned_ticks: 0,
                         infected_ticks: 0,
                         pad_launched: false,
+                        wreath: None,
+                        tithe_slow: sim::greater::TitheSlow::default(),
                     });
                 }
                 self.send(
@@ -660,6 +666,11 @@ impl Game {
         // 1. Movement (lobby and playing).
         for p in self.conns.values_mut().filter_map(|c| c.player.as_mut()) {
             p.pad_launched = false;
+            // Tithe (T-084): a slowed player runs at TITHE_SLOW_MUL of the run's speed.
+            let mut tuning = tuning.clone();
+            if p.tithe_slow.is_slowed() {
+                tuning.run_speed_mul *= sim::greater::TITHE_SLOW_MUL;
+            }
             p.tokens = (p.tokens + STEPS_PER_TICK).min(MAX_STEP_TOKENS);
             if !p.active() {
                 // Spectators' inputs are acknowledged and dropped (their camera is client-side).
@@ -800,9 +811,20 @@ impl Game {
         let currency_before = self.run.currency;
         let mut pickups: Vec<Vec3> = Vec::new();
         let phase_before = self.run.level_phase;
+        let mut tithe_slowed: Vec<u32> = Vec::new();
         for conn in self.conns.values() {
             if let Some(p) = conn.player.as_ref().filter(|p| p.active()) {
-                pickups.extend(self.run.collect_gifts(&p.state.pos));
+                let picked = self.run.collect_gifts(&p.state.pos);
+                // Tithe (T-084): lifting a gift with an empty purse slows you until you collect again.
+                if !picked.is_empty() && self.run.currency == 0 {
+                    tithe_slowed.push(p.id);
+                }
+                pickups.extend(picked);
+            }
+        }
+        for p in self.conns.values_mut().filter_map(|c| c.player.as_mut()) {
+            if tithe_slowed.contains(&p.id) {
+                p.tithe_slow.apply();
             }
         }
         let mut info_changed = self.run.currency != currency_before;
@@ -883,6 +905,50 @@ impl Game {
             }
             p.overtuned_ticks = p.overtuned_ticks.saturating_sub(1);
             p.infected_ticks = p.infected_ticks.saturating_sub(1);
+        }
+
+        // Greater curses (T-084). Wreath cries on one player at a time: a jump-pad launch or a glider
+        // draft shakes it off, and a cry that runs its full length kills the victim. The kill reuses
+        // DEATH_ENEMY - a curse-driven threat is an enemy for the run summary, and a new cause would
+        // need a protocol change.
+        let mechanics = self.run.greater_mechanics();
+        if mechanics.contains(&sim::greater::GreaterCurse::Wreath) {
+            let any_wreath = self
+                .conns
+                .values()
+                .filter_map(|c| c.player.as_ref())
+                .any(|p| p.wreath.is_some());
+            if !any_wreath {
+                // Deterministic victim: the lowest-id active player.
+                let victim = self
+                    .conns
+                    .values()
+                    .filter_map(|c| c.player.as_ref())
+                    .filter(|p| p.active())
+                    .map(|p| p.id)
+                    .min();
+                if let Some(victim) = victim {
+                    for p in self.conns.values_mut().filter_map(|c| c.player.as_mut()) {
+                        if p.id == victim {
+                            p.wreath = Some(sim::greater::Wreath::attach(victim));
+                        }
+                    }
+                }
+            }
+        }
+        for p in self.conns.values_mut().filter_map(|c| c.player.as_mut()) {
+            p.tithe_slow.tick();
+            let Some(mut wreath) = p.wreath else { continue };
+            let escaped =
+                p.pad_launched || (p.class == CLASS_GLIDER && p.state.ability_active_frames > 0 && !p.state.grounded);
+            match wreath.tick(escaped) {
+                sim::greater::WreathOutcome::Escaped => p.wreath = None,
+                sim::greater::WreathOutcome::Crying => p.wreath = Some(wreath),
+                sim::greater::WreathOutcome::Killed => {
+                    p.wreath = None;
+                    kills.entry(p.id).or_insert(DEATH_ENEMY);
+                }
+            }
         }
 
         // Bulwark Aegis Bloom: on the pulse frame the sim knocks enemies back; other ACTIVE, unwarded
@@ -1310,6 +1376,36 @@ mod tests {
             msgs.iter().any(|m| matches!(m, ServerMsg::Shop { .. })),
             "the next lobby offers the shop"
         );
+    }
+
+    /// T-084: the Wreath greater curse attaches to a player and kills the victim when the cry runs
+    /// its full length. The escape half (a jump-pad launch or a glider draft shakes it off) is proven
+    /// in `sim::greater`'s own tests, where the tick input is controllable.
+    #[test]
+    fn wreath_attaches_and_kills_when_the_cry_runs_out() {
+        let mut g = game();
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        vote(&mut g, 1);
+        drain(&mut rx);
+        g.run.curses.push("wreath".to_string());
+        g.run.lives = 0;
+        for e in &mut g.run.enemies {
+            e.active_in = 1_000; // keep enemies dormant so only the curse can kill
+        }
+        // The first tick attaches the Wreath to the only active player.
+        g.tick();
+        let _ = drain(&mut rx);
+        assert!(player(&mut g, 1).wreath.is_some(), "the wreath attaches");
+        // Left alone, the cry runs its full length and kills the victim.
+        for _ in 0..(sim::greater::WREATH_CRY_TICKS + 4) {
+            for e in &mut g.run.enemies {
+                e.active_in = 1_000;
+            }
+            g.tick();
+            let _ = drain(&mut rx);
+        }
+        assert_eq!(player(&mut g, 1).mode, PLAYER_DEAD, "the cry kills");
     }
 
     #[test]

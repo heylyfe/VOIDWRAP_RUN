@@ -28,7 +28,7 @@ const ENV = [[-4, 8], [-3, 7.5], [-2, 7], [-1, 6.5], [0, 6], [0.5, 5.5], [1, 5],
 function envelopeGap(dy) {
   if (dy < -4.0 - EPS) return 8;        // deeper drop: same fall budget as the Δ-4.0 row
   for (const [row, gap] of ENV) if (row + EPS >= dy) return gap;
-  return null;                           // Δ > +2.0: not jumpable (needs pads/stairs)
+  return null;                           // Δ > +2.0: not jumpable (needs pads/ramps)
 }
 const isNum = v => typeof v === "number" && Number.isFinite(v);
 const v3 = v => Array.isArray(v) && v.length === 3 && v.every(isNum);

@@ -746,7 +746,7 @@ pub fn platform_pair_ok(a: &Aabb, b: &Aabb) -> bool {
     }
     if xz_overlap_positive(a, b) {
         let clearance = (a.min.y - b.max.y).max(b.min.y - a.max.y);
-        // Resting contact (a dais on a floor, a stair step on its landing) is fine; only a
+        // Resting contact (a dais on a floor, a ramp foot on its landing) is fine; only a
         // cramped gap between separate layers is rejected (CHUNK_FORMAT stacking rule).
         if clearance > EPS && clearance < STACK_CLEARANCE - EPS {
             return false;
@@ -2736,13 +2736,12 @@ mod tests {
                       {"id":"e","pos":[4,0,0],"facing":"E","width":3}],
            "gift_slots":[{"pos":[-2,0.3,0],"elevated":false},{"pos":[2,0.3,0],"elevated":false}],
            "enemy_slots":[],"altar_slots":[]},
-          {"id":"stair","name":"Stair","role":"path","min_level":1,"difficulty":1,"tags":["stairs","climb"],
+          {"id":"ramp","name":"Ramp","role":"path","min_level":1,"difficulty":1,"tags":["ramp","climb"],
            "platforms":[{"kind":"NORMAL","min":[-4,-1,-1.5],"max":[0,0,1.5]},
-                        {"kind":"NORMAL","min":[0,0,-1.5],"max":[2,0.5,1.5]},
-                        {"kind":"NORMAL","min":[2,0,-1.5],"max":[4,1.0,1.5]}],
+                        {"kind":"RAMP_PX","min":[0,0,-1.5],"max":[4,1.0,1.5]}],
            "sockets":[{"id":"w","pos":[-4,0,0],"facing":"W","width":3},
                       {"id":"e","pos":[4,1.0,0],"facing":"E","width":3}],
-           "gift_slots":[{"pos":[3,1.3,0],"elevated":true}],
+           "gift_slots":[{"pos":[-2,0.3,0],"elevated":false}],
            "enemy_slots":[],"altar_slots":[]},
           {"id":"junction","name":"Junction","role":"junction","min_level":1,"difficulty":2,"tags":[],
            "platforms":[{"kind":"NORMAL","min":[-4,-1,-4],"max":[4,0,4]}],
