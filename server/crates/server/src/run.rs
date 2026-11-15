@@ -249,6 +249,241 @@ impl VoteSession {
     }
 }
 
+// ------------------------------------------------ pre-match poll (T-159) ----
+
+/// The countdown of a pre-match poll, in TICK_HZ ticks (20 s at 20 Hz). Same length as the
+/// pedestal vote: the countdown is a backstop, and the poll closes early the moment every
+/// connected player has balloted.
+pub const POLL_COUNTDOWN_TICKS: u32 = 20 * TICK_HZ;
+/// Salt separating the poll tie-break coin from the vote's. The two families never share a
+/// draw even when they share a run seed.
+const POLL_COIN_SALT: u32 = 0x5C3A_91E7;
+
+/// One option offered by a pre-match poll. The wire copy is `protocol::PollOption`; this is
+/// the server-side shape, which is the same three fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PollChoice {
+    /// `theme:<tag>` for a theme option, a `DifficultyMode::id` for a difficulty option.
+    pub id: String,
+    /// Display name for the poll panel.
+    pub name: String,
+    /// `POLL_THEME` or `POLL_DIFFICULTY`.
+    pub kind: u8,
+}
+
+/// The outcome of a closed pre-match poll.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PollOutcome {
+    /// Index of the winning option (matches the offer order).
+    pub winner: u8,
+    /// Id of the winning option.
+    pub id: String,
+    /// Display name of the winning option.
+    pub name: String,
+    /// `POLL_THEME` or `POLL_DIFFICULTY`.
+    pub kind: u8,
+    /// Final per-option ballot counts.
+    pub counts: Vec<u32>,
+}
+
+/// Which pre-match poll the lobby is on. A run asks the theme question first, then the
+/// difficulty question, then never again: both answers shape the whole run, so re-asking
+/// mid-run would silently rewrite a match already in progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PollStage {
+    /// The theme poll has not run yet.
+    Theme,
+    /// The theme poll is done; the difficulty poll is next.
+    Difficulty,
+    /// Both polls are done; the lobby may start the level.
+    Done,
+}
+
+/// A pre-match poll: the theme and difficulty ballot the lobby answers before level 1.
+///
+/// Deliberately a separate type from [`VoteSession`], not a variant of it. The pedestal vote
+/// is a frozen contract (its messages, its pool rules, its permanence semantics); the poll is
+/// a different question with a different effect, and folding it into the vote would have meant
+/// changing a contract that other kits assert against.
+///
+/// The mechanics are the vote's, because they are the ones that already work: ballots are
+/// keyed by player id so a disconnect does not destroy a cast ballot, the countdown is ticks
+/// rather than wall-clock time, and every draw is seeded from the run seed — never the clock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PollSession {
+    /// `POLL_THEME` or `POLL_DIFFICULTY`.
+    kind: u8,
+    /// The options on offer, in offer order.
+    options: Vec<PollChoice>,
+    /// Ballots keyed by player id; re-voting replaces the player's earlier ballot.
+    ballots: BTreeMap<u32, u8>,
+    /// Ticks remaining before the session closes on its own.
+    ticks_left: u32,
+    /// The host's player id (the lowest connected player id when the session opened).
+    host: Option<u32>,
+    /// The run seed mixed with the poll kind; drives the tie-break coin.
+    draw_seed: u32,
+    /// Last whole second that was broadcast in `PollState` (`None` before the first broadcast).
+    pub last_sent_second: Option<u16>,
+}
+
+impl PollSession {
+    /// Open a poll of `kind` with the offered `options`.
+    pub fn open(kind: u8, options: Vec<PollChoice>, seed: u32, host: Option<u32>) -> Self {
+        PollSession {
+            kind,
+            options,
+            ballots: BTreeMap::new(),
+            ticks_left: POLL_COUNTDOWN_TICKS,
+            host,
+            // The theme and difficulty polls of one run must not share a coin.
+            draw_seed: mix_seed(seed, u32::from(kind) + 1),
+            last_sent_second: None,
+        }
+    }
+
+    /// `POLL_THEME` or `POLL_DIFFICULTY`.
+    pub fn kind(&self) -> u8 {
+        self.kind
+    }
+
+    /// The options on offer.
+    pub fn options(&self) -> &[PollChoice] {
+        &self.options
+    }
+
+    /// Whole seconds left in the countdown (rounds up; 20 right after opening).
+    pub fn seconds_left(&self) -> u16 {
+        u16::try_from(self.ticks_left.div_ceil(TICK_HZ)).unwrap_or(0)
+    }
+
+    /// Cast (or re-cast) a ballot. Fails when the poll is closed or the option index is out of range.
+    pub fn cast(&mut self, player_id: u32, option: u8) -> Result<(), &'static str> {
+        if self.ticks_left == 0 {
+            return Err("the poll is closed");
+        }
+        if usize::from(option) >= self.options.len() {
+            return Err("option out of range");
+        }
+        self.ballots.insert(player_id, option);
+        Ok(())
+    }
+
+    /// Player ids holding a ballot, ascending.
+    pub fn voted_ids(&self) -> Vec<u32> {
+        self.ballots.keys().copied().collect()
+    }
+
+    /// True when `player_id` has cast a ballot in this poll.
+    pub fn has_voted(&self, player_id: u32) -> bool {
+        self.ballots.contains_key(&player_id)
+    }
+
+    /// Per-option ballot counts, in option order.
+    pub fn counts(&self) -> Vec<u32> {
+        let mut counts = vec![0u32; self.options.len()];
+        for &option in self.ballots.values() {
+            if let Some(slot) = counts.get_mut(usize::from(option)) {
+                *slot = slot.saturating_add(1);
+            }
+        }
+        counts
+    }
+
+    /// Advance the countdown one tick. Returns true on the tick the poll closes.
+    pub fn tick(&mut self) -> bool {
+        if self.ticks_left > 0 {
+            self.ticks_left -= 1;
+        }
+        self.ticks_left == 0
+    }
+
+    /// Resolve the ballots: majority wins; a tie goes to the host's ballot when the host voted
+    /// for a tied option, otherwise to a deterministic coin flip from the run seed. With no
+    /// ballots at all the coin is flipped across every option, so a poll nobody answered still
+    /// produces a defined outcome — the caller decides whether to apply it.
+    pub fn resolve(&self) -> Option<PollOutcome> {
+        if self.options.is_empty() {
+            return None;
+        }
+        let counts = self.counts();
+        let max = counts.iter().copied().max().unwrap_or(0);
+        let tied: Vec<usize> = counts
+            .iter()
+            .enumerate()
+            .filter(|&(_, &c)| c == max)
+            .map(|(i, _)| i)
+            .collect();
+        let winner = if tied.len() == 1 {
+            tied[0]
+        } else {
+            match self.host.and_then(|h| self.ballots.get(&h).copied()).map(usize::from) {
+                Some(ballot) if tied.contains(&ballot) => ballot,
+                _ => {
+                    let mut rng = Rng::new(self.draw_seed.wrapping_add(POLL_COIN_SALT));
+                    tied[rng.below(tied.len())]
+                }
+            }
+        };
+        let option = &self.options[winner];
+        Some(PollOutcome {
+            winner: u8::try_from(winner).unwrap_or(u8::MAX),
+            id: option.id.clone(),
+            name: option.name.clone(),
+            kind: option.kind,
+            counts,
+        })
+    }
+}
+
+/// `ruin` -> `Ruin`, `theme:ruin` -> `Ruin`. The poll's display names are derived from ids so
+/// the catalog and the mode list stay the single source of truth.
+fn poll_display_name(id: &str) -> String {
+    let bare = id.strip_prefix("theme:").unwrap_or(id);
+    let mut chars = bare.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => bare.to_string(),
+    }
+}
+
+/// The theme options: every distinct `theme:*` tag in the chunk catalog, in catalog order.
+///
+/// No new tags and no new content file: the catalog already carries eight of them, and the
+/// order is the catalog's, so the offer is deterministic without a draw.
+fn theme_choices() -> Vec<PollChoice> {
+    let Ok(cat) = sim::levelgen::catalog() else {
+        return Vec::new();
+    };
+    let mut seen: Vec<&str> = Vec::new();
+    for chunk in &cat.chunks {
+        for tag in &chunk.tags {
+            if tag.starts_with("theme:") && !seen.contains(&tag.as_str()) {
+                seen.push(tag.as_str());
+            }
+        }
+    }
+    seen.into_iter()
+        .map(|tag| PollChoice {
+            id: tag.to_string(),
+            name: poll_display_name(tag),
+            kind: protocol::POLL_THEME,
+        })
+        .collect()
+}
+
+/// The difficulty options: every `DifficultyMode`, in content order.
+fn difficulty_choices() -> Vec<PollChoice> {
+    sim::mode::DifficultyMode::all()
+        .iter()
+        .map(|mode| PollChoice {
+            id: mode.id().to_string(),
+            name: poll_display_name(mode.id()),
+            kind: protocol::POLL_DIFFICULTY,
+        })
+        .collect()
+}
+
 /// One registry entry reduced to the fields the pool rules use (registry §9).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PoolEntry {
@@ -900,6 +1135,13 @@ pub struct Run {
     pub pending_temporary: Vec<String>,
     /// The open vote session for the level being exited, if any.
     pub vote_session: Option<VoteSession>,
+    /// The open pre-match poll, if any (T-159). Separate from `vote_session` on purpose.
+    pub poll: Option<PollSession>,
+    /// Which pre-match poll the lobby is on; `Done` once both have run.
+    pub poll_stage: PollStage,
+    /// The winning `theme:*` tag of the theme poll, or `None` when the run was not polled.
+    /// Feeds `levelgen::chunk_weight`; `None` generates exactly the levels it always did.
+    pub theme_bias: Option<String>,
     /// The seed the run was created with (vote draws and tie-breaks are deterministic).
     pub seed: u32,
     /// The difficulty mode chosen in the lobby (T-085). `Standard` changes nothing.
@@ -984,6 +1226,9 @@ impl Run {
             permanents: Vec::new(),
             pending_temporary: Vec::new(),
             vote_session: None,
+            poll: None,
+            poll_stage: PollStage::Theme,
+            theme_bias: None,
             seed,
             mode: sim::mode::DifficultyMode::Standard,
             radar: sim::radar::RadarState::default(),
@@ -1249,6 +1494,102 @@ impl Run {
                 }
             }
         }
+    }
+
+    /// True when the pre-match poll still has a question to ask or is mid-question, so the
+    /// lobby must not start the level yet.
+    ///
+    /// Scoped to the level-1 lobby: the poll shapes the whole run, so it is asked once, before
+    /// the first level. A debug `switch_level` that jumps past the lobby therefore cannot leave
+    /// the gate stuck shut for the rest of the run.
+    pub fn poll_blocks_start(&self) -> bool {
+        self.phase == PHASE_ENEMY_DRAFT
+            && self.level_num == 1
+            && (self.poll.is_some() || self.poll_stage != PollStage::Done)
+    }
+
+    /// Open the poll the lobby is due for. Returns false when no poll is due.
+    ///
+    /// The theme question comes first, then the difficulty question. A stage with nothing to
+    /// ask (no catalog themes, or a mode already pinned before the poll) is skipped rather than
+    /// opened empty, so the lobby never waits on a question with no answers.
+    pub fn open_poll(&mut self, host: Option<u32>) -> bool {
+        if self.poll.is_some() || self.phase != PHASE_ENEMY_DRAFT || self.level_num != 1 {
+            return false;
+        }
+        loop {
+            match self.poll_stage {
+                PollStage::Theme => {
+                    let options = theme_choices();
+                    if options.is_empty() {
+                        self.poll_stage = PollStage::Difficulty;
+                        continue;
+                    }
+                    self.poll = Some(PollSession::open(protocol::POLL_THEME, options, self.seed, host));
+                    return true;
+                }
+                PollStage::Difficulty => {
+                    // A mode pinned before the poll stands: the poll is not offered. Nothing in
+                    // production pins one today (the mode only rides *out* to the matchmaker),
+                    // so this is the rule made real rather than a live branch.
+                    if self.mode != sim::mode::DifficultyMode::Standard {
+                        self.poll_stage = PollStage::Done;
+                        return false;
+                    }
+                    let options = difficulty_choices();
+                    if options.is_empty() {
+                        self.poll_stage = PollStage::Done;
+                        return false;
+                    }
+                    self.poll = Some(PollSession::open(protocol::POLL_DIFFICULTY, options, self.seed, host));
+                    return true;
+                }
+                PollStage::Done => return false,
+            }
+        }
+    }
+
+    /// Close the open poll and apply its outcome: the theme becomes the run's `theme_bias`, the
+    /// difficulty becomes the run's `mode`. Returns `None` when no poll was open.
+    ///
+    /// A poll that closes with zero ballots still resolves (the tie-break coin picks an option),
+    /// because a run that nobody answered must still get a defined theme and mode. The caller
+    /// that wants "no votes changes nothing" is `close_poll_unless_answered`.
+    pub fn close_poll(&mut self) -> Option<PollOutcome> {
+        let session = self.poll.take()?;
+        let outcome = session.resolve()?;
+        match outcome.kind {
+            protocol::POLL_THEME => self.theme_bias = Some(outcome.id.clone()),
+            _ => {
+                if let Some(mode) = sim::mode::DifficultyMode::from_id(&outcome.id) {
+                    self.mode = mode;
+                }
+            }
+        }
+        self.poll_stage = match outcome.kind {
+            protocol::POLL_THEME => PollStage::Difficulty,
+            _ => PollStage::Done,
+        };
+        Some(outcome)
+    }
+
+    /// Close the open poll only when at least one ballot was cast. A poll that nobody answered
+    /// leaves the run exactly as it was (no theme bias, `Standard` mode) and simply advances the
+    /// stage, so an idle lobby cannot silently pick a difficulty for the players.
+    pub fn close_poll_if_answered(&mut self) -> Option<PollOutcome> {
+        let answered = self
+            .poll
+            .as_ref()
+            .is_some_and(|session| !session.voted_ids().is_empty());
+        if !answered {
+            let session = self.poll.take()?;
+            self.poll_stage = match session.kind() {
+                protocol::POLL_THEME => PollStage::Difficulty,
+                _ => PollStage::Done,
+            };
+            return None;
+        }
+        self.close_poll()
     }
 
     /// The reward cards for the current lobby (greater-curse level or mixed upgrade/curse), drawn from the run RNG.
@@ -1611,7 +1952,15 @@ impl Run {
     fn start_level(&mut self, content: &Content, players: u32) {
         let seed = self.rng.next_u32();
         // T-062: the Clustered Gifts curse scales the minimum gift spacing for this level.
-        let generated = levelgen::generate_for_with_spacing(seed, self.level_num, players, self.mods.gift_spacing_mul);
+        // T-159: the pre-match theme poll biases the chunk weights. `None` (an unpolled run)
+        // generates exactly the level it generated before the poll existed.
+        let generated = levelgen::generate_for_with_bias(
+            seed,
+            self.level_num,
+            players,
+            self.mods.gift_spacing_mul,
+            self.theme_bias.as_deref(),
+        );
         let spawn_slots = generated.enemy_spawns.len();
         self.level = generated.data;
         self.world = World::from_level(&self.level);

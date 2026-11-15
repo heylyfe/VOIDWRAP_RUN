@@ -64,6 +64,8 @@ pub const PLATFORM_RAMP_PZ: u8 = 5;
 pub const PLATFORM_RAMP_NZ: u8 = 6;
 pub const PLATFORM_TRAMPOLINE: u8 = 7;
 pub const PLATFORM_TRIPMINE: u8 = 8;
+pub const POLL_THEME: u8 = 0;
+pub const POLL_DIFFICULTY: u8 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Vec3 {
@@ -235,6 +237,14 @@ pub struct RunInfo {
     pub curses: Vec<String>,
 }
 
+/// One option offered by a pre-match poll (T-159). kind is POLL_THEME (0) or POLL_DIFFICULTY (1). A theme option's id is the catalog tag it biases (theme:ruin); a difficulty option's id is a DifficultyMode id (standard, extreme, chaos, random).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PollOption {
+    pub id: String,
+    pub name: String,
+    pub kind: u8,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ClientMsg {
     Hello { protocol_version: u16, name: String },
@@ -246,6 +256,7 @@ pub enum ClientMsg {
     ChooseClass { class: u8 },
     Vote { option: u8 },
     Debug { code: String, command: String, args: String },
+    Poll { option: u8 },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -264,6 +275,9 @@ pub enum ServerMsg {
     VoteState { counts: Vec<u32>, voted: Vec<u32>, seconds_left: u16 },
     VoteResult { winner: u8, id: String, name: String, kind: u8, permanent: bool },
     DebugResult { ok: bool, message: String },
+    PollOpen { options: Vec<PollOption>, countdown_s: u16 },
+    PollState { counts: Vec<u32>, voted: Vec<u32>, seconds_left: u16 },
+    PollResult { winner: u8, id: String, name: String, kind: u8 },
 }
 
 #[cfg(test)]
@@ -287,6 +301,7 @@ pub(crate) fn fixture_encode(type_name: &str, value: serde_json::Value) -> Resul
         "DraftCard" => crate::encode(&serde_json::from_value::<DraftCard>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "VoteOption" => crate::encode(&serde_json::from_value::<VoteOption>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "RunInfo" => crate::encode(&serde_json::from_value::<RunInfo>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
+        "PollOption" => crate::encode(&serde_json::from_value::<PollOption>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "ClientMsg" => crate::encode(&serde_json::from_value::<ClientMsg>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         "ServerMsg" => crate::encode(&serde_json::from_value::<ServerMsg>(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         other => Err(format!("unknown type {other}")),

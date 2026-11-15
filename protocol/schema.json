@@ -244,6 +244,14 @@
     "PLATFORM_TRIPMINE": [
       "u8",
       8
+    ],
+    "POLL_THEME": [
+      "u8",
+      0
+    ],
+    "POLL_DIFFICULTY": [
+      "u8",
+      1
     ]
   },
   "types": [
@@ -715,6 +723,24 @@
       ]
     },
     {
+      "name": "PollOption",
+      "$comment": "One option offered by a pre-match poll (T-159). kind is POLL_THEME (0) or POLL_DIFFICULTY (1). A theme option's id is the catalog tag it biases (theme:ruin); a difficulty option's id is a DifficultyMode id (standard, extreme, chaos, random).",
+      "struct": [
+        [
+          "id",
+          "string"
+        ],
+        [
+          "name",
+          "string"
+        ],
+        [
+          "kind",
+          "u8"
+        ]
+      ]
+    },
+    {
       "name": "ClientMsg",
       "enum": [
         [
@@ -808,6 +834,15 @@
             [
               "args",
               "string"
+            ]
+          ]
+        ],
+        [
+          "Poll",
+          [
+            [
+              "option",
+              "u8"
             ]
           ]
         ]
@@ -1086,6 +1121,66 @@
             [
               "message",
               "string"
+            ]
+          ]
+        ],
+        [
+          "PollOpen",
+          [
+            [
+              "options",
+              [
+                "vec",
+                "PollOption"
+              ]
+            ],
+            [
+              "countdown_s",
+              "u16"
+            ]
+          ]
+        ],
+        [
+          "PollState",
+          [
+            [
+              "counts",
+              [
+                "vec",
+                "u32"
+              ]
+            ],
+            [
+              "voted",
+              [
+                "vec",
+                "u32"
+              ]
+            ],
+            [
+              "seconds_left",
+              "u16"
+            ]
+          ]
+        ],
+        [
+          "PollResult",
+          [
+            [
+              "winner",
+              "u8"
+            ],
+            [
+              "id",
+              "string"
+            ],
+            [
+              "name",
+              "string"
+            ],
+            [
+              "kind",
+              "u8"
             ]
           ]
         ]
@@ -1400,6 +1495,64 @@
         "DebugResult": {
           "ok": true,
           "message": "granted 500"
+        }
+      }
+    },
+    {
+      "name": "client_poll",
+      "type": "ClientMsg",
+      "value": {
+        "Poll": {
+          "option": 2
+        }
+      }
+    },
+    {
+      "name": "server_poll_open",
+      "type": "ServerMsg",
+      "value": {
+        "PollOpen": {
+          "options": [
+            {
+              "id": "theme:ruin",
+              "name": "Ruin",
+              "kind": 0
+            },
+            {
+              "id": "theme:void",
+              "name": "Void",
+              "kind": 0
+            }
+          ],
+          "countdown_s": 20
+        }
+      }
+    },
+    {
+      "name": "server_poll_state",
+      "type": "ServerMsg",
+      "value": {
+        "PollState": {
+          "counts": [
+            1,
+            0
+          ],
+          "voted": [
+            7
+          ],
+          "seconds_left": 14
+        }
+      }
+    },
+    {
+      "name": "server_poll_result",
+      "type": "ServerMsg",
+      "value": {
+        "PollResult": {
+          "winner": 1,
+          "id": "extreme",
+          "name": "Extreme",
+          "kind": 1
         }
       }
     }

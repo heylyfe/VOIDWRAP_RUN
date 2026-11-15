@@ -50,6 +50,15 @@ const GIFT_MIN_SPACING: f32 = 2.0;
 const GIFT_BEACON_CLEAR: f32 = 2.5;
 const GIFT_AREA_PER: f32 = 9.0;
 const GIFT_ELEVATED_QUOTA: f32 = 0.2;
+/// T-159: how much more likely a chunk carrying the polled `theme:*` tag is.
+///
+/// Larger than the HIGH_RISE climbing-tag multiplier (3.0) on purpose. The T-069 composition
+/// plan owns most placements and bypasses `chunk_weight` entirely, so only the plan-exhausted
+/// picks feel this number: at 3.0 the level's overall tag share moved by ~1.5x, at 6.0 by
+/// ~2.0x (measured over 40 seeds at level 6, see `a_theme_bias_shifts_the_tag_mix`). 6.0 is
+/// the smallest value that makes a polled theme read as the level's theme rather than a
+/// rounding difference, while still leaving the rest of the catalog in play.
+pub const THEME_BIAS_MUL: f32 = 6.0;
 /// Path to the shared chunk catalog, relative to this source file.
 const CHUNK_CATALOG_JSON: &str = include_str!("../../../../design/chunks.json");
 /// Patterns authored by T-070. Merged into the catalog at load time.
@@ -66,6 +75,11 @@ pub struct GeneratedLevel {
     /// Empty when the catalog carries no pattern tags (the walk then picks freely)
     /// or when the level came from a fallback.
     pub plan: Vec<String>,
+    /// T-159: catalog indices of the chunks this level was built from, in placement
+    /// order (the hub first). Empty for the builtin fallback, which uses no chunk.
+    /// This is what makes a theme bias measurable: the tag mix of a level is the tag
+    /// mix of these chunks.
+    pub chunks: Vec<usize>,
 }
 
 // ---------------------------------------------------------------- PRNG ----
@@ -1179,11 +1193,21 @@ pub fn gift_target(level: u32, players: u32) -> u32 {
 }
 
 /// Weight for a chunk at a level: prefer lower difficulty, ×3 for climbing tags on HIGH_RISE.
-fn chunk_weight(chunk: &Chunk, tier: u32, high_rise: bool) -> f32 {
+///
+/// T-159: `theme_bias` is the winning `theme:*` tag of the pre-match poll, or `None` when
+/// the run was not polled. A chunk carrying that tag is [`THEME_BIAS_MUL`] times as likely.
+/// `None` multiplies nothing, so an unpolled run draws exactly the weights it drew before
+/// the poll existed — the default-neutral guarantee is this branch, not a rounding accident.
+fn chunk_weight(chunk: &Chunk, tier: u32, high_rise: bool, theme_bias: Option<&str>) -> f32 {
     let over = chunk.difficulty as f32 - tier as f32;
     let mut w = 1.0 / (1.0 + over.max(0.0));
     if high_rise && chunk.tags.iter().any(|t| t == "climb" || t == "tower" || t == "lift") {
         w *= 3.0;
+    }
+    if let Some(bias) = theme_bias
+        && chunk.tags.iter().any(|t| t == bias)
+    {
+        w *= THEME_BIAS_MUL;
     }
     w
 }
@@ -1771,6 +1795,7 @@ fn assemble_level(
     max_chunks: usize,
     max_junctions_u: u32,
     spacing_mul: f32,
+    theme_bias: Option<&str>,
 ) -> Option<GeneratedLevel> {
     let mut rng = Rng::new(seed_mix(rng_seed, level));
     let tier = level_tier(level);
@@ -1805,7 +1830,7 @@ fn assemble_level(
         _ => {
             let hub_weights: Vec<f32> = hub_choices
                 .iter()
-                .map(|&i| chunk_weight(&cat.chunks[i], tier, false))
+                .map(|&i| chunk_weight(&cat.chunks[i], tier, false, theme_bias))
                 .collect();
             let hub_pick = weighted_pick(&mut rng, &hub_weights)?;
             hub_choices[hub_pick]
@@ -1840,10 +1865,12 @@ fn assemble_level(
     let mut dropped: Vec<OpenSocket> = Vec::new();
     let mut iters = 0usize;
     let mut consecutive_failures = 0u32;
+    // T-159: the catalog chunks this level is built from, hub first. `GeneratedLevel::chunks`.
+    let mut used_chunks: Vec<usize> = vec![hub_ci];
     while iters < MAX_GROWTH_ITERS && chunk_count < max_chunks && area_sum < target_area_u && !open.is_empty() {
         iters += 1;
         let oi = rng.below(open.len());
-        let mut placed: Option<(usize, Placement, usize)> = try_place(
+        let mut placed: Option<(usize, usize, Placement, usize)> = try_place(
             cat,
             &open[oi],
             &platforms,
@@ -1855,14 +1882,15 @@ fn assemble_level(
             max_junctions_u,
             &mut rng,
             Some(&mut cursor),
+            theme_bias,
         )
-        .map(|(p, used)| (oi, p, used));
+        .map(|(ci, p, used)| (oi, ci, p, used));
         if placed.is_none() && consecutive_failures >= 8 {
             for k in 0..open.len() {
                 if k == oi {
                     continue;
                 }
-                if let Some((p, used)) = try_place(
+                if let Some((ci, p, used)) = try_place(
                     cat,
                     &open[k],
                     &platforms,
@@ -1874,14 +1902,16 @@ fn assemble_level(
                     max_junctions_u,
                     &mut rng,
                     Some(&mut cursor),
+                    theme_bias,
                 ) {
-                    placed = Some((k, p, used));
+                    placed = Some((k, ci, p, used));
                     break;
                 }
             }
         }
         match placed {
-            Some((k, p, used)) => {
+            Some((k, ci, p, used)) => {
+                used_chunks.push(ci);
                 commit_placement(
                     &mut open,
                     k,
@@ -1975,10 +2005,12 @@ fn assemble_level(
         data,
         enemy_spawns,
         plan: plan.ids().to_vec(),
+        chunks: used_chunks,
     })
 }
 
 /// Builds a level from the catalog with the design 4.3 / amendment A1 budget formulas.
+#[allow(clippy::too_many_arguments)]
 fn try_build(
     cat: &Catalog,
     rng_seed: u32,
@@ -1987,6 +2019,7 @@ fn try_build(
     players: u32,
     event: u8,
     spacing_mul: f32,
+    theme_bias: Option<&str>,
 ) -> Option<GeneratedLevel> {
     assemble_level(
         cat,
@@ -1999,6 +2032,7 @@ fn try_build(
         max_chunks_for(level),
         max_junctions(level),
         spacing_mul,
+        theme_bias,
     )
 }
 
@@ -2017,8 +2051,8 @@ fn catalog_fallback(
     let hub = cat
         .chunks
         .iter()
-        .find(|c| c.role == ChunkRole::Hub && c.min_level <= level)?;
-    let geom = build_geometry(hub, 0, Vec3::new(0.0, 0.0, 0.0));
+        .position(|c| c.role == ChunkRole::Hub && c.min_level <= level)?;
+    let geom = build_geometry(&cat.chunks[hub], 0, Vec3::new(0.0, 0.0, 0.0));
     let beacon = geom.beacon?;
     let enemy_spawns = geom.enemy_slots.clone();
     let main_idx = main_platform_index(&geom.platforms);
@@ -2115,7 +2149,8 @@ fn catalog_fallback(
         // The hub is a real catalog chunk and it is on the map, so it belongs in the
         // plan: an empty plan made every fallback level look like a malformed record to
         // the pattern audit and hid the fallback rate behind a "no plan" error.
-        plan: vec![hub.id.clone()],
+        plan: vec![cat.chunks[hub].id.clone()],
+        chunks: vec![hub],
     })
 }
 
@@ -2188,6 +2223,7 @@ fn builtin_fallback(run_seed: u32, level: u32, players: u32, spacing_mul: f32) -
         data,
         enemy_spawns,
         plan: Vec::new(),
+        chunks: Vec::new(),
     }
 }
 
@@ -2231,8 +2267,23 @@ pub fn generate_for(seed: u32, level: u32, players: u32) -> GeneratedLevel {
 /// scales the minimum gift spacing (clamped to [0.25, 1.0]; 1.0 = scattered, the default).
 /// Same `(seed, level, players, spacing_mul)` -> identical output.
 pub fn generate_for_with_spacing(seed: u32, level: u32, players: u32, spacing_mul: f32) -> GeneratedLevel {
+    generate_for_with_bias(seed, level, players, spacing_mul, None)
+}
+
+/// [`generate_for_with_spacing`] with the pre-match poll's theme bias (T-159).
+///
+/// `theme_bias` is the winning `theme:*` tag, or `None` for an unpolled run. `None` is
+/// byte-identical to [`generate_for_with_spacing`]: the bias only ever multiplies a weight
+/// that is already there, and `None` multiplies nothing.
+pub fn generate_for_with_bias(
+    seed: u32,
+    level: u32,
+    players: u32,
+    spacing_mul: f32,
+    theme_bias: Option<&str>,
+) -> GeneratedLevel {
     match catalog() {
-        Ok(cat) => generate_with_catalog_spacing(cat, seed, level, players, spacing_mul),
+        Ok(cat) => generate_with_catalog_spacing(cat, seed, level, players, spacing_mul, theme_bias),
         Err(_) => builtin_fallback(seed, level, players, spacing_mul),
     }
 }
@@ -2641,7 +2692,8 @@ const STALL_LIMIT: u32 = 48;
 
 /// Tries to place one chunk on `anchor` (up to [`CANDIDATE_TRIALS`] picks; each pick
 /// checks every socket of that chunk in all four rotations against the coarse grid).
-/// Returns the placement and the index of the chunk socket that joined to `anchor`.
+/// Returns the catalog index of the chosen chunk, the placement, and the index of the
+/// chunk socket that joined to `anchor`.
 ///
 /// When `cursor` is `Some`, each pick is the next entry of the T-069 composition plan
 /// that satisfies the role/level/junction predicate; entries that do not fit are
@@ -2661,7 +2713,8 @@ fn try_place(
     max_junctions_u: u32,
     rng: &mut Rng,
     mut cursor: Option<&mut crate::pattern::PlanCursor<'_>>,
-) -> Option<(Placement, usize)> {
+    theme_bias: Option<&str>,
+) -> Option<(usize, Placement, usize)> {
     let eligible = |c: &Chunk| {
         c.min_level <= level
             && match c.role {
@@ -2689,7 +2742,7 @@ fn try_place(
                 }
                 let weights: Vec<f32> = choices
                     .iter()
-                    .map(|&i| chunk_weight(&cat.chunks[i], tier, high_rise))
+                    .map(|&i| chunk_weight(&cat.chunks[i], tier, high_rise, theme_bias))
                     .collect();
                 let chosen = weighted_pick(rng, &weights)?;
                 choices[chosen]
@@ -2709,7 +2762,8 @@ fn try_place(
         }
         if !valid.is_empty() {
             let pick = rng.below(valid.len());
-            return Some(valid.swap_remove(pick));
+            let (p, si) = valid.swap_remove(pick);
+            return Some((ci, p, si));
         }
     }
     None
@@ -2771,21 +2825,23 @@ fn commit_stub(
 /// guaranteed-valid fallbacks) against an explicit catalog instead of the shared one.
 /// Normal callers want [`generate`] / [`generate_for`].
 pub fn generate_with_catalog(cat: &Catalog, seed: u32, level: u32, players: u32) -> GeneratedLevel {
-    generate_with_catalog_spacing(cat, seed, level, players, 1.0)
+    generate_with_catalog_spacing(cat, seed, level, players, 1.0, None)
 }
 
-/// [`generate_with_catalog`] with an explicit gift-spacing multiplier (Clustered Gifts curse).
+/// [`generate_with_catalog`] with an explicit gift-spacing multiplier (Clustered Gifts curse)
+/// and the pre-match poll's theme bias (T-159).
 fn generate_with_catalog_spacing(
     cat: &Catalog,
     seed: u32,
     level: u32,
     players: u32,
     spacing_mul: f32,
+    theme_bias: Option<&str>,
 ) -> GeneratedLevel {
     let event = event_for(seed, level);
     for attempt in 0..MAX_ATTEMPTS {
         let aseed = attempt_seed(seed, attempt);
-        if let Some(cand) = try_build(cat, aseed, seed, level, players, event, spacing_mul)
+        if let Some(cand) = try_build(cat, aseed, seed, level, players, event, spacing_mul, theme_bias)
             && validate(&cand.data).is_ok()
         {
             return cand;

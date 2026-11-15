@@ -54,6 +54,9 @@ const CLIENT_VARIANTS = Object.freeze({
   // singleplayer-only; the kit uses it to drive voting, the shop and altars without
   // needing a bot to survive a whole level.
   Debug: 8,
+  // T-159: the pre-match theme/difficulty poll. A separate message family from the
+  // pedestal vote; the vote's four messages are untouched.
+  Poll: 9,
 });
 
 // ServerMsg variant indices (decode only).
@@ -72,6 +75,9 @@ const SERVER_VARIANTS = Object.freeze([
   'VoteState', // 11
   'VoteResult', // 12
   'DebugResult', // 13
+  'PollOpen', // 14
+  'PollState', // 15
+  'PollResult', // 16
 ]);
 
 // Field tables for the four structs the kit has to decode in full.
@@ -85,6 +91,11 @@ const SERVER_VARIANTS = Object.freeze([
 const STRUCT_FIELDS = Object.freeze({
   VoteOption: Object.freeze([
     ['index', 'u8'],
+    ['id', 'string'],
+    ['name', 'string'],
+    ['kind', 'u8'],
+  ]),
+  PollOption: Object.freeze([
     ['id', 'string'],
     ['name', 'string'],
     ['kind', 'u8'],
@@ -498,6 +509,11 @@ export function encodeClientMsg(msg) {
       w.string(msg.args, 'args');
       break;
 
+    case 'Poll':
+      w.u32(CLIENT_VARIANTS.Poll, 'variant');
+      w.u8(msg.option, 'option');
+      break;
+
     default:
       throw new RangeError(
         `ClientMsg: unknown variant ${JSON.stringify(msg.variant)} (known: ${Object.keys(
@@ -628,6 +644,30 @@ export function decodeServerMsg(buf) {
         name: r.string('name'),
         kind: r.u8('kind'),
         permanent: r.bool('permanent'),
+      };
+
+    case 'PollOpen':
+      return {
+        variant: variantName,
+        options: r.vec('options', (rr, f) => readStruct(rr, 'PollOption', f)),
+        countdown_s: r.u16('countdown_s'),
+      };
+
+    case 'PollState':
+      return {
+        variant: variantName,
+        counts: r.vecU32('counts'),
+        voted: r.vecU32('voted'),
+        seconds_left: r.u16('seconds_left'),
+      };
+
+    case 'PollResult':
+      return {
+        variant: variantName,
+        winner: r.u8('winner'),
+        id: r.string('id'),
+        name: r.string('name'),
+        kind: r.u8('kind'),
       };
 
     default:

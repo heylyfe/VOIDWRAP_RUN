@@ -718,6 +718,12 @@ class Client {
     } else if (msg.variant === 'VoteOpen') {
       this.send({ variant: 'Vote', option: 0 });
       this.votes = (this.votes || 0) + 1;
+    } else if (msg.variant === 'PollOpen') {
+      // T-159: the pre-match theme/difficulty poll gates the level-1 lobby, so a bot that
+      // never answers it never gets a level. Option 0 is the first catalog theme, then
+      // STANDARD.
+      this.send({ variant: 'Poll', option: 0 });
+      this.polls = (this.polls || 0) + 1;
     }
     // No auto-buy on `Shop`. A `Shop` frame is sent whenever the offer changes, including
     // for a level that is already playing, and the server answers a Buy outside
