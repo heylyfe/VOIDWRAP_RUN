@@ -1640,3 +1640,77 @@ without a URL.
 3. **The bot's `hold` fallback.** Holding still is safe but makes no progress. A bot
    that walks back toward the level centre would keep collecting and would raise the
    gift counts in every playthrough run.
+
+---
+
+## Cycle 18 — 2026-11-15
+
+### What was picked and why
+
+Cycle 17's log named three candidates. The first (voting with eight real ballots) turned
+out to be narrower than stated: the voting kit already has a ten-check stub matrix plus
+a three-check real smoke, so voting is not uncovered — only "eight real ballots against
+a real server" is, and the debug layer is singleplayer-only by design, so it cannot
+close that gap. The second (`5.reference-scale`'s `minExtent`) is message honesty with
+no defect behind it.
+
+So this cycle took the third: the bot's hold-still fallback, plus the underlying
+problem that `level-progression` being permanently skipped leaves traversal with no
+signal at all.
+
+### Attempt 1 — `retreat()` instead of holding still (REVERTED)
+
+T-139 found the edge probe's failure path is `blacklist the gift, return hold`. The
+obvious fix is to walk back toward the middle of the platform underfoot. Implemented and
+measured over two 8-client 90 s runs:
+
+| | best client's gifts |
+|---|---|
+| baseline | 40/88, 44/88 |
+| with `retreat` | 25/88, 42/88 |
+
+**No measured win.** Reverted. The freeze is real but it is not what limits gift
+collection; the limiter is the 6–7 deaths per run against 0 starting lives.
+
+### Attempt 2 — `gift-rate` as its own check (MERGED)
+
+`level-progression` needs a completed level, so it is permanently skipped and the only
+traversal signal was a number inside a skip message. `gift-rate` asks the question that
+needs no completion: can the bots still move around and pick things up?
+
+```
+PASS - gift-rate (best client collected 33/88 gifts (37.5%) in 90s; threshold >= 20%)
+```
+
+Measured 28–50% across runs; the 20% floor leaves headroom for variance while still
+failing if traversal degrades. Negative-tested at 90%: `FAIL - gift-rate` and
+`8/12 checks passed`.
+
+### Gates
+
+`just verify` **exit 0** — 246 sim, 151 server, 317 vitest (36 files), clippy
+`-D warnings`, protocol-gen `--check`, check-names (657 files), validate-content
+(20 enemies, 10 upgrades, 19 curses, 4 classes, 34 shop items, 3 events,
+15 milestones, 4 altars, 10 achievements, 140 patterns).
+
+`just verify-live --port 7979` **PASS 8/8**. Playthrough **9 pass / 3 skip / 0 fail**
+(was 8/3/0).
+
+### Release
+
+`v0.30.0-alpha.1`.
+
+### Top 3 candidates for Cycle 19
+
+1. **`5.reference-scale`'s `minExtent` formula.** Deferred three times now. It
+   over-estimates the forced extent for stepped terraces and for chunks whose ramps sit
+   inside their deck, so the message claims `ch15_tri_crown` is ramp-forced to 26 u when
+   nothing forces it. Bounded, and it is the last known-wrong number in the audit.
+2. **`1.pattern-repeat.within-level` at 10.42% against a 35% ceiling.** Deferred three
+   times. Measure what redundancy looks like if the bag's `recent_divisor` is relaxed —
+   a real variety knob, not just a threshold.
+3. **The audit backlog is nearly exhausted.** Every metric is green with headroom, the
+   coverage gaps are closed or blocked on the balance decision, and the remaining
+   candidates are message honesty and variety tuning. The next cycle should consider
+   moving to the owner's directive #4 — "make the models look good" — which is the
+   largest untouched item and is measurable through `just capture`.

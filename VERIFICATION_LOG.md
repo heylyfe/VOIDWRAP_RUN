@@ -1368,3 +1368,52 @@ conformance.
 ### Release
 
 `v0.29.0-alpha.1`.
+
+---
+
+## Cycle 18 — 2026-11-15
+
+### Tickets
+
+| ticket | status | commit | what |
+|---|---|---|---|
+| T-142 | PASS (1 merged, 1 reverted) | this commit | `gift-rate` check; bot `retreat()` reverted |
+
+### Attempt 1 — reverted
+
+`retreat(pos)` replaced the bot's hold-still fallback with a walk toward the platform
+centre. Measured over two 8-client 90 s runs: baseline 40/88 and 44/88, with `retreat`
+25/88 and 42/88. No measured win, so it was reverted rather than kept.
+
+### Attempt 2 — merged
+
+`gift-rate` asserts the best client collects at least 20% of the level's gifts. It needs
+no completed level, so it gives traversal a signal that `level-progression` (permanently
+skipped) cannot.
+
+```
+PASS - gift-rate (best client collected 33/88 gifts (37.5%) in 90s; threshold >= 20%)
+```
+
+Negative test at 90%: `FAIL - gift-rate (30/88, 34.1%)`, `8/12 checks passed`.
+
+### Gates
+
+`just verify` **exit 0** — 246 sim, 151 server, 317 vitest (36 files), clippy
+`-D warnings`, protocol-gen `--check`, check-names (657 files), validate-content
+(20 enemies, 10 upgrades, 19 curses, 4 classes, 34 shop items, 3 events,
+15 milestones, 4 altars, 10 achievements, 140 patterns).
+
+`just verify-live --port 7979` **PASS 8/8**. Playthrough **9 pass / 3 skip / 0 fail**.
+
+### Parked
+
+- Playthrough `level-progression` / `vote` / `shop`: blocked by the starting-lives
+  balance decision (T-139).
+- Voting with eight real ballots: the debug layer is singleplayer-only by design, so it
+  cannot close this. The stub matrix plus real smoke is the coverage that exists.
+- `5.reference-scale` `minExtent` formula: deferred three times, message honesty only.
+
+### Release
+
+`v0.30.0-alpha.1`.

@@ -582,6 +582,19 @@ async function main() {
   const best = { taken: clients.reduce((n, c) => Math.max(n, c.collected.size), 0), total: totalGifts };
   push('level-progression', completed,
     'highest level reached: ' + maxLevel + ' (best client collected ' + best.taken + '/' + best.total + ' gifts)');
+  // T-142: gift progress as its own check, not just a number inside the skip message.
+  // `level-progression` needs a completed level, which the bots cannot reach (T-139),
+  // so it is always skipped and a traversal regression would go unnoticed. This check
+  // needs no completion: it asks whether the bots can still move around the level and
+  // pick things up at a reasonable rate. Measured 28-50% across runs; the floor is 20%,
+  // which leaves headroom for the run-to-run variance while still failing if a level
+  // change makes traversal much worse.
+  const GIFT_RATE_MIN = 0.2;
+  const giftRate = best.total > 0 ? best.taken / best.total : 0;
+  push('gift-rate', best.total > 0 && giftRate >= GIFT_RATE_MIN,
+    'best client collected ' + best.taken + '/' + best.total + ' gifts ('
+    + (giftRate * 100).toFixed(1) + '%) in ' + SECONDS + 's; threshold >= '
+    + (GIFT_RATE_MIN * 100).toFixed(0) + '%');
   // `draft` does not need a completed level: the first draft fires before level 1
   // starts, so it is a live check even when the bot never finishes a level.
   const drafts = all.filter((m) => m.variant === 'Draft').length;
