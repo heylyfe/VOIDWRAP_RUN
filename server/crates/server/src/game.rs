@@ -145,6 +145,12 @@ impl Game {
         if debug.configured() {
             tracing::info!("debug commands enabled: this is a tester build");
         }
+        if debug.using_default_code() {
+            tracing::warn!(
+                "debug commands are using the DEFAULT dev code ({}); set VOIDWRAP_DEV_CODE to change it",
+                crate::debug::DEFAULT_DEV_CODE
+            );
+        }
         Ok(Game {
             tick: 0,
             conns: BTreeMap::new(),

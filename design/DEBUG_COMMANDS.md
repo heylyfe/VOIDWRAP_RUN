@@ -25,6 +25,11 @@ readable result — a summary on success, the reason on failure.
    with `VOIDWRAP_DEV=1` **or** the request carries a code equal to
    `VOIDWRAP_DEV_CODE`. With neither, the reply is `ok: false` and
    `"debug commands are not enabled"` — the command is never parsed.
+
+   When `VOIDWRAP_DEV_CODE` is unset the server falls back to
+   `DEFAULT_DEV_CODE = "devaccess"` (owner decision, 2026-11-15), so a tester
+   build is reachable without exporting anything first. The startup log warns
+   when the default is in use. Set `VOIDWRAP_DEV_CODE` to override it.
 2. **Singleplayer.** Every command is rejected while more than one player is
    connected. The check runs before the command is parsed, so a rejected
    command has no effect at all.
@@ -33,7 +38,10 @@ readable result — a summary on success, the reason on failure.
    its life, even if the correct code arrives later.
 
 The code is read from the environment at startup and never leaves the server.
-It is not in the client bundle, not in the protocol, and not in this file.
+It is not in the client bundle and not in the protocol. The default value is
+documented above because it is a server-side constant, not a secret: the other
+two gates are what make the tester build safe to ship — every command is
+singleplayer-only, and wrong codes are rate-limited per connection.
 
 ## Audit log
 

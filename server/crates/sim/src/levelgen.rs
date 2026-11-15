@@ -2799,6 +2799,109 @@ pub fn platform_graph(level: &LevelData) -> Vec<Vec<usize>> {
     adj
 }
 
+/// What the reachability graph says about a level, for the audit.
+///
+/// [`validate`] already refuses a level whose gifts, altars or beacon are unreachable, so
+/// `unreachable_gifts` is expected to be zero on every shipped level. The point of this
+/// report is to *prove* that invariant over thousands of generated levels instead of
+/// trusting the generator, and to name the platforms the graph cannot reach: the
+/// decorative pillars and floating blocks that read to a player as "a gap too big to
+/// jump". Those are not defects on their own — a pillar with no gift on it is scenery —
+/// but a gift on one is an uncollectable gift, which softlocks the collect phase.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ReachabilityReport {
+    /// Platform indices the spawn cannot reach.
+    pub unreachable: Vec<usize>,
+    /// Gifts whose supporting platform is unreachable.
+    pub unreachable_gifts: usize,
+    /// The rejected jump that came closest to being legal, as `(gap, rise, excess)`.
+    ///
+    /// `excess` is how far past the design envelope the gap sits, so a small excess is a
+    /// near-miss worth looking at and a large one is two platforms that were never meant
+    /// to connect. Only pairs within [`NEAR_MISS_RANGE`] are considered. `None` when no
+    /// pair of platforms is a near-miss.
+    pub near_miss: Option<(f32, f32, f32)>,
+}
+
+/// How far apart two platforms may be and still count as a near-miss pair, in world units.
+///
+/// Beyond this they are not neighbours: the widest legal jump is 8.0 u (a deep drop), so a
+/// pair further apart than this was never a candidate and reporting it as "almost
+/// jumpable" would be noise.
+pub const NEAR_MISS_RANGE: f32 = 12.0;
+
+/// Reachability verdict for `level`, for the audit.
+///
+/// Walks the same [`platform_graph`] edges [`validate`] uses, from platform 0 (the spawn
+/// platform, which `validate` requires the spawn to sit on), then reports what it could
+/// not reach and how close the closest rejected jump came to being legal.
+pub fn reachability_report(level: &LevelData) -> ReachabilityReport {
+    let platforms = &level.platforms;
+    let n = platforms.len();
+    if n == 0 {
+        return ReachabilityReport::default();
+    }
+
+    let adj = platform_graph(level);
+    let mut reach = vec![false; n];
+    reach[0] = true;
+    let mut queue = VecDeque::from([0usize]);
+    while let Some(a) = queue.pop_front() {
+        for &b in &adj[a] {
+            if !reach[b] {
+                reach[b] = true;
+                queue.push_back(b);
+            }
+        }
+    }
+
+    let unreachable: Vec<usize> = (0..n).filter(|&i| !reach[i]).collect();
+
+    let mut unreachable_gifts = 0usize;
+    for gift in &level.gifts {
+        let top = gift.pos.y - 0.3;
+        if let Some(i) = platform_top_under(platforms, gift.pos.x, gift.pos.z, top, 0.0)
+            && !reach[i]
+        {
+            unreachable_gifts += 1;
+        }
+    }
+
+    // The near-miss: among rejected pairs that are close enough to have been candidates,
+    // the one whose gap sits closest to its own design limit.
+    let mut near_miss: Option<(f32, f32, f32)> = None;
+    for i in 0..n {
+        for j in 0..n {
+            if i == j || adj[i].contains(&j) {
+                continue;
+            }
+            let gap = rect_gap(&platforms[i].bounds, &platforms[j].bounds);
+            if gap > NEAR_MISS_RANGE {
+                continue;
+            }
+            let rise = edge_rise(&platforms[i], &platforms[j]);
+            let Some(limit) = design_max_gap(rise) else {
+                continue;
+            };
+            // `can_jump_or_step` allows `limit - 1.0`; anything past that was rejected on
+            // the gap, which is the only rejection this metric is about.
+            let excess = gap - (limit - 1.0);
+            if excess <= 0.0 {
+                continue;
+            }
+            if near_miss.is_none_or(|(_, _, best)| excess < best) {
+                near_miss = Some((gap, rise, excess));
+            }
+        }
+    }
+
+    ReachabilityReport {
+        unreachable,
+        unreachable_gifts,
+        near_miss,
+    }
+}
+
 // ------------------------------------------------------------- tests ----
 
 #[cfg(test)]
@@ -2918,6 +3021,108 @@ mod tests {
         // first ramp's verdict is asserted.
         let up = plat(PLATFORM_RAMP_PX, [8.0, 4.0, 0.0], [16.0, 8.0, 4.0]);
         assert!(!orphaned_ramps(&[ramp, up]).contains(&0));
+    }
+
+    /// A level built from a deck plus one extra block, for the reachability report.
+    ///
+    /// `block_x` is the block's near edge, so the caller controls the gap; `block_top` is
+    /// its top surface, so the caller controls the rise.
+    fn reachability_fixture(block_top: f32, block_x: f32, gift_on_block: bool) -> LevelData {
+        let plat = |id: u16, kind: u8, min: [f32; 3], max: [f32; 3]| protocol::Platform {
+            id,
+            kind,
+            bounds: Aabb {
+                min: Vec3::new(min[0], min[1], min[2]),
+                max: Vec3::new(max[0], max[1], max[2]),
+            },
+        };
+        // Platform 0 is the spawn deck (validate requires the spawn to sit on it).
+        let deck = plat(0, protocol::PLATFORM_NORMAL, [0.0, 0.0, 0.0], [8.0, 0.5, 8.0]);
+        // A 2x2 block whose near edge is `block_x` and whose top is `block_top`.
+        let block = plat(
+            1,
+            protocol::PLATFORM_NORMAL,
+            [block_x, 0.0, 3.0],
+            [block_x + 2.0, block_top, 5.0],
+        );
+        let mut gifts = vec![protocol::Gift {
+            id: 0,
+            pos: Vec3::new(4.0, 0.8, 4.0),
+            kind: GIFT_NORMAL,
+        }];
+        if gift_on_block {
+            gifts.push(protocol::Gift {
+                id: 1,
+                pos: Vec3::new(block_x + 1.0, block_top + 0.3, 4.0),
+                kind: GIFT_NORMAL,
+            });
+        }
+        LevelData {
+            level: 1,
+            seed: 0,
+            spawn: Vec3::new(4.0, 0.5, 4.0),
+            beacon: Vec3::new(4.0, 0.5, 4.0),
+            kill_y: -20.0,
+            platforms: vec![deck, block],
+            gifts,
+            event: EVENT_NONE,
+            altars: Vec::new(),
+        }
+    }
+
+    /// A block whose top is 4.5 u above the deck is 2.5 u above the jump apex, so no jump
+    /// reaches it however close it sits. The rejection is on HEIGHT, not on gap, so there
+    /// is no near-miss gap to report.
+    #[test]
+    fn reachability_report_flags_a_block_no_jump_can_reach() {
+        let level = reachability_fixture(4.5, 9.5, false);
+        let report = reachability_report(&level);
+        assert_eq!(report.unreachable, vec![1], "the 4.5 u block is unreachable");
+        assert_eq!(report.unreachable_gifts, 0, "no gift sits on it");
+        assert_eq!(
+            report.near_miss, None,
+            "a too-high block is rejected on height, not on gap"
+        );
+    }
+
+    /// The same block lowered to a 1.5 u rise is inside the design envelope, so it is
+    /// reachable and there is no near-miss left to report.
+    #[test]
+    fn reachability_report_clears_a_block_inside_the_envelope() {
+        let level = reachability_fixture(2.0, 9.5, false);
+        let report = reachability_report(&level);
+        assert!(report.unreachable.is_empty(), "a 1.5 u rise is jumpable");
+        assert_eq!(report.near_miss, None, "nothing was rejected");
+    }
+
+    /// A block at a jumpable height but too far away is the "gap too big to jump" case.
+    /// The report must surface it as a near-miss with the measured gap and rise.
+    #[test]
+    fn reachability_report_measures_a_gap_too_wide_to_jump() {
+        // Rise 0.5 u (design limit 5.5 u, allowed 4.5 u) with a 6.5 u gap.
+        let level = reachability_fixture(1.0, 14.5, false);
+        let report = reachability_report(&level);
+        assert_eq!(report.unreachable, vec![1], "the far block is unreachable");
+        let (gap, rise, excess) = report.near_miss.expect("a rejected jump was measured");
+        assert!((gap - 6.5).abs() < 1e-3, "gap was {gap}");
+        // The reported direction is the one closest to legal, which here is the drop back
+        // to the deck: a drop allows 6.0 u (so 5.0 u after the comfort margin) against the
+        // rise's 5.5 u (4.5 u), so the drop is the tighter rejection at 1.5 u of excess.
+        assert!((rise + 0.5).abs() < 1e-3, "rise was {rise}");
+        assert!((excess - 1.5).abs() < 1e-3, "excess was {excess}");
+    }
+
+    /// A gift on an unreachable block is an uncollectable gift. `validate` refuses such a
+    /// level, so this is the assertion that proves the generator's promise holds.
+    #[test]
+    fn reachability_report_counts_gifts_on_unreachable_blocks() {
+        let level = reachability_fixture(4.5, 9.5, true);
+        let report = reachability_report(&level);
+        assert_eq!(report.unreachable_gifts, 1);
+        assert!(
+            validate(&level).is_err(),
+            "validate must refuse a level with an uncollectable gift"
+        );
     }
 
     fn hub_json_variant() -> String {

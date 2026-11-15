@@ -9,7 +9,9 @@
 //! 1. **Availability** — the server was started with `VOIDWRAP_DEV=1`, or the request
 //!    carries a code equal to `VOIDWRAP_DEV_CODE`. The code is read from the environment
 //!    at startup and never leaves the server: it is not in the protocol, not in the client
-//!    bundle, and not in the manifest.
+//!    bundle, and not in the manifest. When `VOIDWRAP_DEV_CODE` is unset the server falls
+//!    back to [`DEFAULT_DEV_CODE`] so a tester build is reachable without exporting
+//!    anything first; the startup log says so, and setting the variable overrides it.
 //! 2. **Singleplayer** — every command is rejected while more than one player is connected.
 //! 3. **Rate limit** — wrong codes are counted per connection; after [`MAX_BAD_CODES`] the
 //!    connection is refused debug access for the rest of its life, even with the right code.
@@ -24,6 +26,20 @@ use std::collections::BTreeMap;
 /// Wrong codes a single connection may present before it is locked out for good.
 pub const MAX_BAD_CODES: u8 = 5;
 
+/// The code a tester build accepts when `VOIDWRAP_DEV_CODE` is not set.
+///
+/// Owner decision (2026-11-15): the tester build should be reachable without exporting an
+/// environment variable first, so the code has a default. This is a *server-side*
+/// default: it is still not in the protocol, not in the client bundle, and not in the
+/// manifest, so a client cannot learn it from the build it downloads. The other two
+/// gates are unchanged — every command is rejected while more than one player is
+/// connected, and wrong codes are rate-limited per connection — so the default widens
+/// who can reach a singleplayer tester build, not what a command can do.
+///
+/// Set `VOIDWRAP_DEV_CODE` to override it. The startup log names the default when it is
+/// in use, so a shipped build that is running on the default is visible in the log.
+pub const DEFAULT_DEV_CODE: &str = "devaccess";
+
 /// Why a debug command was refused. The strings are stable: the panel shows them verbatim.
 pub const NOT_ENABLED: &str = "debug commands are not enabled";
 pub const SINGLEPLAYER_ONLY: &str = "debug commands are singleplayer only";
@@ -36,6 +52,8 @@ pub struct Gate {
     dev_flag: bool,
     /// `VOIDWRAP_DEV_CODE`: the code a client may present instead of the flag.
     code: Option<String>,
+    /// True when `code` came from [`DEFAULT_DEV_CODE`] rather than the environment.
+    using_default: bool,
     /// Wrong-code attempts per connection. A connection at [`MAX_BAD_CODES`] is locked out.
     bad: BTreeMap<ConnId, u8>,
 }
@@ -45,10 +63,14 @@ impl Gate {
     pub fn from_env() -> Self {
         let dev_flag = std::env::var("VOIDWRAP_DEV").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
         // An empty code is the same as no code: it must never be satisfiable by sending "".
-        let code = std::env::var("VOIDWRAP_DEV_CODE").ok().filter(|c| !c.is_empty());
+        // With neither set, the tester build falls back to `DEFAULT_DEV_CODE`.
+        let configured = std::env::var("VOIDWRAP_DEV_CODE").ok().filter(|c| !c.is_empty());
+        let using_default = configured.is_none();
+        let code = Some(configured.unwrap_or_else(|| DEFAULT_DEV_CODE.to_string()));
         Gate {
             dev_flag,
             code,
+            using_default,
             bad: BTreeMap::new(),
         }
     }
@@ -62,6 +84,7 @@ impl Gate {
         Gate {
             dev_flag,
             code: code.filter(|c| !c.is_empty()).map(str::to_owned),
+            using_default: false,
             bad: BTreeMap::new(),
         }
     }
@@ -69,6 +92,15 @@ impl Gate {
     /// True when the route exists for anyone at all (the dev flag is set or a code is configured).
     pub fn configured(&self) -> bool {
         self.dev_flag || self.code.is_some()
+    }
+
+    /// True when the accepted code is [`DEFAULT_DEV_CODE`] rather than one from the environment.
+    ///
+    /// The startup log uses this to say so out loud: a build running on the default code is a
+    /// build anyone who reads the source can unlock, and that should be visible rather than
+    /// assumed.
+    pub fn using_default_code(&self) -> bool {
+        self.using_default
     }
 
     /// Check one request. `Err` carries the stable refusal reason.
@@ -398,6 +430,24 @@ mod tests {
         assert_eq!(gate.authorize(7, "s3cret"), Err(TOO_MANY_BAD_CODES));
         // Another connection is unaffected.
         assert_eq!(gate.authorize(8, "s3cret"), Ok(()));
+    }
+
+    #[test]
+    fn the_default_code_opens_the_route_and_is_reported_as_a_default() {
+        // `Gate::from_env` with no `VOIDWRAP_DEV_CODE` falls back to `DEFAULT_DEV_CODE`.
+        // The constructor is exercised directly here so the test does not depend on the
+        // ambient environment of the test runner.
+        let mut gate = Gate {
+            dev_flag: false,
+            code: Some(DEFAULT_DEV_CODE.to_string()),
+            using_default: true,
+            bad: BTreeMap::new(),
+        };
+        assert!(gate.configured());
+        assert!(gate.using_default_code());
+        assert_eq!(gate.authorize(1, DEFAULT_DEV_CODE), Ok(()));
+        assert_eq!(gate.authorize(2, "devacc"), Err(NOT_ENABLED));
+        assert_eq!(gate.authorize(2, ""), Err(NOT_ENABLED));
     }
 
     #[test]

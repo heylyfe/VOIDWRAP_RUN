@@ -148,8 +148,18 @@ fn main() {
                     .filter(|p| sim::world::is_ramp(p.kind))
                     .count();
                 let gift_total = built.data.gifts.len();
+                // T-118: the reachability graph's own verdict, so the audit can prove the
+                // "every gift is reachable" promise over thousands of levels instead of
+                // trusting the generator, and can name the blocks no jump can reach.
+                let reach = sim::levelgen::reachability_report(&built.data);
+                let unreachable_platforms = reach.unreachable.len();
+                let unreachable_gifts = reach.unreachable_gifts;
+                let (nm_gap, nm_rise, nm_excess) = match reach.near_miss {
+                    Some((gap, rise, excess)) => (num(gap), num(rise), num(excess)),
+                    None => ("-1.00".to_string(), "0.00".to_string(), "-1.00".to_string()),
+                };
                 out.push_str(&format!(
-                    "{{\"seed\":{seed},\"level\":{level},\"players\":{pc},\"plan\":[{plan_json}],\"patterns\":[{pats}],\"enemies\":[{enemies}],\"gifts\":{gift_total},\"gift_intersections\":{gift_hits},\"ramps\":{ramp_total},\"orphan_ramps\":{orphan_ramps},\"fallbacks\":[{fallbacks}]}}\n"
+                    "{{\"seed\":{seed},\"level\":{level},\"players\":{pc},\"plan\":[{plan_json}],\"patterns\":[{pats}],\"enemies\":[{enemies}],\"gifts\":{gift_total},\"gift_intersections\":{gift_hits},\"ramps\":{ramp_total},\"orphan_ramps\":{orphan_ramps},\"unreachable_platforms\":{unreachable_platforms},\"unreachable_gifts\":{unreachable_gifts},\"near_miss_gap\":{nm_gap},\"near_miss_rise\":{nm_rise},\"near_miss_excess\":{nm_excess},\"fallbacks\":[{fallbacks}]}}\n"
                 ));
             }
         }

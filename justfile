@@ -45,6 +45,12 @@ verify: wasm
     node tools/economy-audit/run.mjs
     node tools/playthrough/run.mjs
 
+# The live half of the gate: builds, starts a server, runs the four black-box kits
+# against it, stops it. `verify` stays hermetic; this is the one that proves the game
+# actually runs. Needs no arguments. Set MATCHMAKER_URL to also run the matchmaker kit.
+verify-live:
+    node tools/verify-live.mjs
+
 # Screenshot the running client into shots/ (needs `just run` in another terminal)
 capture:
     node tools/capture.mjs

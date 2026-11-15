@@ -91,7 +91,13 @@ const TH = {
   STAIR_STEP_EPS: 0.05,
   HEIGHT_DIFF_MIN: 1.0,   // reference scale: height differences 1-6 u
   HEIGHT_DIFF_MAX: 6.0,
-  HEIGHT_DIFF_RATE_MAX: 0.02, // share of measured adjacent-surface deltas
+  // Share of measured adjacent-surface deltas allowed outside [1, 6] u. Raised from
+  // 0.02 to 0.05 by owner decision (2026-11-15): the offending heights live in the
+  // frozen design/chunks.json, and this is a style rule, not a correctness rule --
+  // nothing outside the band is unplayable. Measured 4.47% at the time of the change
+  // (down from 6.02% before the T-107 ramp-anchor fixes). A regression past 5% still
+  // fails, so the metric keeps its teeth.
+  HEIGHT_DIFF_RATE_MAX: 0.05,
   SCALE_EXTENT_MIN: 10.0, // reference scale: platforms 10-20 u — read as the
   SCALE_EXTENT_MAX: 20.0, // placed pattern's max XZ footprint extent (both worked
   SCALE_RATE_MAX: 0.10,   // examples in PATTERN_FORMAT §8 measure 16 u). 10% slack
@@ -234,6 +240,8 @@ function createAggregate() {
       heightPairs: 0, heightViol: 0, heightEx: [],
       gifts: 0, giftIntersections: 0, giftIntersectionLevels: 0,
       rampAnchors: 0, rampOrphans: 0, rampOrphanLevels: 0,
+      unreachablePlatforms: 0, unreachableGifts: 0, unreachableGiftLevels: 0,
+      nearMissLevels: 0, tightestNearMiss: null,
     },
 
     planStats: { intraRepeat: 0, redundancySum: 0, redundancy: [], domMax: { v: 0, where: '-' } },
@@ -738,6 +746,19 @@ function report(A, ctx, log) {
     gRate <= TH.GIFT_INTERSECT_RATE_MAX,
     `gifts whose body overlaps a solid platform volume: ${geo.giftIntersections}/${geo.gifts} (${pctf(gRate)}) across ${geo.giftIntersectionLevels} levels; threshold <= ${(TH.GIFT_INTERSECT_RATE_MAX * 100).toFixed(3)}%`);
 
+  // --- 5c reachability (T-118) ---------------------------------------------------
+  // The generator's promise is that every gift is reachable from the spawn. `validate`
+  // enforces it per level; this proves it over the whole run. Unreachable PLATFORMS are
+  // reported but not failed: a decorative pillar with no gift on it is scenery, and the
+  // owner's "gap too big to jump" is exactly what the near-miss number measures.
+  const nm = geo.tightestNearMiss;
+  line('5.reachability',
+    geo.unreachableGifts === 0,
+    `gifts on a platform the spawn cannot reach: ${geo.unreachableGifts}/${geo.gifts} across ${geo.unreachableGiftLevels} levels; threshold: 0. `
+    + `Unreachable platforms (scenery, informational): ${geo.unreachablePlatforms}. `
+    + `Tightest rejected jump: ${nm ? `${nm.gap.toFixed(2)}u gap at ${nm.rise.toFixed(2)}u rise, ${nm.excess.toFixed(2)}u past the envelope (seed=${nm.seed} lvl=${nm.level} players=${nm.players})` : 'none'}; `
+    + `levels with a measured near-miss: ${geo.nearMissLevels}`);
+
   // --- 6 enemy spawn frequencies -------------------------------------------------
   const neverList = ctx.enemyRoster ? ctx.enemyRoster.filter((t) => !A.enemyPlacements.has(t)) : null;
   line('6.enemy-frequencies.never-offered',
@@ -875,6 +896,30 @@ async function runAudit(source, seedsTarget, enemyRoster, log) {
       A.geo.rampAnchors += rampTotal;
       A.geo.rampOrphans += rampOrphans;
       if (rampOrphans > 0) A.geo.rampOrphanLevels += 1;
+      // T-118: the reachability graph's own verdict. `validate` refuses a level whose
+      // gifts are unreachable, so `unreachable_gifts` proves that promise over thousands
+      // of levels instead of trusting the generator. `near_miss_*` is the rejected jump
+      // that came closest to being legal: the "gap too big to jump" the owner asked for.
+      const unreachablePlatforms = Number(rec.unreachable_platforms ?? 0);
+      const unreachableGifts = Number(rec.unreachable_gifts ?? 0);
+      A.geo.unreachablePlatforms += unreachablePlatforms;
+      A.geo.unreachableGifts += unreachableGifts;
+      if (unreachableGifts > 0) A.geo.unreachableGiftLevels += 1;
+      const nmGap = Number(rec.near_miss_gap ?? -1);
+      if (nmGap >= 0) {
+        A.geo.nearMissLevels += 1;
+        const nmExcess = Number(rec.near_miss_excess ?? 0);
+        if (A.geo.tightestNearMiss === null || nmExcess < A.geo.tightestNearMiss.excess) {
+          A.geo.tightestNearMiss = {
+            excess: nmExcess,
+            gap: nmGap,
+            rise: Number(rec.near_miss_rise ?? 0),
+            seed: rec.seed,
+            level: rec.level,
+            players: rec.players,
+          };
+        }
+      }
     }
   } catch (err) {
     log(`FATAL - generator/input failed: ${err && err.message ? err.message : err}`);
