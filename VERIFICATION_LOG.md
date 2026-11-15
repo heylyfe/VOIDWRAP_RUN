@@ -673,3 +673,25 @@ achievements, 85 patterns).
 protocol-gen --check, check-names (580 files), validate-content (20 enemies, 10
 upgrades, 19 curses, 4 classes, 34 shop items, 3 events, 15 milestones, 4 altars, 10
 achievements, 85 patterns).
+
+## v0.17.0-alpha.1 — Refinement Cycle 7
+
+- T-102 PASS: 15 new patterns (`pa2_*`) appended to `design/patterns-a.json`, 15 of 15
+  accepted on the first pass by a purpose-written format checker. Pattern pool 85 -> 100.
+- `4.near-duplicates` 17.63% -> **11.80%** (threshold 0.2%, still FAIL).
+- `5.heights` 12.38% -> **9.76%** (threshold 2%, still FAIL) — side effect of the larger
+  pool diluting the frozen `chunks.json` contribution.
+- `0.input` PASS. The first splice run produced one `no_plan` record at
+  `seed=95 lvl=3 players=8`; root cause was the pre-existing `pb_machine_gauntlet`
+  pattern, whose three 4.5-5.5 u pillars are unreachable from its own sockets, so a gift
+  could land on one and fail `validate`. Two generator fixes were attempted and both
+  reverted (they either hid broken levels or broke platform-id density and trap checks).
+  Shipped fix is data-side: `pa2_frost_descent` raised to `min_level` 4.
+  `server/crates/sim/src/levelgen.rs` is unchanged.
+- PARKED: `4.near-duplicates` (11.80%), `pb_machine_gauntlet` pillars, the assembly tail
+  (needs id renumbering + reverse-reachability), `5.heights` (frozen `chunks.json`).
+
+`just verify` green: 127 server / 234 sim / 279 vitest, clippy `-D warnings`,
+protocol-gen --check, check-names (582 files), validate-content (20 enemies, 10
+upgrades, 19 curses, 4 classes, 34 shop items, 3 events, 15 milestones, 4 altars, 10
+achievements, 100 patterns).

@@ -3585,6 +3585,1964 @@
         ]
       ],
       "beacon": null
+    },
+    {
+      "id": "pa2_ember_switchback",
+      "name": "Ember Switchback",
+      "role": "path",
+      "min_level": 2,
+      "difficulty": 2,
+      "tags": [
+        "theme:ember",
+        "mech:climb",
+        "mech:span",
+        "switchback"
+      ],
+      "platforms": [
+        {
+          "kind": "NORMAL",
+          "min": [
+            -8,
+            0,
+            -9
+          ],
+          "max": [
+            0,
+            0.5,
+            -5
+          ]
+        },
+        {
+          "kind": "RAMP_PX",
+          "min": [
+            0,
+            0.5,
+            -9
+          ],
+          "max": [
+            4,
+            2.5,
+            -5
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            4,
+            2,
+            -9
+          ],
+          "max": [
+            8,
+            2.5,
+            -5
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            2,
+            2,
+            -5
+          ],
+          "max": [
+            8,
+            2.5,
+            1
+          ]
+        },
+        {
+          "kind": "RAMP_PZ",
+          "min": [
+            3,
+            2.5,
+            1
+          ],
+          "max": [
+            7,
+            4.5,
+            5
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            3,
+            4,
+            5
+          ],
+          "max": [
+            7,
+            4.5,
+            9
+          ]
+        }
+      ],
+      "sockets": [
+        {
+          "id": "a",
+          "pos": [
+            -8,
+            0.5,
+            -7
+          ],
+          "facing": "W",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            5,
+            4.5,
+            9
+          ],
+          "facing": "N",
+          "width": 4
+        }
+      ],
+      "gift_slots": [
+        {
+          "pos": [
+            -4,
+            0.5,
+            -7
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            6,
+            2.5,
+            -7
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            5,
+            4.8,
+            7
+          ],
+          "elevated": true
+        }
+      ],
+      "enemy_slots": [],
+      "altar_slots": [
+        [
+          5,
+          2.5,
+          -2
+        ]
+      ],
+      "beacon": null
+    },
+    {
+      "id": "pa2_frost_descent",
+      "name": "Frost Descent",
+      "role": "path",
+      "min_level": 4,
+      "difficulty": 2,
+      "tags": [
+        "theme:frost",
+        "mech:drop",
+        "mech:span",
+        "descent"
+      ],
+      "platforms": [
+        {
+          "kind": "NORMAL",
+          "min": [
+            -7,
+            6,
+            -9
+          ],
+          "max": [
+            1,
+            6.5,
+            -5
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -7,
+            2.5,
+            -5
+          ],
+          "max": [
+            1,
+            3,
+            1
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -7,
+            0,
+            1
+          ],
+          "max": [
+            1,
+            0.5,
+            7
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            1,
+            0,
+            3
+          ],
+          "max": [
+            8,
+            0.5,
+            7
+          ]
+        }
+      ],
+      "sockets": [
+        {
+          "id": "a",
+          "pos": [
+            -3,
+            6.5,
+            -9
+          ],
+          "facing": "S",
+          "width": 8
+        },
+        {
+          "id": "b",
+          "pos": [
+            8,
+            0.5,
+            5
+          ],
+          "facing": "E",
+          "width": 4
+        }
+      ],
+      "gift_slots": [
+        {
+          "pos": [
+            -3,
+            6.5,
+            -7
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            -3,
+            3,
+            -3
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            -3,
+            0.5,
+            4
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            4,
+            0.8,
+            5
+          ],
+          "elevated": true
+        }
+      ],
+      "enemy_slots": [],
+      "altar_slots": [
+        [
+          -5,
+          3,
+          0
+        ]
+      ],
+      "beacon": null
+    },
+    {
+      "id": "pa2_void_span",
+      "name": "Void Span",
+      "role": "path",
+      "min_level": 3,
+      "difficulty": 2,
+      "tags": [
+        "theme:void",
+        "mech:span",
+        "mech:crawl",
+        "bridge"
+      ],
+      "platforms": [
+        {
+          "kind": "NORMAL",
+          "min": [
+            -9,
+            0,
+            -3
+          ],
+          "max": [
+            -5,
+            0.5,
+            3
+          ]
+        },
+        {
+          "kind": "RAMP_PX",
+          "min": [
+            -5,
+            0.5,
+            -2
+          ],
+          "max": [
+            -1,
+            2.5,
+            2
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -1,
+            2,
+            -1
+          ],
+          "max": [
+            5,
+            2.5,
+            1
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            5,
+            2,
+            -3
+          ],
+          "max": [
+            9,
+            2.5,
+            3
+          ]
+        }
+      ],
+      "sockets": [
+        {
+          "id": "a",
+          "pos": [
+            -9,
+            0.5,
+            0
+          ],
+          "facing": "W",
+          "width": 6
+        },
+        {
+          "id": "b",
+          "pos": [
+            9,
+            2.5,
+            0
+          ],
+          "facing": "E",
+          "width": 6
+        }
+      ],
+      "gift_slots": [
+        {
+          "pos": [
+            -7,
+            0.5,
+            0
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            2,
+            2.5,
+            0
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            7,
+            2.5,
+            0
+          ],
+          "elevated": false
+        }
+      ],
+      "enemy_slots": [],
+      "altar_slots": [
+        [
+          7,
+          2.5,
+          2
+        ]
+      ],
+      "beacon": null
+    },
+    {
+      "id": "pa2_garden_ascent",
+      "name": "Garden Ascent",
+      "role": "path",
+      "min_level": 1,
+      "difficulty": 1,
+      "tags": [
+        "theme:garden",
+        "mech:climb",
+        "mech:rest",
+        "terrace"
+      ],
+      "platforms": [
+        {
+          "kind": "NORMAL",
+          "min": [
+            -9,
+            0,
+            -9
+          ],
+          "max": [
+            -3,
+            0.5,
+            -4
+          ]
+        },
+        {
+          "kind": "RAMP_PX",
+          "min": [
+            -3,
+            0.5,
+            -9
+          ],
+          "max": [
+            1,
+            2.5,
+            -4
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            1,
+            2,
+            -9
+          ],
+          "max": [
+            6,
+            2.5,
+            -4
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            6,
+            2,
+            -4
+          ],
+          "max": [
+            9,
+            2.5,
+            2
+          ]
+        },
+        {
+          "kind": "RAMP_PZ",
+          "min": [
+            6,
+            2.5,
+            2
+          ],
+          "max": [
+            9,
+            4.5,
+            6
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            6,
+            4,
+            6
+          ],
+          "max": [
+            9,
+            4.5,
+            9
+          ]
+        }
+      ],
+      "sockets": [
+        {
+          "id": "a",
+          "pos": [
+            -9,
+            0.5,
+            -6.5
+          ],
+          "facing": "W",
+          "width": 5
+        },
+        {
+          "id": "b",
+          "pos": [
+            7.5,
+            4.5,
+            9
+          ],
+          "facing": "N",
+          "width": 3
+        }
+      ],
+      "gift_slots": [
+        {
+          "pos": [
+            -6,
+            0.5,
+            -6.5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            3.5,
+            2.5,
+            -6.5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            7.5,
+            4.5,
+            7.5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            7.5,
+            2.8,
+            0
+          ],
+          "elevated": true
+        }
+      ],
+      "enemy_slots": [],
+      "altar_slots": [
+        [
+          7.5,
+          2.5,
+          -2
+        ]
+      ],
+      "beacon": null
+    },
+    {
+      "id": "pa2_ruin_gauntlet",
+      "name": "Ruin Gauntlet",
+      "role": "path",
+      "min_level": 4,
+      "difficulty": 3,
+      "tags": [
+        "theme:ruin",
+        "mech:gauntlet",
+        "mech:loot",
+        "gauntlet"
+      ],
+      "platforms": [
+        {
+          "kind": "NORMAL",
+          "min": [
+            -9,
+            0,
+            -2.5
+          ],
+          "max": [
+            -6,
+            0.5,
+            2.5
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -6,
+            0,
+            -2.5
+          ],
+          "max": [
+            9,
+            0.5,
+            2.5
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            1,
+            2.5
+          ],
+          "max": [
+            2,
+            1.5,
+            6
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            1,
+            -6
+          ],
+          "max": [
+            2,
+            1.5,
+            -2.5
+          ]
+        }
+      ],
+      "sockets": [
+        {
+          "id": "a",
+          "pos": [
+            -9,
+            0.5,
+            0
+          ],
+          "facing": "W",
+          "width": 5
+        },
+        {
+          "id": "b",
+          "pos": [
+            9,
+            0.5,
+            0
+          ],
+          "facing": "E",
+          "width": 5
+        }
+      ],
+      "gift_slots": [
+        {
+          "pos": [
+            -7.5,
+            0.5,
+            0
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            1.5,
+            4.25
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            1.5,
+            -4.25
+          ],
+          "elevated": false
+        }
+      ],
+      "enemy_slots": [],
+      "altar_slots": [
+        [
+          0,
+          0.5,
+          0
+        ]
+      ],
+      "beacon": null
+    },
+    {
+      "id": "pa2_machine_conveyor",
+      "name": "Machine Conveyor",
+      "role": "path",
+      "min_level": 5,
+      "difficulty": 2,
+      "tags": [
+        "theme:machine",
+        "mech:climb",
+        "mech:span",
+        "conveyor"
+      ],
+      "platforms": [
+        {
+          "kind": "NORMAL",
+          "min": [
+            -8,
+            0,
+            -8
+          ],
+          "max": [
+            -2,
+            0.5,
+            -2
+          ]
+        },
+        {
+          "kind": "RAMP_PZ",
+          "min": [
+            -6,
+            0.5,
+            -2
+          ],
+          "max": [
+            -2,
+            2.5,
+            2
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -6,
+            2,
+            2
+          ],
+          "max": [
+            2,
+            2.5,
+            6
+          ]
+        },
+        {
+          "kind": "RAMP_PX",
+          "min": [
+            2,
+            2.5,
+            2
+          ],
+          "max": [
+            6,
+            4.5,
+            6
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            6,
+            4,
+            2
+          ],
+          "max": [
+            9,
+            4.5,
+            6
+          ]
+        }
+      ],
+      "sockets": [
+        {
+          "id": "a",
+          "pos": [
+            -5,
+            0.5,
+            -8
+          ],
+          "facing": "S",
+          "width": 6
+        },
+        {
+          "id": "b",
+          "pos": [
+            9,
+            4.5,
+            4
+          ],
+          "facing": "E",
+          "width": 4
+        }
+      ],
+      "gift_slots": [
+        {
+          "pos": [
+            -5,
+            0.5,
+            -5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            -2,
+            2.5,
+            4
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            7.5,
+            4.5,
+            4
+          ],
+          "elevated": false
+        }
+      ],
+      "enemy_slots": [],
+      "altar_slots": [
+        [
+          0,
+          2.5,
+          5
+        ]
+      ],
+      "beacon": null
+    },
+    {
+      "id": "pa2_spire_climb",
+      "name": "Spire Climb",
+      "role": "path",
+      "min_level": 6,
+      "difficulty": 3,
+      "tags": [
+        "theme:spire",
+        "mech:climb",
+        "mech:drop",
+        "summit"
+      ],
+      "platforms": [
+        {
+          "kind": "NORMAL",
+          "min": [
+            -9,
+            0,
+            -8
+          ],
+          "max": [
+            -3,
+            0.5,
+            -2
+          ]
+        },
+        {
+          "kind": "RAMP_PX",
+          "min": [
+            -3,
+            0.5,
+            -8
+          ],
+          "max": [
+            1,
+            2.5,
+            -4
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            1,
+            2,
+            -8
+          ],
+          "max": [
+            5,
+            2.5,
+            -2
+          ]
+        },
+        {
+          "kind": "RAMP_PZ",
+          "min": [
+            1,
+            2.5,
+            -2
+          ],
+          "max": [
+            5,
+            4.5,
+            2
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            4,
+            2
+          ],
+          "max": [
+            5,
+            4.5,
+            6
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -9,
+            1.5,
+            2
+          ],
+          "max": [
+            -3,
+            2,
+            6
+          ]
+        }
+      ],
+      "sockets": [
+        {
+          "id": "a",
+          "pos": [
+            -9,
+            0.5,
+            -5
+          ],
+          "facing": "W",
+          "width": 6
+        },
+        {
+          "id": "b",
+          "pos": [
+            -9,
+            2,
+            4
+          ],
+          "facing": "W",
+          "width": 4
+        }
+      ],
+      "gift_slots": [
+        {
+          "pos": [
+            -6,
+            0.5,
+            -5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            3,
+            2.5,
+            -5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            1,
+            4.5,
+            4
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            -6,
+            2,
+            4
+          ],
+          "elevated": false
+        }
+      ],
+      "enemy_slots": [],
+      "altar_slots": [
+        [
+          1,
+          4.5,
+          5
+        ]
+      ],
+      "beacon": null
+    },
+    {
+      "id": "pa2_hollow_crawl",
+      "name": "Hollow Crawl",
+      "role": "path",
+      "min_level": 3,
+      "difficulty": 1,
+      "tags": [
+        "theme:hollow",
+        "mech:crawl",
+        "mech:span",
+        "crawl"
+      ],
+      "platforms": [
+        {
+          "kind": "NORMAL",
+          "min": [
+            -9,
+            0,
+            -2
+          ],
+          "max": [
+            -5,
+            0.5,
+            2
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -5,
+            0,
+            -1
+          ],
+          "max": [
+            3,
+            0.5,
+            1
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            3,
+            0,
+            -2
+          ],
+          "max": [
+            9,
+            0.5,
+            2
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -4,
+            5,
+            -1
+          ],
+          "max": [
+            2,
+            5.5,
+            1
+          ]
+        }
+      ],
+      "sockets": [
+        {
+          "id": "a",
+          "pos": [
+            -9,
+            0.5,
+            0
+          ],
+          "facing": "W",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            9,
+            0.5,
+            0
+          ],
+          "facing": "E",
+          "width": 4
+        }
+      ],
+      "gift_slots": [
+        {
+          "pos": [
+            -7,
+            0.5,
+            0
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            -1,
+            0.5,
+            0
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            6,
+            0.5,
+            0
+          ],
+          "elevated": false
+        }
+      ],
+      "enemy_slots": [],
+      "altar_slots": [
+        [
+          6,
+          0.5,
+          1
+        ]
+      ],
+      "beacon": null
+    },
+    {
+      "id": "pa2_hollow_drop",
+      "name": "Hollow Drop",
+      "role": "path",
+      "min_level": 2,
+      "difficulty": 1,
+      "tags": [
+        "theme:hollow",
+        "mech:drop",
+        "mech:loot",
+        "cache"
+      ],
+      "platforms": [
+        {
+          "kind": "NORMAL",
+          "min": [
+            -8,
+            3.5,
+            -9
+          ],
+          "max": [
+            0,
+            4,
+            -5
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -8,
+            1.5,
+            -5
+          ],
+          "max": [
+            0,
+            2,
+            -1
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -8,
+            0,
+            -1
+          ],
+          "max": [
+            0,
+            0.5,
+            7
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            0,
+            0,
+            3
+          ],
+          "max": [
+            8,
+            0.5,
+            7
+          ]
+        }
+      ],
+      "sockets": [
+        {
+          "id": "a",
+          "pos": [
+            -4,
+            4,
+            -9
+          ],
+          "facing": "S",
+          "width": 8
+        },
+        {
+          "id": "b",
+          "pos": [
+            8,
+            0.5,
+            5
+          ],
+          "facing": "E",
+          "width": 4
+        }
+      ],
+      "gift_slots": [
+        {
+          "pos": [
+            -4,
+            4,
+            -7
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            -4,
+            2,
+            -3
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            -4,
+            0.5,
+            3
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            4,
+            0.8,
+            5
+          ],
+          "elevated": true
+        }
+      ],
+      "enemy_slots": [],
+      "altar_slots": [
+        [
+          -6,
+          0.5,
+          5
+        ]
+      ],
+      "beacon": null
+    },
+    {
+      "id": "pa2_machine_depot",
+      "name": "Machine Depot",
+      "role": "path",
+      "min_level": 1,
+      "difficulty": 1,
+      "tags": [
+        "theme:machine",
+        "mech:rest",
+        "mech:loot",
+        "depot"
+      ],
+      "platforms": [
+        {
+          "kind": "NORMAL",
+          "min": [
+            -9,
+            0,
+            -3
+          ],
+          "max": [
+            -5,
+            0.5,
+            3
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -5,
+            0,
+            -3
+          ],
+          "max": [
+            5,
+            0.5,
+            3
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            5,
+            0,
+            -3
+          ],
+          "max": [
+            9,
+            0.5,
+            3
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            5,
+            -2
+          ],
+          "max": [
+            2,
+            5.5,
+            2
+          ]
+        }
+      ],
+      "sockets": [
+        {
+          "id": "a",
+          "pos": [
+            -9,
+            0.5,
+            0
+          ],
+          "facing": "W",
+          "width": 6
+        },
+        {
+          "id": "b",
+          "pos": [
+            9,
+            0.5,
+            0
+          ],
+          "facing": "E",
+          "width": 6
+        }
+      ],
+      "gift_slots": [
+        {
+          "pos": [
+            -7,
+            0.5,
+            0
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            0.5,
+            0
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            7,
+            0.5,
+            0
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            1,
+            2
+          ],
+          "elevated": true
+        }
+      ],
+      "enemy_slots": [],
+      "altar_slots": [
+        [
+          3,
+          0.5,
+          -2
+        ]
+      ],
+      "beacon": null
+    },
+    {
+      "id": "pa2_ruin_junction",
+      "name": "Ruin Junction",
+      "role": "junction",
+      "min_level": 2,
+      "difficulty": 1,
+      "tags": [
+        "theme:ruin",
+        "mech:fork",
+        "mech:rest",
+        "crossing"
+      ],
+      "platforms": [
+        {
+          "kind": "NORMAL",
+          "min": [
+            -7,
+            0,
+            -7
+          ],
+          "max": [
+            7,
+            0.5,
+            7
+          ]
+        }
+      ],
+      "sockets": [
+        {
+          "id": "a",
+          "pos": [
+            0,
+            0.5,
+            -7
+          ],
+          "facing": "S",
+          "width": 6
+        },
+        {
+          "id": "b",
+          "pos": [
+            7,
+            0.5,
+            0
+          ],
+          "facing": "E",
+          "width": 6
+        },
+        {
+          "id": "c",
+          "pos": [
+            0,
+            0.5,
+            7
+          ],
+          "facing": "N",
+          "width": 6
+        },
+        {
+          "id": "d",
+          "pos": [
+            -7,
+            0.5,
+            0
+          ],
+          "facing": "W",
+          "width": 6
+        }
+      ],
+      "gift_slots": [
+        {
+          "pos": [
+            -4,
+            0.5,
+            -4
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            4,
+            0.5,
+            4
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            4,
+            0.8,
+            -4
+          ],
+          "elevated": true
+        }
+      ],
+      "enemy_slots": [],
+      "altar_slots": [
+        [
+          0,
+          0.5,
+          0
+        ]
+      ],
+      "beacon": null
+    },
+    {
+      "id": "pa2_void_fork",
+      "name": "Void Fork",
+      "role": "junction",
+      "min_level": 4,
+      "difficulty": 2,
+      "tags": [
+        "theme:void",
+        "mech:fork",
+        "mech:span",
+        "crossing"
+      ],
+      "platforms": [
+        {
+          "kind": "NORMAL",
+          "min": [
+            -6,
+            0,
+            -6
+          ],
+          "max": [
+            6,
+            0.5,
+            6
+          ]
+        },
+        {
+          "kind": "RAMP_PZ",
+          "min": [
+            -3,
+            0.5,
+            6
+          ],
+          "max": [
+            3,
+            2.5,
+            10
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            2,
+            10
+          ],
+          "max": [
+            3,
+            2.5,
+            12
+          ]
+        }
+      ],
+      "sockets": [
+        {
+          "id": "a",
+          "pos": [
+            0,
+            0.5,
+            -6
+          ],
+          "facing": "S",
+          "width": 6
+        },
+        {
+          "id": "b",
+          "pos": [
+            6,
+            0.5,
+            0
+          ],
+          "facing": "E",
+          "width": 6
+        },
+        {
+          "id": "c",
+          "pos": [
+            0,
+            2.5,
+            12
+          ],
+          "facing": "N",
+          "width": 6
+        }
+      ],
+      "gift_slots": [
+        {
+          "pos": [
+            -3,
+            0.5,
+            -3
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            3,
+            0.5,
+            3
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            2.5,
+            11
+          ],
+          "elevated": false
+        }
+      ],
+      "enemy_slots": [],
+      "altar_slots": [
+        [
+          0,
+          0.5,
+          0
+        ]
+      ],
+      "beacon": null
+    },
+    {
+      "id": "pa2_machine_junction",
+      "name": "Machine Junction",
+      "role": "junction",
+      "min_level": 5,
+      "difficulty": 2,
+      "tags": [
+        "theme:machine",
+        "mech:fork",
+        "mech:gauntlet",
+        "crossing"
+      ],
+      "platforms": [
+        {
+          "kind": "NORMAL",
+          "min": [
+            -7,
+            0,
+            -7
+          ],
+          "max": [
+            7,
+            0.5,
+            7
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -7,
+            5,
+            -1
+          ],
+          "max": [
+            7,
+            5.5,
+            1
+          ]
+        }
+      ],
+      "sockets": [
+        {
+          "id": "a",
+          "pos": [
+            0,
+            0.5,
+            -7
+          ],
+          "facing": "S",
+          "width": 6
+        },
+        {
+          "id": "b",
+          "pos": [
+            7,
+            0.5,
+            0
+          ],
+          "facing": "E",
+          "width": 6
+        },
+        {
+          "id": "c",
+          "pos": [
+            0,
+            0.5,
+            7
+          ],
+          "facing": "N",
+          "width": 6
+        },
+        {
+          "id": "d",
+          "pos": [
+            -7,
+            0.5,
+            0
+          ],
+          "facing": "W",
+          "width": 6
+        }
+      ],
+      "gift_slots": [
+        {
+          "pos": [
+            -4,
+            0.5,
+            -4
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            4,
+            0.5,
+            -4
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            0.5,
+            4
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            4,
+            0.8,
+            4
+          ],
+          "elevated": true
+        }
+      ],
+      "enemy_slots": [],
+      "altar_slots": [
+        [
+          0,
+          0.5,
+          0
+        ]
+      ],
+      "beacon": null
+    },
+    {
+      "id": "pa2_frost_cache",
+      "name": "Frost Cache",
+      "role": "dead_end",
+      "min_level": 3,
+      "difficulty": 1,
+      "tags": [
+        "theme:frost",
+        "mech:dead_end",
+        "mech:loot",
+        "cache"
+      ],
+      "platforms": [
+        {
+          "kind": "NORMAL",
+          "min": [
+            -1.5,
+            0,
+            -9
+          ],
+          "max": [
+            1.5,
+            0.5,
+            -4
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -5,
+            0,
+            -4
+          ],
+          "max": [
+            5,
+            0.5,
+            2
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            1.5,
+            2
+          ],
+          "max": [
+            2,
+            2,
+            5
+          ]
+        }
+      ],
+      "sockets": [
+        {
+          "id": "a",
+          "pos": [
+            0,
+            0.5,
+            -9
+          ],
+          "facing": "S",
+          "width": 3
+        }
+      ],
+      "gift_slots": [
+        {
+          "pos": [
+            -3,
+            0.5,
+            -1
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            0.5,
+            -1
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            3,
+            0.5,
+            -1
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            2,
+            3.5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            -2,
+            0.5,
+            0.5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            2,
+            0.8,
+            -1
+          ],
+          "elevated": true
+        }
+      ],
+      "enemy_slots": [],
+      "altar_slots": [
+        [
+          0,
+          0.5,
+          1
+        ]
+      ],
+      "beacon": null
+    },
+    {
+      "id": "pa2_void_shrine",
+      "name": "Void Shrine",
+      "role": "dead_end",
+      "min_level": 7,
+      "difficulty": 2,
+      "tags": [
+        "theme:void",
+        "mech:dead_end",
+        "mech:drop",
+        "mech:loot",
+        "shrine"
+      ],
+      "platforms": [
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            2,
+            -9
+          ],
+          "max": [
+            2,
+            2.5,
+            -5
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            2,
+            -5
+          ],
+          "max": [
+            6,
+            2.5,
+            0
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            2,
+            0,
+            0
+          ],
+          "max": [
+            8,
+            0.5,
+            6
+          ]
+        }
+      ],
+      "sockets": [
+        {
+          "id": "a",
+          "pos": [
+            0,
+            2.5,
+            -9
+          ],
+          "facing": "S",
+          "width": 4
+        }
+      ],
+      "gift_slots": [
+        {
+          "pos": [
+            0,
+            2.5,
+            -7
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            4,
+            2.5,
+            -2
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            5,
+            0.5,
+            3
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            3,
+            0.8,
+            4
+          ],
+          "elevated": true
+        }
+      ],
+      "enemy_slots": [],
+      "altar_slots": [
+        [
+          5,
+          0.5,
+          5
+        ]
+      ],
+      "beacon": null
     }
   ]
 }

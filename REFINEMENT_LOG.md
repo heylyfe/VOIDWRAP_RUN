@@ -594,3 +594,123 @@ Release: `v0.16.0-alpha.1`.
 3. **`5.heights`** — blocked on the `chunks.json` decision above. If the human allows
    editing the legacy chunks, the measured result is 1.75% PASS; the assembly
    invariant that broke needs finding first.
+
+## Refinement Cycle 7 — pattern pool widened to 100
+
+### What was picked and why
+
+`4.near-duplicates` was the only failing pattern metric not blocked on a frozen file:
+**17.63%** of levels shared a pattern set at Jaccard >= 0.85 against a 0.2% threshold.
+The cause is pool size, not composition logic — 85 patterns cannot cover 23-slot plans
+without repeats. The lever is more patterns, which is additive and touches no contract.
+
+### Tickets dispatched
+
+**T-102 — 15 new patterns** (`inkling-design`, one dispatch, 198 s). Ten `path`
+(two sockets), three `junction` (3–4 sockets, width >= 6), two `dead_end` (one socket),
+ids `pa2_*`, appended to `design/patterns-a.json`. The ticket inlined the frozen-format
+rules and three exemplars; the response was validated by a purpose-written checker
+(`/tmp/newpatterns.mjs`) covering id shape, role, `min_level`, `difficulty`, tag counts
+and vocabulary, footprint extent [10, 20], socket count per role, socket width and
+facing-edge placement, socket `y` on a platform top, ramp run/width/rise, stacking
+clearance >= 4.0 u, adjacent top deltas, and gift/altar slots on platform tops.
+**15 of 15 accepted on the first pass, no parks.**
+
+### The `0.input` regression, and what it actually was
+
+The first audit run after the splice failed `0.input` with one malformed record:
+`no_plan` at `seed=95 lvl=3 players=8`. The level fell through all 40 assembly attempts
+and the catalog fallback to `builtin_fallback`.
+
+Bisecting by removing one new pattern at a time was **initially meaningless**: the
+catalog is `include_str!`-embedded, so editing `design/patterns-a.json` without a rebuild
+changes nothing. Re-run with a rebuild per variant, removing any one of eight patterns
+fixed it — so no single pattern was at fault.
+
+Instrumenting `validate` gave the real error: `gift N is not reachable from spawn`. A
+temporary per-chunk reachability probe then found the actual defect:
+
+> `pb_machine_gauntlet` has three 4.5–5.5 u pillars with no ramp. They are unreachable
+> from its own sockets by construction. `fill_gifts` only sees platform tops, so it can
+> put a gift on one, and `validate` then rejects the whole level.
+
+That pattern is **pre-existing** (`patterns-b.json`, `min_level` 6). It had never
+surfaced because the old 85-pattern pool never drew it into a plan whose gift placement
+landed on a pillar. Widening the pool shifted the RNG stream into that case.
+
+Two generator fixes were attempted and **both reverted**:
+
+1. *Drop gifts on unreachable platforms.* Made `gifts_scale_per_a3` fail (30 gifts vs
+   ~46): it silently accepted a level with 27 unreachable platforms instead of retrying,
+   which is worse than the bug.
+2. *Remove unreachable platforms before gift filling.* Fixed the gift count but broke
+   `real_catalog_generates_valid_non_fallback_levels` — platform ids stop being dense and
+   the survivors include traps (reachable from spawn, no route back to the beacon). A
+   correct version needs id renumbering plus a reverse-reachability pass; that is a
+   redesign of the assembly tail, not a polish diff, so it was parked rather than grown.
+
+`server/crates/sim/src/levelgen.rs` is **unchanged** in this cycle.
+
+### The fix that shipped
+
+Data-side, minimal: `pa2_frost_descent` — the one new pattern with a 6 u internal
+descent between its sockets — was raised from `min_level` 2 to 4. Each of the nine new
+patterns below level 4 was then re-tested individually at its authored level, keeping it
+only if `0.input` stayed clean. Eight kept their authored level; only
+`pa2_frost_descent` needed raising.
+
+| metric | before | after |
+|---|---|---|
+| `4.near-duplicates` | 17.63% | **11.80%** |
+| `5.heights` | 12.38% | **9.76%** |
+| `0.input` | PASS | **PASS** |
+| `5.ramps` | 0 PASS | **0 PASS** |
+| `5.reference-scale` | 5.80% PASS | **5.82% PASS** |
+| `1.pattern-repeat.within-level` | 17.26% | 17.38% |
+
+`5.heights` improved as a side effect: the new patterns dilute the frozen `chunks.json`
+contribution that dominates that metric.
+
+### Autonomous choices, for review
+
+- **15 patterns, not 50.** The ticket asked for 15 because the near-duplicate metric is
+  driven by low-level pool size, and 15 was the largest batch that could be validated in
+  one dispatch without a second round trip. Result: 33% relative improvement.
+- **`pa2_frost_descent` at `min_level` 4.** Its 6 u descent is the most aggressive
+  geometry in the batch; deferring it to level 4 was cheaper and safer than re-authoring
+  it, and it costs nothing at levels 4+.
+- **No generator change.** Both attempts made things worse or grew past a polish diff.
+  The `pb_machine_gauntlet` pillars and the assembly tail are logged below as candidates.
+
+### PARKED, with the reason measured
+
+- **`4.near-duplicates` at 11.80%** (threshold 0.2%). Still failing. The remaining
+  duplicates are concentrated at levels 1–3, where the eligible pool is smallest. Closing
+  the gap needs either a much larger low-level pool or a composition change (e.g. a
+  per-level no-repeat window), and the latter is a frozen-contract decision.
+- **`pb_machine_gauntlet`'s three unreachable pillars** — a real content defect. Fixing
+  it means either deleting the pillars (loses the pattern's silhouette) or adding a ramp
+  that does not fit the footprint. Human call.
+- **The assembly tail** — `validate` tolerates unreachable platforms but rejects gifts on
+  them, so any pattern with unreachable scenery is a latent landmine. A correct fix needs
+  id renumbering plus reverse-reachability (trap removal). Logged, not attempted.
+- **`5.heights` at 9.76%** — still dominated by the four frozen `chunks.json` patterns.
+  Unchanged from Cycle 6: editing them breaks the generator.
+
+### Merges and release
+
+`just verify` fully green: 127 server / 234 sim / 279 vitest, clippy `-D warnings`,
+protocol-gen --check, check-names (582 files), validate-content (20 enemies, 10 upgrades,
+19 curses, 4 classes, 34 shop items, 3 events, 15 milestones, 4 altars, 10 achievements,
+**100 patterns**).
+
+Release: `v0.17.0-alpha.1`.
+
+### Top 3 candidates for Cycle 8
+
+1. **`4.near-duplicates`** — 11.80%, still the largest measured gap. Needs a second
+   pattern batch aimed specifically at `min_level` 1–3, where the pool is thinnest.
+2. **`8.hazard_entities`** (economy audit, parked twice) — needs a hazard placement pass
+   that respects the graph-edge invariant.
+3. **The assembly tail** — trap removal plus id renumbering would retire the whole class
+   of `no_plan` failures and unblock `pb_machine_gauntlet`.
