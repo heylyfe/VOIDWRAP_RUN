@@ -496,10 +496,40 @@ fn overlaps_any_solid(world: &World, bounds: &Aabb) -> bool {
                 return true;
             }
             match world.surface_top_clamped(index, cx, cz) {
-                Some(surface) => bounds.min.y < surface - GROUND_EPSILON,
+                Some(surface) => bounds.min.y < surface - STEP_HEIGHT,
                 None => false,
             }
         })
+}
+
+/// Highest surface under the player's box that is at most one step above `feet`.
+///
+/// A step-up has to clear every platform the raised box would then overlap, not
+/// just the one that triggered it. Climbing a ramp into the foot of a deck needs
+/// the deck's top: lifting only to the ramp's surface leaves the box inside the
+/// deck, the step is rejected, and the fallback resolution then pushes the player
+/// back to the ramp's low edge — a teleport of the whole ramp length. That is the
+/// "walking on ramps bugs out" report.
+fn highest_step_surface(world: &World, pos: &Vec3, feet: f32) -> Option<f32> {
+    let b = player_box(pos);
+    let mut best: Option<f32> = None;
+    for index in world.solid_candidates(b.min.x, b.min.z, b.max.x, b.max.z) {
+        let Some(solid) = world.solid_bounds(index) else {
+            continue;
+        };
+        let overlaps_xz =
+            b.min.x < solid.max.x && b.max.x > solid.min.x && b.min.z < solid.max.z && b.max.z > solid.min.z;
+        if !overlaps_xz {
+            continue;
+        }
+        let Some(top) = world.surface_top_clamped(index, pos.x, pos.z) else {
+            continue;
+        };
+        if top > feet && top - feet <= STEP_HEIGHT && best.is_none_or(|v: f32| top > v) {
+            best = Some(top);
+        }
+    }
+    best
 }
 
 // CLASS_BULWARK no longer blinks (M3): the blink was replaced by the braced
@@ -684,6 +714,7 @@ fn move_axis(state: &mut ControllerState, world: &World, axis: Axis, delta: f32)
         // A ramp is solid only below its surface, so a player whose feet are on
         // or above the surface never collides with it. The one exception is a
         // downward move, which may snap the feet back onto the surface.
+        //
         if world.is_ramp_at(index) && feet >= surface - GROUND_EPSILON {
             if matches!(axis, Axis::Y)
                 && delta < 0.0
@@ -695,13 +726,14 @@ fn move_axis(state: &mut ControllerState, world: &World, axis: Axis, delta: f32)
             }
             continue;
         }
-        // Step-up attempt for horizontal moves only.
+        // Step-up attempt for horizontal moves only. The target is the highest
+        // surface under the box within one step, so a ramp foot under a deck lifts
+        // to the deck instead of being rejected as still-inside.
         if matches!(axis, Axis::X | Axis::Z)
             && (state.grounded || state.coyote_frames > 0)
-            && surface > feet
-            && surface - feet <= STEP_HEIGHT
+            && let Some(target) = highest_step_surface(world, &pos, feet)
         {
-            let stepped = Vec3::new(pos.x, surface, pos.z);
+            let stepped = Vec3::new(pos.x, target, pos.z);
             if !overlaps_any_solid(world, &player_box(&stepped)) {
                 pos = stepped; // step up; horizontal motion is kept
                 continue;
@@ -2708,6 +2740,157 @@ mod m3_tests {
         assert!(
             (s.pos.y - 6.0).abs() <= 0.05,
             "expected the step-up onto the ramp's high end (y = 6), got y = {}",
+            s.pos.y
+        );
+    }
+
+    /// [`ramp_level`] widened to x = -8..8 so a player can run across the slope
+    /// without leaving the ramp.
+    fn ramp_wide_level() -> LevelData {
+        let mut level = ramp_level();
+        level.platforms[0].bounds.min.x = -8.0;
+        level.platforms[0].bounds.max.x = 8.0;
+        level.platforms[1].bounds.min.x = -8.0;
+        level.platforms[1].bounds.max.x = 8.0;
+        level
+    }
+
+    /// Two `RAMP_PZ` wedges meeting at z = 10: the first rises 0 -> 4 over
+    /// z = 0..10, the second 4 -> 8 over z = 10..20. The shared edge is at y = 4.
+    fn ramp_to_ramp_level() -> LevelData {
+        LevelData {
+            level: 5,
+            seed: 5,
+            spawn: Vec3::new(0.0, 0.0, -1.0),
+            beacon: Vec3::new(0.0, 8.0, 20.0),
+            kill_y: -50.0,
+            platforms: vec![
+                Platform {
+                    id: 1,
+                    kind: PLATFORM_NORMAL,
+                    bounds: Aabb {
+                        min: Vec3::new(-2.0, -1.0, -6.0),
+                        max: Vec3::new(2.0, 0.0, 0.0),
+                    },
+                },
+                Platform {
+                    id: 2,
+                    kind: protocol::PLATFORM_RAMP_PZ,
+                    bounds: Aabb {
+                        min: Vec3::new(-2.0, 0.0, 0.0),
+                        max: Vec3::new(2.0, 4.0, 10.0),
+                    },
+                },
+                Platform {
+                    id: 3,
+                    kind: protocol::PLATFORM_RAMP_PZ,
+                    bounds: Aabb {
+                        min: Vec3::new(-2.0, 4.0, 10.0),
+                        max: Vec3::new(2.0, 8.0, 20.0),
+                    },
+                },
+                Platform {
+                    id: 4,
+                    kind: PLATFORM_NORMAL,
+                    bounds: Aabb {
+                        min: Vec3::new(-2.0, 7.0, 20.0),
+                        max: Vec3::new(2.0, 8.0, 26.0),
+                    },
+                },
+            ],
+            gifts: vec![],
+            event: EVENT_NONE,
+            altars: vec![],
+        }
+    }
+
+    /// Standing still on a slope must not slide, creep or jitter: the feet stay
+    /// on the surface and the position does not drift.
+    #[test]
+    fn standing_still_on_a_ramp_does_not_slide() {
+        let w = World::from_level(&ramp_level());
+        // Mid-slope: z = 7.5 is y = 3.0 on a 0 -> 6 rise over z = 0..15.
+        let mut s = spawn_state(Vec3::new(0.0, 3.0, 7.5));
+        for frame in 0..90u32 {
+            step(&mut s, &idle(frame), &w);
+            assert!(
+                s.grounded,
+                "lost ground contact while standing on the slope, frame {frame}"
+            );
+        }
+        assert!(
+            (s.pos.y - 3.0).abs() <= 0.02,
+            "slid down the slope while standing still: y = {}",
+            s.pos.y
+        );
+        assert!(
+            (s.pos.z - 7.5).abs() <= 0.02,
+            "crept along the slope while standing still: z = {}",
+            s.pos.z
+        );
+    }
+
+    /// Running ACROSS a slope (perpendicular to the rise) keeps ground contact on
+    /// every frame and holds the surface height, which is constant along that axis.
+    #[test]
+    fn walking_across_a_ramp_keeps_ground_contact() {
+        let w = World::from_level(&ramp_wide_level());
+        let mut s = spawn_state(Vec3::new(-6.0, 3.0, 7.5));
+        for frame in 0..70u32 {
+            step(&mut s, &run_x(frame, 0), &w);
+            assert!(
+                s.grounded,
+                "lost ground contact crossing the slope, frame {frame} at x = {}, y = {}",
+                s.pos.x, s.pos.y
+            );
+            assert!(
+                (s.pos.y - 3.0).abs() <= 0.05,
+                "surface height changed while crossing the slope, frame {frame}: y = {}",
+                s.pos.y
+            );
+        }
+        assert!(s.pos.x > 0.0, "never crossed the slope, x = {}", s.pos.x);
+    }
+
+    /// Landing from a fall onto the middle of a slope settles on the surface
+    /// instead of clipping through it or bouncing.
+    #[test]
+    fn landing_on_a_ramp_mid_slope_settles_on_the_surface() {
+        let w = World::from_level(&ramp_level());
+        let mut s = spawn_state(Vec3::new(0.0, 8.0, 7.5));
+        let mut landed = None;
+        for frame in 0..90u32 {
+            step(&mut s, &idle(frame), &w);
+            if s.grounded && landed.is_none() {
+                landed = Some(frame);
+            }
+        }
+        assert!(landed.is_some(), "never landed on the slope, y = {}", s.pos.y);
+        assert!(
+            (s.pos.y - 3.0).abs() <= 0.05,
+            "landed at the wrong height on the slope: y = {}",
+            s.pos.y
+        );
+        assert!(s.grounded, "bounced off the slope after landing");
+    }
+
+    /// Two ramps meeting at a shared edge are walked through as one continuous
+    /// surface: no step, no loss of ground contact, no snag at the joint.
+    #[test]
+    fn two_ramps_meeting_at_a_shared_edge_are_walked_through() {
+        let w = World::from_level(&ramp_to_ramp_level());
+        let mut s = spawn_state(Vec3::new(0.0, 0.0, -1.0));
+        for frame in 0..150u32 {
+            step(&mut s, &run_z(frame, 127), &w);
+            assert!(
+                s.grounded,
+                "lost ground contact at the ramp-to-ramp joint, frame {frame} at z = {}, y = {}",
+                s.pos.z, s.pos.y
+            );
+        }
+        assert!(
+            (s.pos.y - 8.0).abs() <= 0.05,
+            "expected to reach the top of the second ramp (y = 8), got y = {}",
             s.pos.y
         );
     }
