@@ -17,6 +17,7 @@
 //! otherwise the run is over. Solo is the same rule with one player.
 
 use crate::content::Content;
+use crate::deathlog;
 use crate::debug::{self, Gate};
 use crate::matchmaker_client::GameStateHandle;
 use crate::run::{Run, ShopError, ShopPurchase};
@@ -1117,6 +1118,22 @@ impl Game {
                 continue;
             };
             self.run.note_death();
+            // T-130: record where and why, before the state is reset. The playthrough
+            // harness could see that its bots died but not what killed them, which is
+            // why the level-progression, vote and shop checks stayed parked.
+            let out = self.run.lives == 0;
+            deathlog::record(deathlog::Death {
+                tick: self.tick,
+                level: self.run.level_num,
+                player: p.id,
+                cause,
+                pos: p.state.pos,
+                vel: p.state.vel,
+                kill_y: self.run.world.kill_y,
+                lives: self.run.lives,
+                out,
+                note: if cause == DEATH_VOID { "void" } else { "enemy" },
+            });
             if self.run.lives > 0 {
                 self.run.lives -= 1;
                 p.state = player_spawn_state(at, p.class);

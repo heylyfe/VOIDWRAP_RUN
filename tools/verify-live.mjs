@@ -153,10 +153,20 @@ async function main() {
   // A fresh server: a stale player from an earlier run leaves the run in a finished state
   // and the playthrough kit then sees no level progression at all.
   log('\n=== start server ===');
+  // T-130: the death log makes the playthrough's death causes visible on every gate
+  // run. Without it the kit can only say "the bots died"; with it, "8 deaths (void:8),
+  // 8 ended a run" -- which is the difference between a bot bug and a level bug.
+  const deathLog = join(tmpdir(), `voidwrap-deaths-${process.pid}.ndjson`);
   server = spawn(SERVER_BIN, [], {
     cwd: join(root, 'server'),
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, VOIDWRAP_DEV: '', VOIDWRAP_DEV_CODE: '', VOIDWRAP_PORT: String(PORT) },
+    env: {
+      ...process.env,
+      VOIDWRAP_DEV: '',
+      VOIDWRAP_DEV_CODE: '',
+      VOIDWRAP_PORT: String(PORT),
+      VOIDWRAP_DEATH_LOG: deathLog,
+    },
   });
   let serverLog = '';
   server.stdout.on('data', (c) => {
@@ -197,6 +207,7 @@ async function main() {
     '--clients', '8',
     '--seconds', '60',
     '--known-failures', 'level-progression',
+    '--death-log', deathLog,
   ]);
   run('voting conformance (real)', 'node', ['tools/voting-conformance/run.mjs', '--real', '--url', WS_URL]);
 

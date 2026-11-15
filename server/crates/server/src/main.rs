@@ -10,6 +10,7 @@
 //! unless `--browser`, `--headless` or `PORT` are used; see `desktop.rs`.
 
 mod content;
+mod deathlog;
 mod debug;
 #[cfg(feature = "desktop")]
 mod desktop;
@@ -75,6 +76,7 @@ fn startup() -> Startup {
 
 fn main() {
     init_logging();
+    deathlog::init();
     let startup = startup();
 
     // Desktop window mode: server on a background thread, tao/wry window on the main thread.

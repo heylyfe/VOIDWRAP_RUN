@@ -11,6 +11,7 @@
  *
  * Exit code is 0 only when every check passes. No dependencies beyond Node.
  */
+import { readFileSync } from 'node:fs';
 import { encodeClientMsg, decodeServerMsg } from '../voting-conformance/wire.mjs';
 
 // The wire protocol version this sweep speaks. Mirrors PROTOCOL_VERSION in
@@ -34,6 +35,11 @@ const SECONDS = Number(argValue('--seconds', process.env.PLAYTHROUGH_SECONDS || 
 // point: an unnamed failure still fails, so this cannot hide a new regression. The only
 // entry the repo uses is `level-progression`, which needs a faithful JS port of the
 // movement controller (see tickets/T-115.findings.md F-115-8).
+// T-130: optional NDJSON death log written by the server when `VOIDWRAP_DEATH_LOG`
+// is set. Reading it turns "the bots died" into "the bots fell off the map at
+// (x, y, z) with velocity v", which is the measurement the level-progression check
+// was blocked on.
+const DEATH_LOG = argValue('--death-log', process.env.PLAYTHROUGH_DEATH_LOG || '');
 const KNOWN_FAILURES = new Set(
   (argValue('--known-failures', process.env.PLAYTHROUGH_KNOWN_FAILURES || ''))
     .split(',')
@@ -602,6 +608,7 @@ async function main() {
       r.detail = (r.detail ? r.detail + ' ' : '') + '(known failure, downgraded to SKIP)';
     }
   }
+  reportDeaths();
   const ok = results.every((r) => r.ok !== false);
   for (const r of results) report(r.name, r.ok, r.detail);
   const passed = results.filter((r) => r.ok === true).length;
@@ -610,6 +617,43 @@ async function main() {
     (skipped ? ', ' + skipped + ' skipped' : '') +
     (downgraded.length ? ' (known failures: ' + downgraded.join(', ') + ')' : ''));
   process.exit(ok ? 0 : 1);
+}
+
+/**
+ * Summarise the server's death log, if one was produced.
+ *
+ * Reports the cause split (void fall vs enemy kill), how many deaths ended a run
+ * outright, and the fall positions, so a regression in level geometry or in the
+ * bot's edge handling shows up as a number instead of a vague "bots died".
+ */
+function reportDeaths() {
+  if (!DEATH_LOG) return;
+  let text;
+  try {
+    text = readFileSync(DEATH_LOG, 'utf8');
+  } catch {
+    report('death-log', null, 'no death log at ' + DEATH_LOG + ' (server not started with VOIDWRAP_DEATH_LOG)');
+    return;
+  }
+  const rows = text.split(String.fromCharCode(10)).filter(Boolean).map((line) => {
+    try { return JSON.parse(line); } catch { return null; }
+  }).filter(Boolean);
+  if (!rows.length) {
+    report('death-log', true, '0 deaths recorded');
+    return;
+  }
+  const byNote = new Map();
+  for (const r of rows) byNote.set(r.note, (byNote.get(r.note) || 0) + 1);
+  const out = rows.filter((r) => r.out).length;
+  const split = [...byNote.entries()].map(([k, v]) => k + ':' + v).join(' ');
+  const falls = rows.filter((r) => r.note === 'void');
+  const deepest = falls.length ? Math.min(...falls.map((r) => r.y)) : null;
+  const detail = rows.length + ' deaths (' + split + '), ' + out + ' ended a run'
+    + (deepest === null ? '' : ', deepest fall y=' + deepest.toFixed(2))
+    + '; levels: ' + [...new Set(rows.map((r) => r.level))].sort((a, b) => a - b).join(',');
+  // Informational: a death is not a failure. The check exists so the cause split is
+  // printed on every run instead of being invisible.
+  report('death-log', true, detail);
 }
 
 main().catch((error) => {
