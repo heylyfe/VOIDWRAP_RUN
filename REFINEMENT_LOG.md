@@ -1714,3 +1714,92 @@ failing if traversal degrades. Negative-tested at 90%: `FAIL - gift-rate` and
    candidates are message honesty and variety tuning. The next cycle should consider
    moving to the owner's directive #4 — "make the models look good" — which is the
    largest untouched item and is measurable through `just capture`.
+
+---
+
+## Cycle 19 — audit honesty (T-143, T-144)
+
+### What was picked and why
+
+1. **T-143 — `5.reference-scale`'s `minExtent` formula.** Deferred three cycles. It was
+   the last known-wrong number in the audit: it claimed `ch15_tri_crown` was ramp-forced
+   to 26 u when that chunk has no ramp covering its drop at all, and claimed
+   `ch04_twin_terrace` was forced to 20 u when its ramps sit inside its 22 u deck.
+2. **T-144 — the empty-denominator defect class.** A worker review of both audit tools
+   asked "is any threshold looser than the metric's stated intent?" and found eleven
+   metrics that report PASS having measured nothing. This is the project's second
+   recurring defect class, and the same shape as T-134's "check that could never fail" —
+   fixed for one metric there, left in place for the rest.
+
+Both are audit-only. No gameplay surface touched, so no tuning notes.
+
+### Tickets dispatched
+
+Neither was dispatched to a worker thread. Both are single-file changes to the audit
+tools with a mechanical verification loop (edit → run against the 6,000-record dump →
+negative-test), which is exactly the shape the orchestrator should do itself rather than
+spend a dispatch round-trip on. The worker's contribution was the *review* that produced
+T-144's finding list, which is the division of labour the sandbox supports.
+
+### PASS / FAIL / PARKED
+
+| ticket | verdict | commit |
+|---|---|---|
+| T-143 | **PASS** | `029aa99` |
+| T-144 | **PASS** | `c002f8e` |
+
+### What T-144 actually found
+
+Beyond the eleven empty-denominator metrics:
+
+- `7.catalog-coverage` emitted a **PASS line whose text began "SKIP"** — historical defect
+  #4 verbatim, on the metric built to catch T-132.
+- `6.enemy-frequencies.always-offered` filtered out `byType.size < 2`, so a single type
+  appearing in 100% of a cell's levels escaped the check for exactly that.
+- `2.tag-diversity` counted unknown forward-compat tags toward mean/min, so an unknown tag
+  *inflated* the score the metric exists to guard.
+- `5.stairs` used a counter that only increments when a chain is **found**, so it could not
+  tell "no stairs exist" (the desired state) from "nothing was checked". Caught by the
+  first version of my own fix skipping on the real dump — the fix needed a fix.
+- **`--selftest` had been failing on `main`** and nothing gated it. `7.catalog-coverage`
+  trips on the synthetic records' ids. Now the catalog is injectable and `--selftest` is
+  part of `just verify`.
+
+### Negative tests
+
+Six, all recorded in `tickets/T-144.md` with actual output, run against a throwaway repo
+root (`/tmp/negtest`) holding copies of the tools and `design/` so no real file was
+mutated: unreadable `design/` → SKIP not PASS; `ramps: 0` present → FAIL; `ramps` absent →
+SKIP; `gifts: 0` present → FAIL on two metrics; duplicate radar ids → FAIL; hazard tag
+with zero tagged patterns → FAIL.
+
+### Gates
+
+`just verify` **exit 0** — 246 sim, 151 server, 317 vitest (36 files), clippy
+`-D warnings`, protocol-gen `--check`, check-names (657 files), validate-content
+(20 enemies, 10 upgrades, 19 curses, 4 classes, 34 shop items, 3 events, 15 milestones,
+4 altars, 10 achievements, 140 patterns), pattern-audit `--selftest` PASS.
+
+`node tools/verify-live.mjs --port 7979` **PASS 8/8**. Pattern audit 17 lines / 0 failed /
+1 skipped. Economy audit 8/8. Voting real 3/3. Debug 13/13. Playthrough 9 pass / 3 skip /
+0 fail.
+
+### Release
+
+`v0.31.0-alpha.1`.
+
+### Top 3 candidates for Cycle 20
+
+1. **The audit backlog is now exhausted.** Every metric is green with headroom, every
+   known-wrong number is fixed, and every check that could not fail has been made able to.
+   The remaining audit candidates are threshold *tightening* with no defect behind them,
+   which is grinding. Stop auditing.
+2. **The owner's directive #4 — "make the models look good" — is the largest untouched
+   item.** It is measurable through `just capture`, which already produces screenshots.
+   This is where the next cycle should go: pick the worst-looking model, capture before,
+   improve, capture after, and require the after-shot to be visibly better. The glider and
+   the enemy silhouettes are the obvious first targets.
+3. **`1.pattern-repeat.within-level` at 10.42% against a 35% ceiling.** Deferred four
+   times. It is a real variety knob (`recent_divisor` in the bag), not a threshold, and it
+   is the last measurable gameplay-quality number with headroom. Worth one cycle if the
+   model work stalls.

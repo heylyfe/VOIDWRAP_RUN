@@ -1417,3 +1417,43 @@ Negative test at 90%: `FAIL - gift-rate (30/88, 34.1%)`, `8/12 checks passed`.
 ### Release
 
 `v0.30.0-alpha.1`.
+
+---
+
+## Cycle 19 — audit honesty
+
+### Tickets
+
+| ticket | verdict | commit | what |
+|---|---|---|---|
+| T-143 | **PASS** | `029aa99` | `5.reference-scale` reports the measured largest platform, not a ramp-slope guess |
+| T-144 | **PASS** | `c002f8e` | a metric with nothing to measure no longer reports PASS |
+
+### Gates
+
+`just verify` **exit 0** — 246 sim, 151 server, 317 vitest (36 files), clippy
+`-D warnings`, protocol-gen `--check`, check-names (657 files), validate-content
+(20 enemies, 10 upgrades, 19 curses, 4 classes, 34 shop items, 3 events,
+15 milestones, 4 altars, 10 achievements, 140 patterns), pattern-audit `--selftest` PASS
+(newly gated).
+
+`node tools/verify-live.mjs --port 7979` **PASS 8/8**. Pattern audit 17 lines / 0 failed /
+1 skipped. Economy audit 8/8. Voting real 3/3. Debug 13/13. Playthrough **9 pass / 3 skip /
+0 fail**.
+
+### Negative tests
+
+Six, recorded in `tickets/T-144.md` with actual output, run against a throwaway repo root
+so no real file was mutated. Every one flips a metric from PASS to SKIP or FAIL.
+
+### Parked
+
+- Playthrough `level-progression` / `vote` / `shop`: blocked by the starting-lives
+  balance decision (T-139). Unchanged.
+- Voting with eight real ballots: the debug layer is singleplayer-only by design.
+- `ch04_twin_terrace`'s 22 u deck (10% over the 20 u band): frozen chunk, no measured
+  gameplay benefit, logged as a human decision rather than reshaped.
+
+### Release
+
+`v0.31.0-alpha.1`.
