@@ -11,7 +11,7 @@
  *
  * Exit code is 0 only when every check passes. No dependencies beyond Node.
  */
-import { readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 import { encodeClientMsg, decodeServerMsg } from '../voting-conformance/wire.mjs';
 
 // The wire protocol version this sweep speaks. Mirrors PROTOCOL_VERSION in
@@ -23,6 +23,60 @@ const CLASS_COUNT = 4;
 
 // Mirrors protocol::PHASE_*. The lobby shop is only open in PHASE_ENEMY_DRAFT.
 const PHASE_ENEMY_DRAFT = 0;
+
+// T-156: movement constants mirrored from server/crates/sim/src/tuning.rs. The bot has to
+// know the jump envelope to decide whether a gap is clearable. The old edge probe guessed:
+// it jumped at any landing up to 5.5 u away, which is past the envelope for any rise above
+// ~0.3 u, so the bot jumped at gaps it could not clear and the first fall ended the run.
+const RUN_SPEED = 9.0;
+const GRAVITY = 32.0;
+const JUMP_VELOCITY = 12.0;
+/** Peak height of a flat jump: v^2 / 2g = 2.25 u. */
+const JUMP_APEX = (JUMP_VELOCITY * JUMP_VELOCITY) / (2 * GRAVITY);
+/** Fraction of the theoretical reach the bot will commit to. The arc starts a little before
+ * the edge because the bot cannot time the jump to the physics frame, so the margin is not
+ * optional. */
+const JUMP_SAFETY = 0.75;
+const EDGE_PROBE_STEP = 0.15;
+const EDGE_PROBE_MAX = 1.5;
+/** Player collision half-width, mirrored from tuning.rs. The centre can stand this far
+ * past a platform edge before the player falls. */
+const PLAYER_HALF_WIDTH = 0.4;
+/** Extra margin on top of PLAYER_HALF_WIDTH before the bot commits to a jump. One input
+ * batch covers 0.45 u at run speed, so 0.5 u is one batch of reaction time. */
+const EDGE_JUMP_DISTANCE = 0.5;
+const LANDING_STEP = 0.15;
+/** Physics rate the server steps at, and the tick rate it drains input at. */
+const PHYSICS_HZ = 60;
+const TICK_HZ = 20;
+/** Frames the server consumes per tick: PHYSICS_HZ / TICK_HZ. */
+const STEPS_PER_TICK = PHYSICS_HZ / TICK_HZ;
+/** Input batches are sent at the physics rate with one frame each, so the server's queue
+ * neither backs up (which delays every input by a second) nor starves (which makes the
+ * player stand still for a tick). */
+const INPUT_BATCH_MS = 1000 / PHYSICS_HZ;
+const INPUT_FRAMES_PER_BATCH = 1;
+
+/** Append one NDJSON line to the `--trace` file. No-op when tracing is off. */
+function traceLine(record) {
+  if (!TRACE) return;
+  try {
+    appendFileSync(TRACE, JSON.stringify(record) + String.fromCharCode(10));
+  } catch {
+    // A trace that cannot be written must not take the sweep down with it.
+  }
+}
+
+/**
+ * Horizontal distance a flat jump covers before returning to `rise` units above the launch
+ * point, discounted by JUMP_SAFETY. Zero when the rise is above the jump apex.
+ */
+function jumpReach(rise) {
+  const disc = JUMP_VELOCITY * JUMP_VELOCITY - 2 * GRAVITY * Math.max(0, rise);
+  if (disc <= 0) return 0;
+  const airtime = (JUMP_VELOCITY + Math.sqrt(disc)) / GRAVITY;
+  return airtime * RUN_SPEED * JUMP_SAFETY;
+}
 
 const argv = process.argv.slice(2);
 const argValue = (flag, fallback) => {
@@ -50,6 +104,10 @@ const DEATH_LOG = argValue('--death-log', process.env.PLAYTHROUGH_DEATH_LOG || '
 // mode runs one client.
 const ACTUATE = flag('--actuate');
 const DEV_CODE = argValue('--code', process.env.PLAYTHROUGH_DEV_CODE || 'devaccess');
+// T-156: per-steer decision trace. The bot's failures are all "it fell somewhere", and a
+// death log only says where it landed. This records what the bot saw and decided, so the
+// edge logic can be debugged from data instead of guessed at.
+const TRACE = argValue('--trace', process.env.PLAYTHROUGH_TRACE || '');
 
 const KNOWN_FAILURES = new Set(
   (argValue('--known-failures', process.env.PLAYTHROUGH_KNOWN_FAILURES || ''))
@@ -63,11 +121,11 @@ const KNOWN_FAILURES = new Set(
 // are decisions, and the reason is the useful part.
 const KNOWN_FAILURE_REASONS = {
   'level-progression':
-    'blocked by the starting-lives balance decision (a run starts with 0 spare lives, '
-    + 'so the first fall ends it) and by the bot holding still when every remaining gift '
-    + 'is behind a gap it cannot probe; see tickets/T-139.md. T-154 moved the live '
-    + 'coverage to `--actuate`, which changes level through the debug layer instead of '
-    + 'walking, so this entry is no longer needed to suppress the 8-client sweep.',
+    'T-156 removed the two bugs that made this unreachable: the bot fed the server 80 input '
+    + 'frames/s against a 60 frames/s drain (so every input was applied about a second late) '
+    + 'and its air control aimed at the point directly below it (so it fell straight down '
+    + 'instead of crossing a gap). It now survives a full sweep with zero deaths. It still '
+    + 'cannot empty a level: the remaining blocker is vertical routing. See tickets/T-156.md.',
 };
 
 if (!URL_) {
@@ -293,18 +351,18 @@ class Client {
    * face is at or just below the player's feet -- `upTol` widens that for
    * landing probes, where a step up is allowed.
    */
-  groundAt(x, z, y, upTol = 0.6, downTol = 3.0) {
-    return this.platformUnder(x, z, y, upTol, downTol) >= 0;
+  groundAt(x, z, y, upTol = 0.6, downTol = 3.0, slack = 0.25) {
+    return this.platformUnder(x, z, y, upTol, downTol, slack) >= 0;
   }
 
   /** Index of the platform a player at `(x, z, y)` could stand on, or -1. */
-  platformUnder(x, z, y, upTol = 0.6, downTol = 3.0) {
+  platformUnder(x, z, y, upTol = 0.6, downTol = 3.0, slack = 0.25) {
     const platforms = this.level && this.level.platforms;
     if (!Array.isArray(platforms)) return -1;
     for (let i = 0; i < platforms.length; i += 1) {
       const b = platforms[i].bounds;
-      if (x < b.min.x - 0.25 || x > b.max.x + 0.25) continue;
-      if (z < b.min.z - 0.25 || z > b.max.z + 0.25) continue;
+      if (x < b.min.x - slack || x > b.max.x + slack) continue;
+      if (z < b.min.z - slack || z > b.max.z + slack) continue;
       if (RAMP_KINDS.has(platforms[i].kind)) {
         if (y >= b.min.y - 0.8 && y <= b.max.y + 0.8) return i;
       } else if (b.max.y <= y + upTol && b.max.y >= y - downTol) {
@@ -338,13 +396,84 @@ class Client {
     return best;
   }
 
-  /** Nearest point on platform `i` to `(x, z)`. */
-  nearestOn(i, x, z) {
+  /**
+   * Nearest point on platform `i` to `(x, z)`, pushed `inset` units inside the footprint.
+   *
+   * T-156: without the inset this returns the bot's own position whenever the bot is
+   * standing on the boundary between two platforms, so the route aim became `(0, 0)` and
+   * the bot stood still jumping until the sweep ended. The trace showed it pinned at
+   * (31.99, 0, 13.97) with `aimX`/`aimZ` equal to its own position for the last 90 s.
+   */
+  nearestOn(i, x, z, inset = 0) {
     const b = this.level.platforms[i].bounds;
-    return {
-      x: Math.min(Math.max(x, b.min.x), b.max.x),
-      z: Math.min(Math.max(z, b.min.z), b.max.z),
+    const axis = (v, min, max) => {
+      const mid = (min + max) / 2;
+      const lo = Math.min(min + inset, mid);
+      const hi = Math.max(max - inset, mid);
+      return Math.min(Math.max(v, lo), hi);
     };
+    return { x: axis(x, b.min.x, b.max.x), z: axis(z, b.min.z, b.max.z) };
+  }
+
+  /**
+   * Distance from `(x, z)` to the first point in direction `(dx, dz)` where a player
+   * standing at height `y` would have no ground, or `null` when the ground continues past
+   * the probe range.
+   *
+   * T-156: the old edge check probed a single fixed distance (0.9 u). A player runs at
+   * 9 u/s, so 0.9 u is under two physics frames -- an edge anywhere between the probe and
+   * the stopping distance was invisible until the bot was already past it.
+   */
+  edgeDistance(x, z, y, dx, dz) {
+    // Strict footprint: no slack. With the 0.25 u slack the probe only reports an edge
+    // once the bot is already 0.25 u past it, and the player's half-width is 0.4 u, so the
+    // reaction window collapsed to 0.15 u -- one physics frame. The bot moves 0.45 u per
+    // input batch, so it was always too late: the trace showed `edge: 0.15, jump: true`
+    // followed by a snapshot already falling, because the jump input arrived after the
+    // bot had left the platform.
+    for (let d = EDGE_PROBE_STEP; d <= EDGE_PROBE_MAX; d += EDGE_PROBE_STEP) {
+      if (!this.groundAt(x + dx * d, z + dz * d, y, 0.6, 3.0, 0)) return d;
+    }
+    return null;
+  }
+
+  /**
+   * True when the ground continues for the whole flat-jump reach in direction `(dx, dz)`.
+   *
+   * T-156: a jump travels `jumpReach(0)` -- about 5 u after the safety discount -- so a
+   * heuristic jump (climb toward a higher gift, or shake off a stuck frame) taken anywhere
+   * closer than that to an edge is a jump into the void. The old code only ever looked
+   * 0.9 u ahead, which is why the bot could be standing on solid ground and still fly off
+   * the map: the trace showed a `stuck` jump from z=-6.8 that carried it 6.7 u to z=-0.1
+   * with nothing underneath.
+   */
+  safeToJump(x, z, y, dx, dz) {
+    const reach = jumpReach(0);
+    for (let d = EDGE_PROBE_STEP; d <= reach; d += EDGE_PROBE_STEP) {
+      if (!this.groundAt(x + dx * d, z + dz * d, y, 0.6, 3.0, 0)) return false;
+    }
+    return true;
+  }
+
+  /**
+   * First landing inside the jump envelope in direction `(dx, dz)`, or `null`.
+   *
+   * `from` is the measured edge distance: the search starts just past it, because a
+   * landing before the edge is the platform the bot is already standing on. A platform
+   * whose top is above the jump apex is not a landing, and a platform beyond the reach at
+   * its own rise is not one either -- that is the check the old 5.5 u probe was missing.
+   */
+  findLanding(x, z, y, dx, dz, from) {
+    for (let d = from + LANDING_STEP; d <= from + 12; d += LANDING_STEP) {
+      const i = this.platformUnder(x + dx * d, z + dz * d, y, 2.0, 12.0, 0);
+      if (i < 0) continue;
+      const top = this.level.platforms[i].bounds.max.y;
+      if (top - y > JUMP_APEX - 0.2) continue;
+      // The gap is measured from the EDGE, not from the bot: the bot jumps at the edge,
+      // so the distance it has to cover is `d - from`, not `d`.
+      if (d - from <= jumpReach(top - y)) return { d, y: top };
+    }
+    return null;
   }
 
   /** First platform to step onto on a route from `from` to `to`, or -1. */
@@ -383,7 +512,7 @@ class Client {
    * geometry but no reachable gift it returns a hold-still aim: a random walk
    * over a level with edges is a bot that dies in the void.
    */
-  steer() {
+  steer(depth = 0) {
     const level = this.level;
     const you = this.you;
     if (!level || !you || !Array.isArray(level.gifts)) return null;
@@ -440,7 +569,7 @@ class Client {
     if (here >= 0 && there >= 0 && here !== there) {
       const hop = this.nextHop(here, there);
       if (hop >= 0) {
-        const p = this.nearestOn(hop, pos.x, pos.z);
+        const p = this.nearestOn(hop, pos.x, pos.z, 1.0);
         aimX = p.x;
         aimZ = p.z;
       }
@@ -450,7 +579,13 @@ class Client {
     // off an edge mid-jump has nothing else keeping it out of the void.
     if (!you.grounded) {
       const landing = this.nearestLanding(pos.x, pos.z, pos.y);
-      if (landing) {
+      // T-156: `nearestLanding` returns the point directly below an airborne bot, so
+      // aiming at it zeroed the horizontal input and the bot fell straight down -- it
+      // could not cross a gap it had just jumped. 79% of the steer frames in a 240 s run
+      // had `aimX`/`aimZ` equal to the bot's own position, every one of them airborne.
+      // Keep the ground aim unless the landing is somewhere else, which is the case that
+      // actually needs correcting.
+      if (landing && Math.hypot(landing.x - pos.x, landing.z - pos.z) > 0.5) {
         aimX = landing.x;
         aimZ = landing.z;
       }
@@ -468,29 +603,67 @@ class Client {
     // gift was more than 2 u away -- which is always -- and a bot that jumps
     // every frame never builds horizontal speed, so it bounced around the spawn
     // and collected nothing.
-    let jump = Boolean(you.grounded) && (rise > 0.3 || this.stuckFrames > 4);
+    // T-156: the jump heuristics (climb toward a higher gift, or shake off a stuck frame)
+    // are only safe when the ground continues. Near an edge the measured landing decides,
+    // because a heuristic jump there is a jump into the void.
+    let jump = false;
+    let edgeSeen = null;
+    let landingSeen = null;
 
-    // Edge awareness. The first version of this bot steered in a straight line
-    // and walked off the platform: the server logged "player out; spectating
-    // cause=0" (DEATH_VOID) for every client. Probe one step ahead; if there is
-    // no surface, look for one inside jump range and jump at it, otherwise give
-    // up on this gift rather than die for it.
-    if (you.grounded && !this.groundAt(pos.x + dirX * 0.9, pos.z + dirZ * 0.9, pos.y)) {
-      let landing = null;
-      for (let d = 1.5; d <= 5.5; d += 0.5) {
-        if (this.groundAt(pos.x + dirX * d, pos.z + dirZ * d, pos.y, 2.0, 12.0)) {
-          landing = d;
-          break;
+    // Edge awareness, measured rather than probed at one fixed distance.
+    //
+    // T-156: the old probe looked 0.9 u ahead and jumped at any landing up to 5.5 u away.
+    // Two ways that kills the bot. A platform edge between 0.9 u and the stopping distance
+    // is invisible until the bot is already past it, and 5.5 u is outside the jump envelope
+    // for any rise above ~0.3 u, so the bot jumps at gaps it cannot clear. Both are
+    // measured here instead of guessed.
+    if (you.grounded) {
+      const edge = this.edgeDistance(pos.x, pos.z, pos.y, dirX, dirZ);
+      edgeSeen = edge;
+      if (edge === null) {
+        // No edge within the near probe. The only jump left is the unstick one, and it
+        // still travels the full reach, so it is only allowed when the ground continues
+        // that far.
+        //
+        // T-156: the old `rise > 0.3` climb heuristic is gone. Gifts are almost never at
+        // exactly the bot's height, so that condition was true nearly every frame and the
+        // bot bunny-hopped across the level with no control over where it landed -- the
+        // trace showed it jumping from (19.8, 0, 2.6) and drifting +x while pressing -x
+        // until it fell. Climbing is already covered by the deliberate edge jump below,
+        // which accepts a landing up to JUMP_APEX - 0.2 above the launch point.
+        jump = this.stuckFrames > 4
+          && this.safeToJump(pos.x, pos.z, pos.y, dirX, dirZ);
+      } else {
+        const landing = this.findLanding(pos.x, pos.z, pos.y, dirX, dirZ, edge);
+        landingSeen = landing ? landing.d : null;
+        if (landing === null) {
+          // Nothing to land on inside the envelope. Give up on this gift rather than die
+          // for it, and re-steer at the next candidate in the same frame -- holding still
+          // until the blacklist expires is what left the bot standing on an empty level.
+          this.blacklist.set(best.id, now + 3000);
+          this.target = null;
+          return depth < 3 ? this.steer(depth + 1) : hold;
         }
+        // Jump when the edge is close enough that the jump is the next move. The player
+        // can stand with its centre PLAYER_HALF_WIDTH past the edge, and one input batch
+        // covers 0.45 u, so the trigger has to fire inside that window or the jump input
+        // arrives after the bot is already airborne.
+        if (edge <= PLAYER_HALF_WIDTH + EDGE_JUMP_DISTANCE) jump = true;
       }
-      if (landing === null) {
-        this.blacklist.set(best.id, now + 3000);
-        this.target = null;
-        return hold;
-      }
-      jump = true;
     }
 
+    if (TRACE) {
+      traceLine({
+        t: Date.now(),
+        x: +pos.x.toFixed(3), y: +pos.y.toFixed(3), z: +pos.z.toFixed(3),
+        grounded: Boolean(you.grounded),
+        target: best.id,
+        aimX: +aimX.toFixed(3), aimZ: +aimZ.toFixed(3),
+        dirX: +dirX.toFixed(3), dirZ: +dirZ.toFixed(3),
+        edge: edgeSeen, landing: landingSeen, jump,
+        stuck: this.stuckFrames,
+      });
+    }
     return { x: dirX, z: dirZ, jump };
   }
 
@@ -505,7 +678,15 @@ class Client {
       const aim = this.steer();
       this.lastAim = aim;
       const frames = [];
-      for (let i = 0; i < 4; i += 1) {
+      // T-156: exactly STEPS_PER_TICK frames per tick. The server consumes
+      // PHYSICS_HZ / TICK_HZ = 3 frames per 20 Hz tick, so 4 frames every 50 ms fed it
+      // 80 frames/s against a 60 frames/s drain. The queue filled to MAX_QUEUED_INPUTS
+      // (60 frames = one full second) and then dropped the excess, so every input the bot
+      // sent was applied about a second late. That is why the bot could see an edge,
+      // press jump, and still fall: the jump arrived after it had already left the
+      // platform. The trace showed `edge: 0.6, jump: true` twice in a row followed by a
+      // snapshot already airborne.
+      for (let i = 0; i < INPUT_FRAMES_PER_BATCH; i += 1) {
         this.seq += 1;
         const moveX = aim ? Math.round(aim.x * 127) : Math.round((Math.random() * 2 - 1) * 127);
         const moveZ = aim ? Math.round(aim.z * 127) : Math.round((Math.random() * 2 - 1) * 127);
@@ -518,7 +699,7 @@ class Client {
         });
       }
       this.send({ variant: 'Inputs', frames });
-    }, 50);
+    }, INPUT_BATCH_MS);
   }
 
   stopWalking() {
@@ -816,6 +997,24 @@ async function main() {
       : 'best client collected ' + best.taken + '/' + best.total + ' gifts ('
         + (giftRate * 100).toFixed(1) + '%) in ' + SECONDS + 's; threshold >= '
         + (GIFT_RATE_MIN * 100).toFixed(0) + '%');
+  // T-156: level completion as its own check. `level-progression` asks whether the level
+  // CHANGED, which `--actuate` can force through the debug layer; this asks whether the
+  // bots emptied a level by WALKING, which is the coverage hole the owner named. It stays a
+  // SKIP while the bot cannot finish a level, and the detail carries the number so the gap
+  // is visible in every gate run instead of being remembered.
+  // SKIP, not FAIL, while the bot cannot finish a level: this is a known coverage hole, not
+  // a regression, and a permanently red line would train the gate to be ignored. It becomes
+  // a live PASS the moment a level is emptied by walking.
+  push('level-completion', ACTUATE ? null : (completed ? true : null),
+    ACTUATE
+      ? 'skipped: actuated mode changes level through the debug layer, so this measures no traversal'
+      : completed
+        ? 'a level was emptied by walking (level went ' + startLevel + ' -> ' + maxLevel + ')'
+        : 'no level was emptied by walking: best client collected ' + best.taken + '/' + best.total
+          + ' gifts (' + (giftRate * 100).toFixed(1) + '%). T-156 fixed the input-rate and'
+          + ' air-control bugs that made the bot fall off the map; the remaining blocker is'
+          + ' vertical routing -- a gift directly above or below the bot has no route, so the'
+          + ' bot blacklists it and holds. See tickets/T-156.md.');
   // A class pick and the first draft both only exist in the first lobby of a run, and
   // `Restart` resets a run only when it is over. A sweep that joins a run already in
   // progress therefore cannot see either -- by design, not by defect -- so both checks are

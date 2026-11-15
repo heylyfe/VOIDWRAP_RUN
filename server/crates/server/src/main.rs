@@ -171,10 +171,21 @@ async fn run_server(startup: Startup, window_closed: Option<tokio::sync::oneshot
     }
     let (game_tx, game_rx) = mpsc::channel(GAME_INBOX_CAPACITY);
     // Seed draft offers and level layouts from the clock: every run is different.
-    let seed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos() ^ (d.as_secs() as u32))
-        .unwrap_or(0x5eed);
+    //
+    // T-156: `VOIDWRAP_SEED` pins it for QA. Without a fixed seed two playthrough runs
+    // generate different levels, so a gift-rate or a death count cannot be compared across
+    // runs -- which is exactly how the bot's input-rate bug survived several "it got
+    // better" readings that were really just easier levels.
+    let seed = match std::env::var("VOIDWRAP_SEED").ok().and_then(|v| v.parse::<u32>().ok()) {
+        Some(seed) => {
+            tracing::warn!("VOIDWRAP_SEED={seed}: every run uses this seed (dev/QA only)");
+            seed
+        }
+        None => std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos() ^ (d.as_secs() as u32))
+            .unwrap_or(0x5eed),
+    };
     let state = game::Game::starting_at(start_level, seed).map_err(|e| format!("cannot start: {e}"))?;
     let game_state = Arc::new(matchmaker_client::GameStateHandle::new());
     let game = tokio::spawn(game::run(game_rx, state, Arc::clone(&game_state)));
