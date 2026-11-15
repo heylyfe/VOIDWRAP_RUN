@@ -1566,3 +1566,77 @@ decision instead of implying a bug.
    gift counts in every playthrough run and might make `level-progression` reachable
    without touching the balance decision. Cheap, and it improves every future cycle's
    evidence.
+
+---
+
+## Cycle 17 — 2026-11-15
+
+### What was picked and why
+
+Cycle 16's log named three candidates. The first two were audit hygiene
+(`5.reference-scale`'s `minExtent` formula, and the `1.pattern-repeat` ceiling). The
+third was the bot's `hold` fallback.
+
+None of them was the biggest gap. T-139 had just established that **voting, the shop
+and altars have no end-to-end coverage at all**, because all three sit behind level 2
+and the bots cannot get there. That is a coverage hole in three shipped systems, and
+the debug command layer from the fix wave can close it without touching the balance
+decision. So this cycle took that instead.
+
+### T-141 — PASS
+
+`tools/debug-conformance/run.mjs`, 13 checks, speaking the real wire format through
+`tools/voting-conformance/wire.mjs`. `wire.mjs` gained the two variants it was missing:
+`ClientMsg::Debug` (client variant 8) and `ServerMsg::DebugResult` (server variant 13).
+
+**13/13.** Gating proven in all three dimensions (no code, wrong code, rate limit,
+singleplayer), and every system driver exercised: gold, level switch, phase, upgrade,
+curse, altar, enemy spawn/despawn, and a real `Shop` frame with 11 items.
+
+**The kit found a bug.** `debug_switch_level` called `start_level` but never refreshed
+the shop. `make_shop` returns `None` at level 1 and was only ever called from
+`finish_level`, so a tester who jumped to level 10 still saw no shop at all — the
+entire shop was unreachable from the debug layer, which is exactly the system the layer
+exists to make testable. The shop is priced by level bracket, so jumping levels has to
+re-price it. One line in `run.rs`.
+
+This is the project's recurring defect class again — **"the piece exists but never
+reaches the player"** — this time in the debug layer rather than in level generation.
+
+Two checks had to be written honestly rather than conveniently:
+
+- Altars are placed per level, so `trigger_altar { id: 0 }` on level 5 failed with
+  `no altar 0 on this level`. The check now walks levels 5/7/9/12/15 and ids 0-3 and
+  reports which one fired; a total miss is still a failure, not a skip.
+- The shop only exists from level 2 on, and `set_phase` does not broadcast, so waiting
+  for a `Shop` frame after forcing the phase could never work. The check now jumps to
+  level 6 and observes the frame on join.
+
+### Gates
+
+`just verify` **exit 0** — 246 sim, 151 server, 317 vitest (36 files), clippy
+`-D warnings`, protocol-gen `--check`, check-names (654 files), validate-content
+(20 enemies, 10 upgrades, 19 curses, 4 classes, 34 shop items, 3 events,
+15 milestones, 4 altars, 10 achievements, 140 patterns). `debug-conformance: skipped`
+without a URL.
+
+`just verify-live --port 7979` **PASS 8/8**, now including `debug conformance`.
+
+### Release
+
+`v0.29.0-alpha.1`.
+
+### Top 3 candidates for Cycle 18
+
+1. **Voting still has no end-to-end test with eight real ballots.** The debug kit proves
+   the layer works, not that the vote flow does. `debug_switch_level` could be extended
+   to open a vote session directly, which would let a kit cast eight ballots and assert
+   the winner, the permanence rule and the overflow pool — closing the last major
+   coverage gap without touching the balance decision.
+2. **`5.reference-scale`'s `minExtent` formula is wrong.** Deferred twice now. It
+   over-estimates the forced extent for stepped terraces and for chunks whose ramps sit
+   inside their deck. The metric passes at 2.11% against a 10% ceiling, so this is
+   message honesty, not a defect — which is why it keeps losing to real coverage work.
+3. **The bot's `hold` fallback.** Holding still is safe but makes no progress. A bot
+   that walks back toward the level centre would keep collecting and would raise the
+   gift counts in every playthrough run.

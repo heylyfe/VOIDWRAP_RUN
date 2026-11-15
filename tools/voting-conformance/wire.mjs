@@ -50,6 +50,10 @@ const CLIENT_VARIANTS = Object.freeze({
   Buy: 5,
   ChooseClass: 6,
   Vote: 7,
+  // T-141: the debug command layer. Gated server-side (dev flag or dev code) and
+  // singleplayer-only; the kit uses it to drive voting, the shop and altars without
+  // needing a bot to survive a whole level.
+  Debug: 8,
 });
 
 // ServerMsg variant indices (decode only).
@@ -67,6 +71,7 @@ const SERVER_VARIANTS = Object.freeze([
   'VoteOpen', // 10
   'VoteState', // 11
   'VoteResult', // 12
+  'DebugResult', // 13
 ]);
 
 // Field tables for the four structs the kit has to decode in full.
@@ -486,6 +491,13 @@ export function encodeClientMsg(msg) {
       w.u8(msg.option, 'option');
       break;
 
+    case 'Debug':
+      w.u32(CLIENT_VARIANTS.Debug, 'variant');
+      w.string(msg.code, 'code');
+      w.string(msg.command, 'command');
+      w.string(msg.args, 'args');
+      break;
+
     default:
       throw new RangeError(
         `ClientMsg: unknown variant ${JSON.stringify(msg.variant)} (known: ${Object.keys(
@@ -557,6 +569,9 @@ export function decodeServerMsg(buf) {
 
     case 'Pong':
       return { variant: variantName, t: r.u32('t') };
+
+    case 'DebugResult':
+      return { variant: variantName, ok: r.bool('ok'), message: r.string('message') };
 
     case 'Error':
       return {

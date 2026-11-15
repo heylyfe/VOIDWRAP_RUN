@@ -210,6 +210,10 @@ async function main() {
     '--death-log', deathLog,
   ]);
   run('voting conformance (real)', 'node', ['tools/voting-conformance/run.mjs', '--real', '--url', WS_URL]);
+  // T-141: the debug command layer is the only way to reach voting, the shop and
+  // altars end-to-end, because all three sit behind level 2 and the playthrough bots
+  // cannot get there (T-139).
+  run('debug conformance', 'node', ['tools/debug-conformance/run.mjs', '--url', WS_URL]);
 
   const matchmaker = process.env.MATCHMAKER_URL;
   if (matchmaker) {

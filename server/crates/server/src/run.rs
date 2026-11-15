@@ -1699,6 +1699,11 @@ impl Run {
             self.rng = Rng::new(seed);
         }
         self.start_level(content, players.max(1));
+        // T-141: the shop is priced by level bracket, so jumping levels has to re-price
+        // it. Without this a tester who jumps to level 10 still sees the level-1 shop,
+        // which is `None` -- the shop only opened on `finish_level`, so the whole shop
+        // was unreachable from the debug layer.
+        self.shop = self.make_shop(content);
     }
 
     /// Spawn one enemy by content id at `pos`, active immediately. Returns the new enemy's id.

@@ -1300,3 +1300,71 @@ audit **8/8**. Voting real smoke **3/3**. Playthrough **8 pass / 3 skip / 0 fail
 ### Release
 
 `v0.28.0-alpha.1`.
+
+---
+
+## Cycle 17 — 2026-11-15
+
+### Tickets
+
+| ticket | status | commit | what |
+|---|---|---|---|
+| T-141 | PASS | this commit | end-to-end coverage for voting, shop and altars via the debug layer |
+
+### T-141 — the debug conformance kit
+
+`tools/debug-conformance/run.mjs`, 13 checks over the real wire format.
+`wire.mjs` gained `ClientMsg::Debug` (client variant 8) and `ServerMsg::DebugResult`
+(server variant 13).
+
+| check | result |
+|---|---|
+| `debug-state` | PASS — level=1 phase=0 currency=0 |
+| `debug-no-code` | PASS — `debug commands are not enabled` |
+| `debug-wrong-code` | PASS — same rejection |
+| `debug-rate-limit` | PASS — locked out after 3 wrong codes |
+| `debug-grant-gold` | PASS — currency 0 -> 500, delta exactly 500 |
+| `debug-switch-level` | PASS — level 5, currency kept |
+| `debug-set-phase` | PASS — phase 1 |
+| `debug-give-upgrade` | PASS — `zephyr_tread` recorded |
+| `debug-give-curse` | PASS — `leadened_soles` recorded |
+| `debug-trigger-altar` | PASS — level 7 altar 1: `gift_sight / hardest_pool` |
+| `debug-spawn-despawn-enemy` | PASS — `pallbearer` spawned then gone |
+| `debug-shop-frame` | PASS — 11 items on join at level 6 |
+| `debug-singleplayer` | PASS — `debug commands are singleplayer only` |
+
+**13/13.**
+
+### The bug it found
+
+`debug_switch_level` never refreshed the shop. `make_shop` returns `None` at level 1
+and was only called from `finish_level`, so a tester who jumped to level 10 still saw
+no shop — the whole shop was unreachable from the debug layer. Fixed by re-pricing on
+the jump (`self.shop = self.make_shop(content)` in `run.rs`), which is correct anyway
+because the shop is priced by level bracket.
+
+Same defect class as the level-generation bugs: **"the piece exists but never reaches
+the player"**.
+
+### Gates
+
+`just verify` **exit 0** — 246 sim, 151 server, 317 vitest (36 files), clippy
+`-D warnings`, protocol-gen `--check`, check-names (654 files), validate-content
+(20 enemies, 10 upgrades, 19 curses, 4 classes, 34 shop items, 3 events,
+15 milestones, 4 altars, 10 achievements, 140 patterns).
+
+`just verify-live --port 7979` **PASS 8/8** — build wasm, build server, level dump,
+pattern audit, economy audit, playthrough, voting conformance (real), debug
+conformance.
+
+### Parked
+
+- Playthrough `level-progression` / `vote` / `shop`: still blocked by the
+  starting-lives balance decision and the bot's hold-still fallback (T-139).
+- Voting with eight real ballots: needs a vote session to open, which needs a level to
+  end. Cycle 18 candidate 1.
+- `5.reference-scale` `minExtent` formula: deferred twice, message honesty only.
+
+### Release
+
+`v0.29.0-alpha.1`.
