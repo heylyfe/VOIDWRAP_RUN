@@ -882,6 +882,8 @@ pub struct Run {
     pub seed: u32,
     /// The difficulty mode chosen in the lobby (T-085). `Standard` changes nothing.
     pub mode: sim::mode::DifficultyMode,
+    /// Radar modules bought in the shop (T-086): what this run is allowed to see.
+    pub radar: sim::radar::RadarState,
     pub upgrades: Vec<String>,
     pub curses: Vec<String>,
     /// Ids of shop `mods`/`perk`/`counter` items bought this run, so a curse purge can rebuild the
@@ -937,6 +939,7 @@ impl Run {
             vote_session: None,
             seed,
             mode: sim::mode::DifficultyMode::Standard,
+            radar: sim::radar::RadarState::default(),
             upgrades: Vec::new(),
             curses: Vec::new(),
             purchased_mods: Vec::new(),
@@ -1375,6 +1378,14 @@ impl Run {
                     self.mods.apply(&def.mods);
                     self.lives = self.lives.saturating_add(self.mods.extra_lives.saturating_sub(before));
                     self.purchased_mods.push(def.id.clone());
+                    ShopPurchase::Mods
+                }
+                // Radar modules (T-086) are one-off grants: no mods, no purchased_mods entry.
+                "radar" => {
+                    let Some(module) = sim::radar::RadarModule::from_id(&def.id) else {
+                        return Err(ShopError::UnknownItem);
+                    };
+                    self.radar.grant(module);
                     ShopPurchase::Mods
                 }
                 _ => return Err(ShopError::UnknownItem),
@@ -1853,6 +1864,20 @@ impl Run {
     #[allow(dead_code)]
     pub fn hush_active(&self) -> bool {
         self.curses.iter().any(|id| id == "hush")
+    }
+
+    /// The run's radar modules and their cooldown (T-086).
+    ///
+    /// The HUD reads this once a client-visible field carries it; that needs a protocol change and
+    /// is parked (see T-086 NOTES), so only tests exercise it today.
+    #[allow(dead_code)]
+    pub fn radar_state(&self) -> sim::radar::RadarState {
+        self.radar
+    }
+
+    /// Advance the radar cooldowns one tick (T-086). Called once per game tick.
+    pub fn tick_radar(&mut self) {
+        self.radar.tick();
     }
 
     pub fn collect_gifts(&mut self, feet: &Vec3) -> Vec<Vec3> {
@@ -3267,5 +3292,31 @@ mod vote_tests {
         assert_eq!(run.mode, DifficultyMode::Extreme, "the mode survives start_level");
         run.start_level(&content, 1);
         assert_eq!(run.mode, DifficultyMode::Extreme, "and again on the next level");
+    }
+    // --- T-086: radar modules -----------------------------------------------------------------
+
+    #[test]
+    fn buying_a_radar_module_grants_it_and_charges_once() {
+        let c = content();
+        let mut run = Run::new(&c, 42, 2);
+        run.currency = 200;
+        run.shop = Some(vec![ShopOffer {
+            id: "radar_gift_arrow".to_string(),
+            cost: 35,
+            stock: 1,
+        }]);
+        assert!(!run.radar_state().has(sim::radar::RadarModule::GiftArrow));
+        assert_eq!(run.buy_shop_item(&c, "radar_gift_arrow"), Ok(ShopPurchase::Mods));
+        assert!(
+            run.radar_state().has(sim::radar::RadarModule::GiftArrow),
+            "the module is granted"
+        );
+        assert_eq!(run.currency, 165, "charged once");
+        assert!(
+            !run.purchased_mods.iter().any(|id| id == "radar_gift_arrow"),
+            "a radar grant is not a mod"
+        );
+        // Stock ran out.
+        assert_eq!(run.buy_shop_item(&c, "radar_gift_arrow"), Err(ShopError::SoldOut));
     }
 }

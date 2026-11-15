@@ -174,11 +174,15 @@ if (JSON.stringify(c).includes("blinker")) err('content: "blinker" must not appe
 // `counter` items (T-082) are the registry-aware extras: one per permanent an enemy can become, each
 // carrying a mod that helps against that enemy. They are additive, so the base seven keep their
 // exact composition rule and the counters are only checked for shape.
-const SHOP_KINDS = ["life", "reroll", "mods", "counter", "perk"];
+const SHOP_KINDS = ["life", "reroll", "mods", "counter", "perk", "radar"];
 if (!Array.isArray(c.shop)) err("shop: missing");
 else {
-  const base = c.shop.filter((s) => s.kind !== "counter" && s.kind !== "perk");
+  const base = c.shop.filter((s) => !["counter", "perk", "radar"].includes(s.kind));
   if (base.length !== 7) err(`shop: need exactly 7 base items (have ${base.length})`);
+  // Radar modules (T-086): exactly the three the sim module knows about.
+  const radar = c.shop.filter((s) => s.kind === "radar").map((s) => s.id).sort();
+  const wantRadar = ["radar_enemy", "radar_gift_arrow", "radar_hazard"];
+  if (radar.join(",") !== wantRadar.join(",")) err(`shop: radar items must be exactly ${wantRadar.join(", ")} (have ${radar.join(", ") || "none"})`);
   const counts = { life: 0, reroll: 0, mods: 0 };
   for (const [i, s] of c.shop.entries()) {
     const w = `shop[${i}]`;

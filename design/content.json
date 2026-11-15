@@ -880,6 +880,33 @@
       "stock": 1,
       "kind": "counter",
       "mods": { "fog_density_mul": 0.7 }
+    },
+    {
+      "id": "radar_gift_arrow",
+      "name": "Gift Compass",
+      "flavor": "It points at what you have not taken, never at what is pretending.",
+      "effect": "arrow to the nearest gift, with distance",
+      "cost": 35,
+      "stock": 1,
+      "kind": "radar"
+    },
+    {
+      "id": "radar_enemy",
+      "name": "Hunter Ping",
+      "flavor": "A short knock on the dark. Something always knocks back.",
+      "effect": "ping permanent enemies every 10 s",
+      "cost": 50,
+      "stock": 1,
+      "kind": "radar"
+    },
+    {
+      "id": "radar_hazard",
+      "name": "Ground Sense",
+      "flavor": "The floor has opinions about where you should stand.",
+      "effect": "reveals nearby ground hazards",
+      "cost": 40,
+      "stock": 1,
+      "kind": "radar"
     }
   ],
   "events": [

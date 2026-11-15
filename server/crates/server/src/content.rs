@@ -151,7 +151,7 @@ pub struct ClassDef {
     pub id: String,
 }
 
-/// An item sold in the lobby shop. `kind`: "life" | "reroll" | "mods" | "counter" | "perk".
+/// An item sold in the lobby shop. `kind`: "life" | "reroll" | "mods" | "counter" | "perk" | "radar".
 #[derive(Debug, Clone, Deserialize)]
 pub struct ShopItemDef {
     pub id: String,
@@ -305,6 +305,8 @@ impl Content {
                         }
                     }
                 }
+                // Radar modules (T-086) are one-off grants: no mods, no stock maths beyond the shop.
+                "radar" => {}
                 other => {
                     return Err(format!(
                         "design/content.json: shop item {}: unknown kind {other}",

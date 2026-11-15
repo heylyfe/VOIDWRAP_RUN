@@ -13,6 +13,7 @@ pub mod levelgen;
 pub mod levels;
 pub mod mode;
 pub mod pattern;
+pub mod radar;
 pub mod rules;
 pub mod tuning;
 pub mod world;

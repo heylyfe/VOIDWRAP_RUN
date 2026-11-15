@@ -788,6 +788,7 @@ impl Game {
     fn tick_playing(&mut self) {
         // Phase timers advance with the tick (PENDING -> COLLAPSING after 3.0 s; batch warnings and drops).
         self.run.tick_collapse();
+        self.run.tick_radar();
 
         // The vote session countdown advances with the playing phase; it closes on zero, on
         // everyone having voted (at cast time), or when the level ends (below).
