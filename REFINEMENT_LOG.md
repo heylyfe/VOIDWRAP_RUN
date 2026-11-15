@@ -1882,3 +1882,93 @@ gift from LURE.** Both are measurable in CIELAB.
 3. **The player classes.** Five classes, each with a colour; the same delta-E measurement
    has never been applied to them, and class readability matters more than enemy
    readability because the player is looking at their own avatar constantly.
+
+## Cycle 21 — wiring (T-147, T-148, T-149)
+
+### What was picked and why
+
+Cycle 20's log listed three candidates: silhouette distinctness, `EnemyModelProps` carrying
+the look, and the player classes. The first needs a rendered capture (the models are
+animated JSX with conditional rendering, so source extraction is not reliable) and the
+second is a redesign needing a human decision. The third was cheap, so it went first — and
+the measurement found something the candidate had not predicted.
+
+1. **T-147 — the striker's class colour never reached the screen.** The candidate was
+   "apply the delta-E measurement to the classes". The measurement said the colours are
+   fine (closest pair 25.7, worst fog contrast 52.5) and that one of them was never drawn:
+   `classColor()` is called by three renderers and not for `CLASS_STRIKER`, so the dash
+   streak wore `theme.accent` and changed colour with the level — 64.8 to 149.0 delta-E
+   from the colour it was supposed to be.
+2. **T-148 — a check that compared placements to levels.** Found by reading the audit
+   rather than by a candidate: `6.enemy-frequencies.always-offered` compared a placement
+   count against a level count (3200 vs 400) and could never fire. It had reported PASS
+   since it was written.
+3. **T-149 — the pedestal vote had a complete client UI that nothing mounted.** Found by
+   following T-148's thread: if one check was measuring nothing, what else was? The vote
+   UI was the answer, and it was the largest finding of the cycle.
+
+The through-line: **all three are the same defect — a piece that exists and never reaches
+the player.** T-147 is a colour table nothing read, T-148 is a check nothing could fail,
+T-149 is a whole mechanic nothing rendered.
+
+### PASS / FAIL / PARKED
+
+| ticket | verdict | commit |
+|---|---|---|
+| T-147 | **PASS** | `af27f6e` |
+| T-148 | **PASS** | `4d7ef48` |
+| T-149 | **PASS** | `dd71206` |
+
+### What the measurement found beyond the tickets
+
+- **The vote was inert, not merely invisible.** With zero ballots every count is 0, every
+  option ties, the host has no ballot, and `VoteSession::resolve` falls through to its RNG.
+  Players were gaining a random permanent every level. This is a balance change as well as
+  a UI fix, and it is the first thing to watch next cycle.
+- **`protocolAdapter.ts` was written against assumed field names** while T-078 was in
+  flight, and its own header said so. The real protocol sends `countdownS` / `secondsLeft`,
+  so the countdown would have shown the local 20 s default. Wiring the overlay up is what
+  surfaced it — a component that is never mounted cannot reveal that its parser is wrong.
+- **Two HUD components are orphans:** `LobbyPoll` and `RunVoteOverlay`. Only the second was
+  a defect. `LobbyPoll` stays unmounted deliberately (the lobby already has `DraftScreen`).
+
+### Things measured and deliberately not changed
+
+- **The class palette.** The search for a better striker/grappler pair lands 17.9 from
+  `blight`'s accent (green) or 12.2 from `turret`'s (orange). The space is saturated by 20
+  enemy accents plus the straggler beam. Recorded so nobody "improves" it later.
+- **Silhouette distinctness.** Parked with a named prerequisite: it needs a dev-only enemy
+  gallery route plus a rendered capture, because the models are animated JSX with
+  conditional rendering and refs. Source extraction would measure the wrong thing.
+- **`LobbyPoll`.** Deleting it is a human decision; it is the lobby variant of a mechanic
+  that now works in-run.
+- **The dump's enemy types.** Both `6.enemy-frequencies.*` metrics SKIP because the dump
+  carries generic `spawn` markers. Fixing that needs the pedestal-pool logic, which lives
+  in the `server` crate while the dump lives in `sim` — a crate-boundary decision.
+
+### Gates
+
+`just verify` **exit 0** — 246 sim, 151 server, **342 vitest (39 files)**, clippy
+`-D warnings`, protocol-gen `--check`, check-names (671 files), validate-content,
+pattern-audit `--selftest` PASS.
+
+`node tools/verify-live.mjs --port 7979` **PASS 8/8**. Pattern audit 17 lines / 0 failed /
+2 skipped. Economy 8/8. Voting real 3/3. Debug 13/13. Playthrough 9 pass / 3 skip / 0 fail.
+`tools/capture.mjs` full client flow with zero page and console errors.
+
+### Release
+
+`v0.33.0-alpha.1`.
+
+### Top 3 candidates for Cycle 22
+
+1. **Watch the vote's balance effect.** The pedestal vote now has player agency for the
+   first time. The economy audit's `3.pedestal_pool` measures the pool, not the outcome;
+   nothing yet measures whether a coordinated team's picks make the run too easy. This is
+   the highest-value measurement the cycle created.
+2. **Silhouette distinctness**, with the prerequisite named: a dev-only enemy gallery route
+   (`/dev/enemies`) that renders each model in isolation against a flat background, then a
+   capture tool that computes pairwise silhouette IoU. Do not attempt it from source.
+3. **The dump's enemy types.** Move `vote_pool_with` (or a thin equivalent) into `sim` so
+   `pattern_dump` can emit the real pedestal pool per `(mode, level)`. That turns two SKIPs
+   into measurements and would have caught T-148's units bug years earlier.

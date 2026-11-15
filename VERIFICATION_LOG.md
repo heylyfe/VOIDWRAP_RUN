@@ -1498,3 +1498,58 @@ so no real file was mutated. Every one flips a metric from PASS to SKIP or FAIL.
 ### Release
 
 `v0.32.0-alpha.1`.
+
+## Cycle 21 — 2026-11-15
+
+### Gate
+
+`just verify` **exit 0** — 246 sim, 151 server, **342 vitest (39 files)**, clippy
+`-D warnings`, protocol-gen `--check`, check-names (671 files), validate-content (20
+enemies, 10 upgrades, 19 curses, 4 classes, 34 shop items, 3 events, 15 milestones, 4
+altars, 10 achievements, 140 patterns), pattern-audit `--selftest` PASS with 7 expected
+failures.
+
+`node tools/verify-live.mjs --port 7979` **PASS 8/8** — build wasm, build server, level
+dump, pattern audit, economy audit, playthrough, voting conformance (real), debug
+conformance.
+
+### Black-box kits
+
+Pattern audit **17 lines / 0 failed / 2 skipped**. The skipped count went from 1 to 2
+because `6.enemy-frequencies.always-offered` stopped reporting a PASS it had not earned
+(T-148). Economy 8/8. Voting real 3/3. Debug 13/13. Playthrough **9 pass / 3 skip / 0
+fail**.
+
+### Client
+
+`tools/capture.mjs` drove the full flow against a live server — title, lobby, spawn,
+moving, stopped, falling, run summary, new-run lobby — with **zero page errors and zero
+console errors**. Its only failure was the headless tick-rate floor (12/s), which the tool
+itself reports as a software-rendering artifact.
+
+### Negative tests
+
+- T-147: dash streak reverted to `theme.accent` — `expected [ 'CLASS_STRIKER #ffb347' ] to
+  deeply equal []`.
+- T-148: the selftest's planted zero-variety defect now fails
+  `6.enemy-frequencies.always-offered` (4 cells across 2), and the metric is in the
+  expected set so `just verify` fails if it ever stops firing.
+- T-149: `<RunVoteOverlay … />` removed — `expected '"use client";\n\nimport { Canvas, use…'
+  to match /<RunVoteOverlay\b/`.
+
+### Parked
+
+- Playthrough `level-progression` / `vote` / `shop`: blocked by the starting-lives balance
+  decision (T-139). Unchanged.
+- Silhouette distinctness: needs a dev-only enemy gallery route plus a rendered capture.
+  The models are animated JSX with conditional rendering and refs, so source extraction
+  would measure the wrong thing.
+- `LobbyPoll`: unmounted deliberately; deleting it is a human decision.
+- The dump's enemy types: needs `vote_pool_with` moved from `server` to `sim`, a
+  crate-boundary decision.
+- `EnemyModelProps` carrying the look instead of 20 hardcoded literals: a redesign, needs
+  a human decision.
+
+### Release
+
+`v0.33.0-alpha.1`.
