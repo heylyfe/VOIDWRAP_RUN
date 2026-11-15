@@ -11,7 +11,7 @@ import { prog01, yawToward } from "../enemyLook";
 
 /**
  * The Pallbearer — black-lacquered coffin-barge, brass lantern prow, hanging shroud.
- * Accent #ff3355 (deep crimson). Unit-radius model; the parent scales by body radius.
+ * Accent #e91e63 (deep rose). Unit-radius model; the parent scales by body radius.
  * Idle: low bob / sway. Attack (KNEEL→LUNGE): rears up, lantern whiteouts.
  */
 export function Pallbearer({ anim }: EnemyModelProps): JSX.Element {
@@ -82,7 +82,7 @@ export function Pallbearer({ anim }: EnemyModelProps): JSX.Element {
                 seamMats.current[i] = m;
               }}
               color="#1a0508"
-              emissive="#ff3355"
+              emissive="#e91e63"
               emissiveIntensity={0.9}
               toneMapped={false}
             />

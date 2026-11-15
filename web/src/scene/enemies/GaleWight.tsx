@@ -11,7 +11,7 @@ import { clamp01, prog01, yawToward } from "../enemyLook";
 
 /**
  * Gale Wight — tattered manta of storm-grey cloth, ribbed throat sac, cyclone-eye.
- * Accent #d94fff (magenta-violet), arcs #b47aff. Unit-radius model.
+ * Accent #7b2ff7 (deep violet), arcs #b47aff. Unit-radius model.
  * Idle: banking circles with folded wings. VOLLEY (TELEGRAPH): sac inflates,
  * lightning crawls. ATTACK: sac bursts and deflates; the shell itself is drawn by Projectiles.
  */
@@ -99,7 +99,7 @@ export function GaleWight({ anim }: EnemyModelProps): JSX.Element {
           <meshStandardMaterial
             ref={sacMat}
             color="#3a2b4d"
-            emissive="#d94fff"
+            emissive="#7b2ff7"
             emissiveIntensity={1.5}
             roughness={0.5}
             toneMapped={false}

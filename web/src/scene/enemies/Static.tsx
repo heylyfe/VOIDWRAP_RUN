@@ -24,7 +24,7 @@ const PUFFS: readonly Puff[] = [
 
 /**
  * Static — a low fog-grey lump that is nearly invisible; the fog patch is the read.
- * Accent #9aa3ad (fog grey). Unit-radius model; the parent scales by body radius.
+ * Accent #a8b8c8 (cold steel grey). Unit-radius model; the parent scales by body radius.
  * Cue tier 3 (ambient): no telegraph; the fog slowly churns and pinprick eyes
  * brighten while it is tracking. Attack: fog thickens and the eyes flare.
  */
@@ -82,7 +82,7 @@ export function Static({ anim }: EnemyModelProps): JSX.Element {
         <sphereGeometry args={[0.55, 12, 9]} />
         <meshStandardMaterial
           color="#33383f"
-          emissive="#9aa3ad"
+          emissive="#a8b8c8"
           emissiveIntensity={0.12}
           roughness={0.95}
           metalness={0.02}
@@ -92,7 +92,7 @@ export function Static({ anim }: EnemyModelProps): JSX.Element {
         <sphereGeometry args={[0.34, 10, 8]} />
         <meshStandardMaterial
           color="#2b3036"
-          emissive="#9aa3ad"
+          emissive="#a8b8c8"
           emissiveIntensity={0.08}
           roughness={0.97}
           metalness={0.02}

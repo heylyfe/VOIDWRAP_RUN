@@ -123,7 +123,7 @@ Counterplay: keep moving forward; never farm backwards; cross perpendicular to i
 Solo: relentless — out-pace it with route discipline. Co-op: single-target; one player can be the unwilling guide
 while the team loots; it never switches mid-KNEEL.
 VISUAL: black-lacquered coffin-barge (stretched box) with brass lantern prow and hanging shroud, ember-crack seams;
-**deep crimson accent #ff3355**; idle = low bob/sway; attack = rear-up + lantern whiteout. Readable in fog via lantern
+**deep rose accent #e91e63**; idle = low bob/sway; attack = rear-up + lantern whiteout. Readable in fog via lantern
 glow. Primitives: box hull, cylinder lantern, plane shroud, point light.
 
 ### snapshrike — Snapshrike · threat 4
@@ -191,7 +191,7 @@ Counterplay: keep moving; on LOCK, dash/jump ≥2.2 u; take shelter under a brid
 Solo: 2 shells but 3.5 s spacing — patience beats speed. Co-op: targets spread; call out your circle; one player
 baiting draws shells off the gold-runner.
 VISUAL: tattered kite/manta of storm-grey cloth with ribbed throat sac and a cyclone-eye; **magenta-violet accent
-#d94fff, arc #b47aff**; idle = banking circles, wings folded; attack = sac inflates, shell crackles down.
+#7b2ff7, arc #b47aff**; idle = banking circles, wings folded; attack = sac inflates, shell crackles down.
 Primitives: custom cone/plane sail, torus throat, emissive eye sphere.
 
 ### lantern_leech — Lantern Leech · threat 3

@@ -40,20 +40,20 @@ export interface EnemyLook {
 
 /** Order matches the wire `kind` index: pallbearer 0 … corrupter 8, rewind 9 … lure 19. */
 export const ENEMY_LOOKS: readonly EnemyLook[] = [
-  { behavior: "pallbearer", accent: "#ff3355", glow: "#ffdf9e" },
+  { behavior: "pallbearer", accent: "#e91e63", glow: "#ffdf9e" },
   { behavior: "snapshrike", accent: "#ff4436", glow: "#ffb36b" },
   { behavior: "moteling", accent: "#ffc3d9", glow: "#ff5fa8" },
   { behavior: "rift_warden", accent: "#b0313f", glow: "#ff5a3c" },
-  { behavior: "gale_wight", accent: "#d94fff", glow: "#b47aff" },
+  { behavior: "gale_wight", accent: "#7b2ff7", glow: "#b47aff" },
   { behavior: "lantern_leech", accent: "#ff7ab8", glow: "#ffb3d1" },
   { behavior: "turret", accent: "#ff8a3c", glow: "#ffd07a" },
   { behavior: "mimic", accent: "#ff3df0", glow: "#b46bff" },
   { behavior: "corrupter", accent: "#39ffb0", glow: "#7dffb9" },
   { behavior: "rewind", accent: "#46e0ff", glow: "#cdf6ff" },
   { behavior: "warden", accent: "#f4d35e", glow: "#fdf3b8" },
-  { behavior: "peal", accent: "#e63946", glow: "#ffb0a8" },
+  { behavior: "peal", accent: "#9d0208", glow: "#ffb0a8" },
   { behavior: "kite", accent: "#35a7ff", glow: "#bdd9ff" },
-  { behavior: "static", accent: "#9aa3ad", glow: "#dde3ea" },
+  { behavior: "static", accent: "#a8b8c8", glow: "#dde3ea" },
   { behavior: "blight", accent: "#a3c34a", glow: "#dcea9a" },
   { behavior: "metronome", accent: "#c98f3d", glow: "#ffe08a" },
   { behavior: "overlook", accent: "#ecebe4", glow: "#ffffff" },
@@ -64,7 +64,7 @@ export const ENEMY_LOOKS: readonly EnemyLook[] = [
 
 export const ENEMY_KIND_COUNT = ENEMY_LOOKS.length;
 
-const FALLBACK_LOOK: EnemyLook = { behavior: "pallbearer", accent: "#ff3355", glow: "#ffdf9e" };
+const FALLBACK_LOOK: EnemyLook = { behavior: "pallbearer", accent: "#e91e63", glow: "#ffdf9e" };
 
 export function isEnemyKind(kind: number): boolean {
   return Number.isInteger(kind) && kind >= 0 && kind < ENEMY_LOOKS.length;

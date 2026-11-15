@@ -13,7 +13,7 @@ const SHELL_H = 1.15;
 
 /**
  * Peal — a bronze bell whose two shell halves swing open at the lip as the ring
- * charges. Accent #e63946 (bell-mouth red). Unit-radius model; the parent scales by
+ * charges. Accent #9d0208 (oxblood bell-mouth). Unit-radius model; the parent scales by
  * body radius. Idle: slow sway. Telegraph (PEAL): lip opens and the mouth glows.
  * Attack (the ring): the shell clangs through a full open-shut arc.
  */
@@ -85,7 +85,7 @@ export function Peal({ anim }: EnemyModelProps): JSX.Element {
         shellMats.current[slot] = m;
       }}
       color="#2a2118"
-      emissive="#e63946"
+      emissive="#9d0208"
       emissiveIntensity={0.18}
       roughness={0.35}
       metalness={0.75}
@@ -124,7 +124,7 @@ export function Peal({ anim }: EnemyModelProps): JSX.Element {
           <meshStandardMaterial
             ref={lipMat}
             color="#33241a"
-            emissive="#e63946"
+            emissive="#9d0208"
             emissiveIntensity={0.9}
             roughness={0.3}
             metalness={0.8}
