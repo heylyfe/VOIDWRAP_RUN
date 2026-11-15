@@ -1394,3 +1394,96 @@ modes, and every enemy must have `selection_cap >= 1`**. Negative-tested with
    engine is far better than the metric expects. Worth measuring what redundancy
    would look like if the bag's `recent_divisor` were relaxed — that is a real
    variety knob, not just a threshold.
+
+---
+
+## Cycle 15 — 2026-11-15
+
+### What was picked and why
+
+Cycle 14's log named three candidates. Two of them were the same shape: **a metric
+whose number was accepted without asking where it came from.**
+
+1. **T-136 — bot falls: edge or seam?** T-130 proved the bots fall and the game is not
+   killing them unfairly, but not *how* they fall. An edge fall is a navigation
+   problem; a seam fall is a geometry problem. Different fixes, and the log could not
+   tell them apart.
+2. **T-137 — `5.heights` at 3.59% against a 5% ceiling.** The last metric whose
+   threshold had been *raised to fit the data* (2% -> 5% by owner decision in T-119)
+   rather than the data fixed.
+3. **T-138 — regression gate.**
+
+The third candidate from Cycle 14 (`1.pattern-repeat.within-level` at 10.42% against a
+35% ceiling) was deferred: it is a variety knob, not a defect, and the two above were
+measurable defects.
+
+### T-136 — PASS (`bf8317d`)
+
+The first attempt measured the distance from the **death position** to the nearest
+platform footprint. That measurement is worthless and the first run proved it: a fall
+from `y=0` to a kill plane at `y=-16` takes about a second, and a player moving 6 u/s
+drifts 6 u sideways in that time. Every death reported `edge_dist` 0.4–2.1 u, which is
+drift, not geometry.
+
+Measure from the **last grounded position** instead. `Player.last_ground` is refreshed
+every tick while `state.grounded`; the log reports `ground_dist` (distance to the
+nearest footprint) and `ground_inset` (how far inside it).
+
+Result over 7 deaths: every `inset` is negative and small, −0.21 to −0.48. Each player
+left from just past the lip, inside the coyote window. **Zero deaths with
+`inset > 0.5`.** No player fell through geometry, which agrees with the sim's
+`generated_levels_are_completable_with_the_real_controller` and
+`every_graph_edge_kind_is_physically_doable` — both walk the real controller across
+every platform seam and pass.
+
+The falls are the playthrough bots' random-walk navigation. Nothing to fix in the
+collision layer.
+
+### T-137 — PASS (`c6d67c2`)
+
+The metric now reports which patterns own the out-of-band deltas and whether they are
+too small or too large, the same way T-128 fixed `5.reference-scale`. Two facts fell
+out immediately: **one chunk owned all 15,352**, and **all were too small**.
+
+`ch02_hollow_market` is a `hub`-role bowl with `min_level: 1`, placed in 3,838 of
+6,000 levels. Four rim strips sat at top `-0.5`, exactly halfway between the `y=0`
+ring and the `y=-1` floor: two half-steps per strip, four strips, 3,838 placements,
+15,352 violations. This is the same half-step class T-119 removed from the rest of the
+catalog; this chunk was missed.
+
+Raising the strips to `y=0` makes the bowl a clean 1 u pit. Violations **15,352 -> 0**,
+rate **3.59% -> 0.00%**, and `HEIGHT_DIFF_RATE_MAX` goes **0.05 -> 0** so a half-step
+anywhere fails immediately. Negative-tested: reverting one strip gives 3,838
+violations and `FAIL` naming the chunk.
+
+### T-138 — PASS
+
+`just verify` exit 0: 246 sim, 151 server, 317 vitest (36 files), clippy
+`-D warnings`, protocol-gen `--check`, check-names (648 files), validate-content
+(20 enemies, 10 upgrades, 19 curses, 4 classes, 34 shop items, 3 events,
+15 milestones, 4 altars, 10 achievements, 140 patterns).
+
+`just verify-live --port 7979` **PASS 7/7**. Pattern audit **17 lines, 0 failed,
+1 skipped**. Economy audit **8/8**. Voting real smoke **3/3**. Playthrough
+**8 pass / 3 skip / 0 fail**.
+
+### Release
+
+`v0.27.0-alpha.1`.
+
+### Top 3 candidates for Cycle 16
+
+1. **`5.reference-scale` at 2.11% against a 10% ceiling.** This is now the last metric
+   with a loose threshold, and its three offenders are all ramp-forced — a chunk that
+   drops `d` needs `2*d/0.5` of ramp plus decks, so the footprint is forced by the
+   0.5 ramp-slope cap rather than chosen. The question is whether the ceiling or the
+   ramp-slope cap is wrong. Measure the forced minimum against the band before
+   touching either.
+2. **The playthrough bot has no edge awareness.** T-136 proved the falls are
+   navigation, which means the bot is the thing to fix, not the game. A bot that
+   steers toward the nearest gift would exercise levels 2+, voting, shop and altars —
+   everything currently parked behind `level-progression`. This is the highest-value
+   change available: it unblocks three skipped checks at once.
+3. **`1.pattern-repeat.within-level` at 10.42% against a 35% ceiling.** Deferred from
+   Cycle 14. Measure what redundancy looks like if the bag's `recent_divisor` is
+   relaxed — that is a real variety knob, not just a threshold.

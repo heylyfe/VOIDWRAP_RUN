@@ -1152,3 +1152,86 @@ reasons unrelated to the game being correct.
 ### Release
 
 `v0.26.0-alpha.1`.
+
+---
+
+## Cycle 15 — 2026-11-15
+
+### Tickets
+
+| ticket | status | commit | what |
+|---|---|---|---|
+| T-136 | PASS | `bf8317d` | death log distinguishes edge falls from seam falls |
+| T-137 | PASS | `c6d67c2` | `5.heights` fixed at the data, threshold back to 0 |
+| T-138 | PASS | this commit | regression gate |
+
+### T-136 — edge or seam
+
+`deathlog::Death` gained `seed`, `ground_dist`, `ground_inset`. The first attempt
+measured from the death position and was worthless: a 16 u fall takes about a second,
+and a player moving 6 u/s drifts 6 u sideways, so every death reported drift as
+distance. Measure from the last grounded position instead (`Player.last_ground`,
+refreshed every tick while `state.grounded`).
+
+7 deaths, all void, all ending a run:
+
+| player | y | vy | ground_dist | ground_inset |
+|---|---|---|---|---|
+| 5 | -16.81 | -32.53 | 0.230 | -0.230 |
+| 6 | -16.81 | -32.53 | 0.248 | -0.248 |
+| 7 | -16.81 | -32.53 | 0.228 | -0.228 |
+| 8 | -15.60 | -21.60 | 0.312 | -0.312 |
+| 3 | -16.27 | -32.00 | 0.479 | -0.479 |
+| 2 | -16.81 | -32.53 | 0.212 | -0.212 |
+| 1 | -16.81 | -32.53 | 0.282 | -0.282 |
+
+Every inset is negative and small: each player left from just past the lip, inside the
+coyote window. **Deaths with `inset > 0.5`: 0 of 7.** No seam falls. This agrees with
+`generated_levels_are_completable_with_the_real_controller` and
+`every_graph_edge_kind_is_physically_doable`, which walk the real controller across
+every platform seam and pass.
+
+### T-137 — `5.heights`
+
+The metric now names the owners and splits too-small from too-large:
+
+```
+before: 15352 (3.59%) [too small: 15352, too large: 0]; by pattern id: ch02_hollow_market:15352
+after:      0 (0.00%) [too small:     0, too large: 0]; by pattern id: none
+```
+
+`ch02_hollow_market` (hub, `min_level: 1`, 3,838 placements) had four rim strips at top
+`-0.5`, halfway between the `y=0` ring and the `y=-1` floor — two half-steps per strip.
+Raised to `y=0`, the bowl is a clean 1 u pit. `HEIGHT_DIFF_RATE_MAX` `0.05` -> `0`.
+
+Negative test: one strip reverted to `-0.5` gives 3,838 violations (0.90%) and
+`FAIL - 5.heights`, naming the chunk. 3,838 is exactly the placement count, which
+confirms 4 x 3,838 = 15,352.
+
+### Gates
+
+`just verify` **exit 0** — 246 sim, 151 server, 317 vitest (36 files), clippy
+`-D warnings`, protocol-gen `--check`, check-names (648 files), validate-content
+(20 enemies, 10 upgrades, 19 curses, 4 classes, 34 shop items, 3 events,
+15 milestones, 4 altars, 10 achievements, 140 patterns).
+
+`just verify-live --port 7979` **PASS 7/7** (build wasm, build server, level dump,
+pattern audit, economy audit, playthrough, voting conformance real; matchmaker
+skipped, no deployed matchmaker).
+
+Pattern audit **17 lines, 0 failed, 1 skipped**. Economy audit **8/8**. Voting real
+smoke **3/3**. Playthrough **8 pass / 3 skip / 0 fail** with
+`PASS - death-log (7 deaths (void:7), 7 ended a run, deepest fall y=-17.21; levels: 1)`.
+
+### Parked
+
+- Playthrough `level-progression` / `vote` / `shop` stay skipped. T-136 established
+  that the cause is the bot's random-walk navigation, not the game. The fix is a bot
+  that steers toward gifts, which is Cycle 16 candidate 2.
+- `ch04_twin_terrace` / `ch06_descent_of_sighs` / `ch15_tri_crown` remain outside the
+  reference band, all ramp-forced. Cycle 16 candidate 1.
+- Starting lives = 0 is a balance decision, still the top tuning note.
+
+### Release
+
+`v0.27.0-alpha.1`.
