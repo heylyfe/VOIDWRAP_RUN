@@ -1487,3 +1487,82 @@ violations and `FAIL` naming the chunk.
 3. **`1.pattern-repeat.within-level` at 10.42% against a 35% ceiling.** Deferred from
    Cycle 14. Measure what redundancy looks like if the bag's `recent_divisor` is
    relaxed — that is a real variety knob, not just a threshold.
+
+---
+
+## Cycle 16 — 2026-11-15
+
+### What was picked and why
+
+Cycle 15's log named three candidates. The first was `5.reference-scale` at 2.11%
+against a 10% ceiling. Measuring it showed the metric's `minExtent` formula is wrong —
+it claims `ch15_tri_crown` is ramp-forced to 26 u when the chunk has no ramp forcing
+anything (it is a stepped terrace, 0 -> -2.5 -> -3.5, all in band), and it claims
+`ch04_twin_terrace` is forced to 20 u when its ramps sit *inside* its 22 u deck. Only
+`ch06_descent_of_sighs` is genuinely forced: 2 u deck + 10 u ramp + 6 u deck + 10 u
+ramp + 2 u deck = 30 u with no slack at all.
+
+So the metric is passing at 2.11% with 4.7x headroom, and two of its three "offenders"
+are 2–5 u over a 20 u band by choice. There is no bug hiding here and tightening it
+would mean reshaping frozen chunks for a 2 u overage. **Deferred as low value.**
+
+The second candidate — the playthrough bot — was taken instead, because it blocks
+three skipped checks (voting, shop, altars all sit behind level 2) and that is the
+largest coverage gap in the project.
+
+### T-139 — PASS (diagnosis) / PARKED (the check) (`f5325d5`)
+
+The bot is not a random walk: nearest-gift steering with hysteresis, a platform-graph
+route, an edge probe, air control, stuck detection. So the failure needed measuring.
+
+| clients | seconds | deaths | best client's gifts |
+|---|---|---|---|
+| 1 | 120 | **0** | 12/46 |
+| 1 | 280 | 1 | 7/46 |
+| 2 | 90 | 2 | 5/52 |
+| 4 | 90 | 3 | 14/64 |
+| 8 | 90 | 7 | 40/88 |
+| 8 | 240 | 8 | 38/88 |
+
+Deaths scale with client count because gift count scales (46 -> 88) and the bot's
+herd-spreading sends bot *i* to the *i*-th nearest gift, so more clients means longer
+routes. More time does not help: 240 s plateaus at 38/88, the same as 90 s at 40/88.
+
+Two blockers, both real. **A run starts with 0 spare lives**, so the first fall ends it
+and the check needs all eight bots to survive — that is the owner's deferred balance
+decision. And **the edge probe's failure path is "blacklist the gift, hold still"**, so
+a bot whose remaining gifts are all behind unprobeable gaps stands still forever.
+
+Parked. The skip line now prints the reason, so the gate output points at the balance
+decision instead of implying a bug.
+
+### T-140 — PASS
+
+`just verify` exit 0: 246 sim, 151 server, 317 vitest (36 files), clippy
+`-D warnings`, protocol-gen `--check`, check-names (651 files), validate-content
+(20 enemies, 10 upgrades, 19 curses, 4 classes, 34 shop items, 3 events,
+15 milestones, 4 altars, 10 achievements, 140 patterns).
+
+`just verify-live --port 7979` **PASS 7/7**. Pattern audit **17 lines, 0 failed,
+1 skipped**. Economy audit **8/8**. Voting real smoke **3/3**. Playthrough
+**8 pass / 3 skip / 0 fail**.
+
+### Release
+
+`v0.28.0-alpha.1`.
+
+### Top 3 candidates for Cycle 17
+
+1. **`5.reference-scale`'s `minExtent` formula is wrong.** Not the threshold — the
+   formula. It over-estimates the forced extent for stepped terraces and for chunks
+   whose ramps sit inside their deck. Fixing it makes the metric honest and would show
+   that only `ch06_descent_of_sighs` is genuinely forced. Bounded, and it is the same
+   "measure the owners properly" move that worked in T-128 and T-137.
+2. **`1.pattern-repeat.within-level` at 10.42% against a 35% ceiling.** Deferred twice
+   now. Measure what redundancy looks like if the bag's `recent_divisor` is relaxed —
+   a real variety knob, not just a threshold.
+3. **The bot's `hold` fallback.** Holding still is safe but makes no progress. A bot
+   that walks back toward the level centre would keep collecting, which would raise the
+   gift counts in every playthrough run and might make `level-progression` reachable
+   without touching the balance decision. Cheap, and it improves every future cycle's
+   evidence.

@@ -4,7 +4,7 @@
 import { parseJoinAddress } from './join';
 
 /** Keep in sync with web/package.json "version"; the matchmaker filters entries exactly. */
-export const CLIENT_VERSION = '0.27.0-alpha.1';
+export const CLIENT_VERSION = '0.28.0-alpha.1';
 
 /** Slow first fetch: after this long without a response we show "Waking server…". */
 export const MATCHMAKER_WAKE_AFTER_MS = 2_500;

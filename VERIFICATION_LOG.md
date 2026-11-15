@@ -1235,3 +1235,68 @@ smoke **3/3**. Playthrough **8 pass / 3 skip / 0 fail** with
 ### Release
 
 `v0.27.0-alpha.1`.
+
+---
+
+## Cycle 16 — 2026-11-15
+
+### Tickets
+
+| ticket | status | commit | what |
+|---|---|---|---|
+| T-139 | PASS (diagnosis) / PARKED (check) | `f5325d5` | why the playthrough bots never reach level 2 |
+| T-140 | PASS | this commit | regression gate |
+
+### T-139 — the bot diagnosis
+
+The bot already has nearest-gift steering with hysteresis, a platform-graph route, an
+edge probe, air control and stuck detection. So the failure was measured, not guessed.
+
+| clients | seconds | deaths | best client's gifts |
+|---|---|---|---|
+| 1 | 120 | **0** | 12/46 |
+| 1 | 280 | 1 | 7/46 |
+| 2 | 90 | 2 | 5/52 |
+| 4 | 90 | 3 | 14/64 |
+| 8 | 90 | 7 | 40/88 |
+| 8 | 240 | 8 | 38/88 |
+
+Deaths scale with client count because gift count scales (46 -> 88) and herd-spreading
+sends bot *i* to the *i*-th nearest gift, so more clients means longer routes. More time
+does not help: 240 s plateaus at 38/88.
+
+Two blockers. A run starts with **0 spare lives**, so the first fall ends it and the
+check needs all eight bots to survive — the owner's deferred balance decision. And the
+edge probe's failure path is **"blacklist the gift, hold still"**, so a bot whose
+remaining gifts are all behind unprobeable gaps stands still forever.
+
+Ruled out: collision (T-136, zero seam falls), player-vs-player pushing (the sim has no
+player-player collision), a time limit (240 s plateaus), gift scarcity.
+
+Parked. The skip line now prints the reason, so the gate output points at the balance
+decision instead of implying a bug.
+
+### Gates
+
+`just verify` **exit 0** — 246 sim, 151 server, 317 vitest (36 files), clippy
+`-D warnings`, protocol-gen `--check`, check-names (651 files), validate-content
+(20 enemies, 10 upgrades, 19 curses, 4 classes, 34 shop items, 3 events,
+15 milestones, 4 altars, 10 achievements, 140 patterns).
+
+`just verify-live --port 7979` **PASS 7/7**. Pattern audit **17 lines, 0 failed,
+1 skipped** (`5.heights` holds at 0/427,434 against its new threshold of 0). Economy
+audit **8/8**. Voting real smoke **3/3**. Playthrough **8 pass / 3 skip / 0 fail**.
+
+### Parked
+
+- Playthrough `level-progression` / `vote` / `shop`: blocked by the starting-lives
+  balance decision and by the bot's hold-still fallback. See `tickets/T-139.md`.
+- `5.reference-scale` at 2.11% against a 10% ceiling: measured and deferred. The
+  `minExtent` formula is wrong (it over-estimates for stepped terraces and for chunks
+  whose ramps sit inside their deck), but the metric passes with 4.7x headroom and two
+  of the three offenders are 2–5 u over by choice. Cycle 17 candidate 1.
+- Starting lives = 0 remains the top tuning note.
+
+### Release
+
+`v0.28.0-alpha.1`.
