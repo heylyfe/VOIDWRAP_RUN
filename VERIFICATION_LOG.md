@@ -1457,3 +1457,44 @@ so no real file was mutated. Every one flips a metric from PASS to SKIP or FAIL.
 ### Release
 
 `v0.31.0-alpha.1`.
+
+---
+
+## Cycle 20 — colour identity
+
+### Tickets
+
+| ticket | verdict | commit | what |
+|---|---|---|---|
+| T-145 | **PASS** | `f742564` | enemy accents perceptually distinct; table-drift guards |
+| T-146 | **PASS** | `9365414` | straggler beam no longer wears LURE's colour |
+
+### Gates
+
+`just verify` **exit 0** — 246 sim, 151 server, **331 vitest (38 files)**, clippy
+`-D warnings`, protocol-gen `--check`, check-names, validate-content, pattern-audit
+`--selftest` PASS.
+
+`node tools/verify-live.mjs --port 7979` **PASS 8/8**. Pattern audit 17 lines / 0 failed /
+1 skipped. Economy 8/8. Voting real 3/3. Debug 13/13. Playthrough **9 pass / 3 skip /
+0 fail**.
+
+### Negative tests
+
+- T-145: stale `emissive`, no palette colour at all, another enemy's accent — each
+  reported by name.
+- T-146: beam reverted to `#dfe6ff` — three of five tests fail, including the enemy-accent
+  clash list.
+
+### Parked
+
+- Playthrough `level-progression` / `vote` / `shop`: blocked by the starting-lives
+  balance decision (T-139). Unchanged.
+- `EnemyModelProps` carrying the look instead of 20 hardcoded literals: a redesign, needs
+  a human decision.
+- `1.pattern-repeat.within-level`: pigeonhole-driven, not a divisor problem. Deferred with
+  a reason now.
+
+### Release
+
+`v0.32.0-alpha.1`.

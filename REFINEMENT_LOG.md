@@ -1803,3 +1803,82 @@ with zero tagged patterns → FAIL.
    times. It is a real variety knob (`recent_divisor` in the bag), not a threshold, and it
    is the last measurable gameplay-quality number with headroom. Worth one cycle if the
    model work stalls.
+
+---
+
+## Cycle 20 — colour identity (T-145, T-146)
+
+### What was picked and why
+
+Cycle 19's log said the audit backlog was exhausted and the next cycle should move to the
+owner's directive #4, "make the models look good". Most of that is subjective, so this
+cycle took the part that is not: **at gameplay distance the accent colour is the only
+thing separating one enemy from another, and the glow is the only thing separating a real
+gift from LURE.** Both are measurable in CIELAB.
+
+1. **T-145 — enemy accent distinctness.** Four pairs of accents were indistinguishable
+   (closest 10.5 delta-E) and `static` sat 22.5 from ashfall's fog — a grey enemy in grey
+   fog. RGB distance hid all of it.
+2. **T-146 — the straggler beam wore LURE's colour.** `BEAM_COLOR` was byte-identical to
+   `COMMON.gift.glow`, which is exactly what `Lure.tsx` wears for its disguise. The
+   marker whose job is to say "this one is real" wore the fake's colour — a direct
+   violation of JUDGMENT CALL 2.
+
+### PASS / FAIL / PARKED
+
+| ticket | verdict | commit |
+|---|---|---|
+| T-145 | **PASS** | `f742564` |
+| T-146 | **PASS** | `9365414` |
+
+### What the measurement found beyond the tickets
+
+- **The accent table was not the source of truth.** Accents are duplicated between
+  `ENEMY_LOOKS` and each model's hardcoded `emissive` literal, so a palette change could
+  land in the table and never reach the screen. Two source-reading guards now enforce it.
+  This is the project's recurring "the piece exists but never reaches the player" defect
+  class, in colour form.
+- **`RiftWarden` and `BoltSentry` light themselves with their glow, not their accent.**
+  Found by writing the guard; legitimate, so the guard accepts either.
+- **The accent is also the telegraph colour** (`Telegraphs.tsx` builds its palette from
+  `ENEMY_LOOKS`), so T-145 improved telegraph legibility as a side effect.
+
+### Things measured and deliberately not changed
+
+- **`Moteling` looks under-detailed by mesh count (1 vs a roster mean of 5.5) but is not**
+  — it is 60 motes in a single `instancedMesh` plus a core. The metric was wrong, not the
+  model. Recorded so nobody "fixes" it later.
+- **`1.pattern-repeat.within-level` at 10.42%** is pigeonhole-driven: a level draws ~32
+  picks from a 140-pattern pool, so repeats are inevitable regardless of the bag's
+  `recent_divisor`. Relaxing the divisor would not move it. Deferred for the fifth time,
+  now with a reason instead of a shrug.
+- **The glider model is real** — 9 distinct geometries (spars, panels, tips, ribbons,
+  keel, kingpost, legs, grips, straps). The owner's request was already fulfilled.
+- **`turret` renders `#ffffff`**, which is `overlook`'s glow. Left alone: pure white is a
+  generic highlight, not an identity colour.
+
+### Gates
+
+`just verify` **exit 0** — 246 sim, 151 server, **331 vitest (38 files)**, clippy
+`-D warnings`, protocol-gen `--check`, check-names, validate-content, pattern-audit
+`--selftest` PASS.
+
+`node tools/verify-live.mjs --port 7979` **PASS 8/8**. Pattern audit 17 lines / 0 failed /
+1 skipped. Economy 8/8. Voting real 3/3. Debug 13/13. Playthrough 9 pass / 3 skip / 0 fail.
+
+### Release
+
+`v0.32.0-alpha.1`.
+
+### Top 3 candidates for Cycle 21
+
+1. **Silhouette distinctness.** The palette now separates enemies by colour; shape is the
+   other half and is still unmeasured. The models are hand-written JSX, so this needs a
+   rendered capture rather than source reading — `just capture` already produces
+   screenshots, so the work is a silhouette-comparison harness over them.
+2. **`EnemyModelProps` should carry the look.** The architectural fix for the duplication
+   T-145 guarded against: pass `EnemyLook` down instead of hardcoding `emissive` literals
+   in 20 files. A redesign, so it needs a human decision — but it is the honest fix.
+3. **The player classes.** Five classes, each with a colour; the same delta-E measurement
+   has never been applied to them, and class readability matters more than enemy
+   readability because the player is looking at their own avatar constantly.
