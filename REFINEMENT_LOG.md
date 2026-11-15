@@ -2255,3 +2255,193 @@ PASS, silhouette `--selftest` 6/6.
 3. **`warden`/`blight` at 0.660** — now the roster's worst pair, and both are roundish chase
    enemies of similar radius. Blender makes a silhouette differentiator cheap, and the same
    pipeline now exists. `peal`/`blight` at 0.298 is already fine.
+
+## Cycle 25 — 2026-11-15
+
+### What the owner decided
+
+Nothing new this cycle. The three Cycle 24 candidates were already approved, and the owner's
+standing note — "you may use subagents to speed the work up, run independent tickets in parallel
+and pick whichever model you judge best for each task" — is what shaped the dispatch: three
+disjoint tickets, three worktrees, three different models.
+
+### Audit baseline (measured before any change)
+
+| Audit | Result |
+|---|---|
+| Pattern audit (5,000 seeds) | 17 lines, 0 failed, **0 skipped** |
+| Economy audit | 8/8 PASS |
+| Voting conformance (real) | 3/3 PASS |
+| Debug conformance | 13/13 PASS |
+| Vote integration | 6/6 PASS |
+| Playthrough (8 clients, 90 s) | 9 pass / 4 skip / 0 fail; gift rate 58.0% |
+| Silhouette (190 pairs) | PASS; **warden/blight 0.660**, p90 0.410, max 0.660 |
+
+### Picked, and why
+
+1. **Vertical routing for the bot** — the last blocker on level completion, and the only thing
+   between the suite and a real end-to-end. `level-completion` had SKIPped for three cycles.
+2. **The pre-match theme/difficulty poll** — owner-approved for a future cycle. Writing the ticket
+   turned up a bigger reason to do it now: `run.mode` was assigned **only in tests**, so Extreme,
+   Chaos and Random were unreachable in the shipped game. Defect class #1, and the poll is the
+   production path it was missing.
+3. **warden/blight at 0.660** — the roster's worst pair after T-157 took peal/coil to 0.200, and
+   the Blender pipeline already existed.
+
+### Tickets dispatched
+
+| ticket | model | isolation | result |
+|---|---|---|---|
+| T-158 vertical routing | deepseek-v4-max, thinking max | worktree | **PASS** `370d261` |
+| T-159 pre-match poll | deepseek-v4, thinking max | worktree | **PARTIAL** `b026d7e` |
+| T-160 warden/blight | inkling-2-small-free, max | worktree | **PARTIAL** `3d3ef5b` |
+| T-161 poll panel | inkling-2-small-free, max | worktree | **PASS** `6570639` |
+
+T-161 was not planned. It exists because T-159 parked its client half and the server half alone
+would have shipped 40 seconds of dead time at level 1 — see below.
+
+### T-158 — the bot empties a level (PASS, `370d261`)
+
+The ticket's diagnosis was one of **five** independent causes. Each fix exposed the next:
+
+1. The graph used levelgen's 6.0 u envelope while the landing probe used 5.06 u, so seven pairs on
+   seed-7 level 1 were graph-reachable but probe-unreachable. The bot routed at a gap it could not
+   clear, then blacklisted the gift.
+2. `findLanding` measured the gap from the edge, but the bot presses jump 0.9 u *before* the edge,
+   so the check was optimistic by exactly the run-up.
+3. `jumpReach` clamped negative rises, modelling drops as flat and refusing the 7.0 u drops
+   levelgen admits.
+4. The platform graph was **undirected**, so the router sent the bot *up* a 10.25 u drop edge on
+   level 2. It jumped at a platform 10 u above, hit a side wall and fell to `kill_y`.
+5. The graph is 2D and blind to what stands between two platforms.
+
+`JUMP_SAFETY` went 0.75 to 0.90 because with the honest `d` check, 0.75 yields a 4.16 u flat gap —
+*narrower* than the 5.0 u levelgen guarantees. At 0.90 the envelope is a strict superset of the
+generator's admission at every rise band, verified analytically rather than sampled.
+
+| measurement | before | after |
+|---|---|---|
+| 1 client, 240 s — gifts | 25/46 (54.3%) | **46/46 (100.0%)** |
+| 1 client, 240 s — level emptied | no | **level 1, 70.7 s** |
+| 1 client, 240 s — deaths | 0 | **0** |
+| 8 clients, 90 s — gifts | 58.0% | **88/88 (100.0%)** |
+| 8 clients, 90 s — level emptied | no | **level 1, 55.1 s** |
+
+I reproduced the single-client run independently: **level 1 emptied in 64.5 s, 46/46 gifts, 0
+deaths, 13/13 checks**. `level-completion` is a live PASS for the first time.
+
+**Parked:** the 8-client sweep records 5 deaths, all `note: "enemy"` on level 2. The bot has no
+combat logic and now survives long enough to meet enemies. That is a combat-behaviour ticket, not
+a routing one. Also flagged honestly by the worker: `arcBlocked` uses `RUN_SPEED` for the arc's
+horizontal speed while the trace reads ~7.8 u/s, and it did not prove why.
+
+### T-159 — the pre-match poll (PARTIAL, `b026d7e`)
+
+Protocol, additive only: `ClientMsg::Poll`, `ServerMsg::PollOpen` / `PollState` / `PollResult`,
+`PollOption`, `POLL_THEME = 0`, `POLL_DIFFICULTY = 1`, four fixtures through `just gen` +
+`just fixtures`. `PollSession` runs theme then difficulty then done; `PollStage` gates the draft.
+
+The theme bias feeds `chunk_weight` at `THEME_BIAS_MUL = 6.0`. Measured over 40 seeds at level 6:
+
+| tag | unbiased | biased | shift |
+|---|---|---|---|
+| `theme:ruin` | 19.6% | 42.3% | 2.16x |
+| `theme:void` | 10.2% | 29.9% | 2.93x |
+| `theme:frost` | 13.8% | 27.8% | 2.01x |
+
+Three tests carry it: `no_theme_bias_is_byte_identical_to_the_unbiased_generator` (default
+neutrality — the poll must not perturb a run that does not use it),
+`a_theme_bias_shifts_the_tag_mix`, and `a_bias_no_chunk_carries_changes_nothing` (the negative
+test: a bias naming a tag no chunk carries must be a no-op, not a crash or a silent fallback).
+
+Difficulty sets `run.mode` through `DifficultyMode::from_id`. **This closed a defect-class-#1 gap
+found while writing the ticket:** `run.mode` was assigned only in tests, so Extreme, Chaos and
+Random were unreachable in the shipped game. The poll is the production path that was missing.
+
+**Why PARTIAL:** the worker stalled for 55 minutes with 1,020 lines uncommitted. I cancelled it,
+fixed `cargo fmt` (the gate was failing on it), removed a stray `.poll_tests.rs.tmp`, wrote the
+Result section, re-ran the gate (exit 0, 335 vitest / 38 files), committed and merged. The client
+half was parked — and that park was not shippable on its own, see T-161.
+
+### T-160 — warden/blight (PARTIAL, `3d3ef5b`)
+
+Blender-authored, scripts committed, `.glb` committed as a build artifact.
+
+| metric | before | after |
+|---|---|---|
+| warden/blight | 0.660 | **0.162** |
+| roster max | 0.660 | **0.615** (pallbearer/peal, unchanged) |
+| p90 | 0.410 | **0.388** |
+| median | 0.218 | **0.185** |
+
+I verified these from the artifact `shots25/silhouette.json` (all 190 pairs), not from the ticket's
+table. The three named pairs all improved: pallbearer/warden 0.332, pallbearer/blight 0.326,
+blight/coil 0.148.
+
+**Why PARTIAL:** the ticket's "no other pair got worse" clause is not met. Five pairs regressed —
+peal/blight 0.299 to 0.417 (+0.118), gale_wight/blight 0.261 to 0.360 (+0.099), warden/overlook
+0.140 to 0.282 (+0.142), kite/blight 0.090 to 0.132, rift_warden/blight 0.050 to 0.058. All are
+far under `MAX_IOU = 0.82`, and the cause is structural: `center_origin()` is mandated, so the old
+"sit low in the frame" trick that bought separation is gone. The worker documented the attempt log
+rather than hiding it. Accepted as PARTIAL.
+
+Also stripped a UTF-8 BOM from the commit subject before merging.
+
+### T-161 — the poll panel (PASS, `6570639`)
+
+T-159's parked client half was not optional. `poll_blocks_start()` gates the draft, two polls run
+20 seconds each, and nothing rendered them — 40 seconds of dead time at level 1 with no way to
+answer. So I wrote the ticket mid-cycle and dispatched it.
+
+New files: `web/src/hud/poll/{model,pollAdapter,usePoll,PollWidget}.ts(x)`,
+`web/src/hud/PollOverlay.tsx`, `web/src/game/pollWiring.test.ts`. Additive edits to `session.ts`,
+`store.ts`, `GameClient.tsx`. `vote/` and `RunVoteOverlay` untouched, no new dependencies.
+
+**The catch worth recording:** the vote overlay is `z-30`, but `DraftScreen` is
+`fixed inset-0 z-40`. A straight mirror of the vote UI would have rendered the poll *behind* the
+draft screen — visible in the DOM, unanswerable in practice. `PollOverlay` is `z-50`; both are
+siblings in `GameClient.tsx` (lines 455 and 483), so z-50 wins in the same stacking context. This
+is defect class #5, new this cycle: *the obvious mirror is behind the thing it must sit on.*
+
+`pollWiring.test.ts` exists because of T-149's lesson — a component that is written, tested in
+isolation, and never mounted. It asserts `PollOverlay` is imported and mounted with `messages=` and
+`onPoll=`, and that `session.ts` handles all three `Poll*` variants and sends `{ type: "Poll",
+option }`.
+
+### Live verification the gate cannot do
+
+`just verify` is hermetic, so I built the release server and ran a throwaway socket client against
+it: **PASS 7/7**. Theme poll with 8 options, ballot cast, `theme:ruin` wins, difficulty poll with 4
+options, `standard` wins, draft, Level frame. The server log confirms `theme_bias=Some("theme:ruin")`
+and `mode="standard"`.
+
+That run also found a check that could not fail: the playthrough tool answered `PollOpen` but never
+reported it. Fixed in `7a09489`; verified live at "PollOpen frames: 2, answered: 2, PollResult
+frames: 2".
+
+### Gates
+
+- `just verify` **exit 0** — 482 Rust tests, **372 vitest / 40 files** (up from 335/38), clippy
+  `-D warnings`, `cargo fmt --check`, protocol-gen `--check`, check-names, validate-content,
+  pattern-audit `--selftest` PASS, silhouette `--selftest` 6/6.
+- `node tools/verify-live.mjs --port 7980` **PASS** — **67 PASS / 0 FAIL / 8 SKIP**. Pattern audit
+  17/17 metric lines, 0 failed. Economy 8/8. Playthrough 9/13 pass, 4 skip. Debug conformance 13/13.
+  Vote integration 6/6. Voting conformance (real) and matchmaker conformance pass.
+
+### Release
+
+`v0.37.0-alpha.1`.
+
+### Top 3 candidates for Cycle 26
+
+1. **`peal/blight` at 0.417** — now above the new p90 of 0.388, and the direct consequence of
+   T-160's structural regression. The lever is a different vertical fill distribution or a wider,
+   sparser spill, not another `center_origin()` fight.
+2. **Combat behaviour for the bot** — 5 enemy deaths on level 2. Nothing yet proves a level can be
+   finished *with enemies in it*, which is the honest version of the coverage T-158 just bought.
+3. **`Snapshrike.tsx:90` `color="#2a050313"`** — eight hex digits, invalid for three.js
+   `Color.setStyle`, silently falls back to white. Intended `#2a0503`. Small, and it is defect
+   class #1 again: the colour exists but never reaches the player.
+
+Also noted, not a candidate: `warden/overlook` at 0.282 is structural and probably a human
+decision.

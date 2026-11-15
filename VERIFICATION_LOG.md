@@ -1731,3 +1731,74 @@ check, not a unit test.
 ### Release
 
 `v0.36.0-alpha.1`.
+
+## Cycle 25 — 2026-11-15
+
+### Gates
+
+`just verify` **exit 0** — 482 Rust tests, **372 vitest (40 files)**, clippy `-D warnings`,
+`cargo fmt --check`, protocol-gen `--check`, check-names, validate-content, pattern-audit
+`--selftest` PASS, silhouette `--selftest` 6/6.
+
+`node tools/verify-live.mjs --port 7980` **PASS** — **67 PASS / 0 FAIL / 8 SKIP**.
+
+### What each audit actually measured
+
+| Audit | Result |
+|---|---|
+| Pattern audit (5,000 seeds) | 17 lines, 0 failed, **0 skipped** |
+| Economy audit | 8/8 PASS |
+| Voting conformance (real) | 3/3 PASS |
+| Debug conformance | 13/13 PASS |
+| Vote integration | 6/6 PASS |
+| Playthrough (8 clients, 90 s, seed 7) | 9 pass / 4 skip / 0 fail; gift rate **100.0%** |
+| Silhouette (190 pairs) | PASS; **warden/blight 0.162**, p90 0.388, max 0.615 |
+
+### The check that finally went live
+
+`level-completion` had SKIPped for three cycles. This cycle it PASSes with a level and a time:
+**level 1 emptied in 70.7 s, 46/46 gifts, 0 deaths** (worker, 1 client, 240 s), reproduced
+independently at **64.5 s, 46/46, 0 deaths, 13/13 checks**. Eight clients: **88/88 gifts, level 1
+emptied in 55.1 s**.
+
+### Negative tests added or re-proved
+
+- **The theme bias cannot silently perturb a neutral run.**
+  `no_theme_bias_is_byte_identical_to_the_unbiased_generator` compares the full generated output
+  against the unbiased generator, byte for byte.
+- **A bias naming a tag no chunk carries is a no-op.**
+  `a_bias_no_chunk_carries_changes_nothing` — not a crash, not a silent fallback to uniform.
+- **The poll panel is mounted, not merely written.** `pollWiring.test.ts` asserts `PollOverlay` is
+  imported and mounted with `messages=` and `onPoll=`, and that `session.ts` handles all three
+  `Poll*` variants. This is T-149's lesson made mechanical.
+- **The poll report line can fail.** It was answering `PollOpen` and never reporting it — a check
+  that could not fail. Fixed in `7a09489`, verified live at "PollOpen frames: 2, answered: 2,
+  PollResult frames: 2".
+- **The silhouette gate still fails on identical masks.** `--selftest` 6/6 unchanged after T-160.
+
+### Live verification the gate cannot do
+
+`just verify` is hermetic, so the poll was proved against a real server with a throwaway socket
+client: **PASS 7/7** — theme poll (8 options) -> ballot -> `theme:ruin` wins -> difficulty poll
+(4 options) -> `standard` wins -> draft -> Level frame. Server log confirms
+`theme_bias=Some("theme:ruin")` and `mode="standard"`.
+
+### Test count
+
+331 -> **372** (38 -> 40 files). T-158 added none (its evidence is the live playthrough), T-159
+added the three theme-bias tests plus poll-session unit tests, T-160 added none (silhouette capture
+is the measurement), T-161 added the poll model/adapter/hook/widget suite and the wiring test.
+
+### Parked
+
+- **Bot combat behaviour.** 5 deaths, all `note: "enemy"` on level 2. The bot has no combat logic
+  and now survives long enough to meet enemies. Cycle 26 candidate 2.
+- **`arcBlocked` uses `RUN_SPEED`** while the trace reads ~7.8 u/s. The worker flagged it and did
+  not prove the cause; the envelope is not tuned to it.
+- **`peal/blight` 0.417**, above the new p90 0.388 — a structural consequence of the mandated
+  `center_origin()`. Cycle 26 candidate 1.
+- **`warden/overlook` 0.282** — structural, probably a human decision.
+
+### Release
+
+`v0.37.0-alpha.1`.
