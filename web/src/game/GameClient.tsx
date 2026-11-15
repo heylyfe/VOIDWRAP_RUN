@@ -7,6 +7,7 @@ import {
   CLASS_BULWARK,
   CLASS_GLIDER,
   CLASS_GRAPPLER,
+  CLASS_STRIKER,
   DEATH_ENEMY,
   DEATH_PROJECTILE,
   EVENT_ICE,
@@ -34,6 +35,7 @@ import { Altars } from "@/scene/Altar";
 import { Atmosphere } from "@/scene/Atmosphere";
 import { Beacon } from "@/scene/Beacon";
 import { BlockyAvatar } from "@/scene/BlockyAvatar";
+import { classColor } from "@/scene/classColors";
 import type { AvatarMotion } from "@/scene/avatarPose";
 import { Crystals } from "@/scene/Crystals";
 import { DashStreak } from "@/scene/DashStreak";
@@ -227,7 +229,10 @@ function World({ session, level, themeLevel }: { session: GameSession; level: Le
       <Altars altars={level.altars} used={altarsUsed} session={session} />
       <group ref={player}>
         <BlockyAvatar motion={motion} />
-        <DashStreak motion={motion} color={theme.accent} />
+        {/* T-147: the striker's class colour, not the theme accent. Every other
+            class ability visual reads `classColor(...)`; the striker's was themed,
+            so `CLASS_COLORS[CLASS_STRIKER]` never reached the screen. */}
+        <DashStreak motion={motion} color={classColor(CLASS_STRIKER)} />
         <GliderWings session={session} />
       </group>
       <WardDome session={session} />
