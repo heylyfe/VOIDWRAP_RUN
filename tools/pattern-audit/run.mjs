@@ -80,6 +80,11 @@ const TH = {
   RAMP_MAX_RISE_RUN: 0.5,
   RAMP_MIN_RUN: 2.0,
   RAMP_MIN_WIDTH: 3.0,
+  // T-107: a ramp whose high edge meets no other platform is a ramp the player
+  // climbs into thin air. The dump measures this in Rust (levelgen::orphaned_ramps)
+  // against the same surface_at the collision layer uses; zero is the only
+  // acceptable count because every orphan is a visible geometry defect.
+  RAMP_ANCHOR_RATE_MAX: 0,
   STAIR_MIN_STEPS: 3, // "stairs do not exist anywhere in the game" -> threshold 0
   STAIR_STEP_MIN: 0.05,
   STAIR_STEP_MAX: 2.0,
@@ -228,6 +233,7 @@ function createAggregate() {
       stairSequences: 0, stairPatterns: new Set(), stairEx: [],
       heightPairs: 0, heightViol: 0, heightEx: [],
       gifts: 0, giftIntersections: 0, giftIntersectionLevels: 0,
+      rampAnchors: 0, rampOrphans: 0, rampOrphanLevels: 0,
     },
 
     planStats: { intraRepeat: 0, redundancySum: 0, redundancy: [], domMax: { v: 0, where: '-' } },
@@ -710,6 +716,10 @@ function report(A, ctx, log) {
   line('5.ramps',
     geo.rampViol === 0,
     `${geo.rampViol} violations across ${geo.rampChecked} ramp platforms; rules: rise/run <= ${TH.RAMP_MAX_RISE_RUN}, run >= ${TH.RAMP_MIN_RUN}u, width >= ${TH.RAMP_MIN_WIDTH}u; threshold: 0`);
+  const raRate = geo.rampAnchors ? geo.rampOrphans / geo.rampAnchors : 0;
+  line('5.ramp-anchors',
+    raRate <= TH.RAMP_ANCHOR_RATE_MAX,
+    `ramps whose high edge meets no other platform: ${geo.rampOrphans}/${geo.rampAnchors} (${pctf(raRate)}) across ${geo.rampOrphanLevels} levels; threshold: 0`);
   line('5.stairs',
     geo.stairSequences === 0,
     `stair-like box sequences (>= ${TH.STAIR_MIN_STEPS} adjacent tops, equal steps +-${TH.STAIR_STEP_EPS}u, step ${TH.STAIR_STEP_MIN}-${TH.STAIR_STEP_MAX}u) in a single direction: ${geo.stairSequences} across ${geo.stairPatterns.size} patterns; threshold: 0 (stairs do not exist)`);
@@ -858,6 +868,13 @@ async function runAudit(source, seedsTarget, enemyRoster, log) {
       A.geo.gifts += giftTotal;
       A.geo.giftIntersections += giftHits;
       if (giftHits > 0) A.geo.giftIntersectionLevels += 1;
+      // T-107: orphaned ramps. The dump counts ramps whose high edge anchors to
+      // nothing; a level with any orphan is a level with a broken climb.
+      const rampTotal = Number(rec.ramps ?? 0);
+      const rampOrphans = Number(rec.orphan_ramps ?? 0);
+      A.geo.rampAnchors += rampTotal;
+      A.geo.rampOrphans += rampOrphans;
+      if (rampOrphans > 0) A.geo.rampOrphanLevels += 1;
     }
   } catch (err) {
     log(`FATAL - generator/input failed: ${err && err.message ? err.message : err}`);

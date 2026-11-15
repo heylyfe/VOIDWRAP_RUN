@@ -140,9 +140,16 @@ fn main() {
                     ""
                 };
                 let gift_hits = gift_intersections(&built.data);
+                let orphan_ramps = sim::levelgen::orphaned_ramps(&built.data.platforms).len();
+                let ramp_total = built
+                    .data
+                    .platforms
+                    .iter()
+                    .filter(|p| sim::world::is_ramp(p.kind))
+                    .count();
                 let gift_total = built.data.gifts.len();
                 out.push_str(&format!(
-                    "{{\"seed\":{seed},\"level\":{level},\"players\":{pc},\"plan\":[{plan_json}],\"patterns\":[{pats}],\"enemies\":[{enemies}],\"gifts\":{gift_total},\"gift_intersections\":{gift_hits},\"fallbacks\":[{fallbacks}]}}\n"
+                    "{{\"seed\":{seed},\"level\":{level},\"players\":{pc},\"plan\":[{plan_json}],\"patterns\":[{pats}],\"enemies\":[{enemies}],\"gifts\":{gift_total},\"gift_intersections\":{gift_hits},\"ramps\":{ramp_total},\"orphan_ramps\":{orphan_ramps},\"fallbacks\":[{fallbacks}]}}\n"
                 ));
             }
         }

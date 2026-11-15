@@ -934,6 +934,57 @@ pub struct Placement {
 }
 
 /// Builds a rotated + translated placement of `chunk` with offset `offset`.
+/// How far a ramp's high edge may sit from the surface it should meet, in world units.
+/// A ramp is a wedge: its top face ends at `bounds.max.y` on the high edge, and the
+/// platform it leads onto must be at that height or the player steps into a wall.
+pub const RAMP_ANCHOR_TOLERANCE: f32 = 0.55;
+
+/// How far past a platform's footprint the ramp's high edge may sit and still count as
+/// meeting it. Small: a ramp that stops short of the deck is a gap, not a join.
+pub const RAMP_ANCHOR_OVERLAP: f32 = 0.25;
+
+/// Indices of ramps whose high edge meets nothing.
+///
+/// A ramp is a connector. When its high edge lands in open air the wedge rises into
+/// nothing: the player walks up and falls off the end, and from the ground it reads as a
+/// ramp that was placed at random. That is the "random ramps" the owner sees, and it is a
+/// generation defect rather than a pattern-authoring choice, so the harness asserts it is
+/// zero rather than tolerating a rate.
+///
+/// The check uses [`surface_at`], so a ramp that leads onto another ramp is anchored when
+/// the two surfaces actually meet, not merely when their boxes touch.
+pub fn orphaned_ramps(platforms: &[protocol::Platform]) -> Vec<usize> {
+    let mut out = Vec::new();
+    for (i, ramp) in platforms.iter().enumerate() {
+        if !is_ramp(ramp.kind) {
+            continue;
+        }
+        let b = &ramp.bounds;
+        // The midpoint of the high edge: the point the ramp is trying to reach.
+        let (hx, hz) = match ramp.kind {
+            protocol::PLATFORM_RAMP_PX => (b.max.x, (b.min.z + b.max.z) * 0.5),
+            protocol::PLATFORM_RAMP_NX => (b.min.x, (b.min.z + b.max.z) * 0.5),
+            protocol::PLATFORM_RAMP_PZ => ((b.min.x + b.max.x) * 0.5, b.max.z),
+            _ => ((b.min.x + b.max.x) * 0.5, b.min.z),
+        };
+        let anchored = platforms.iter().enumerate().any(|(j, other)| {
+            if j == i {
+                return false;
+            }
+            let ob = &other.bounds;
+            let covers = hx >= ob.min.x - RAMP_ANCHOR_OVERLAP
+                && hx <= ob.max.x + RAMP_ANCHOR_OVERLAP
+                && hz >= ob.min.z - RAMP_ANCHOR_OVERLAP
+                && hz <= ob.max.z + RAMP_ANCHOR_OVERLAP;
+            covers && (surface_at(other, hx, hz) - b.max.y).abs() <= RAMP_ANCHOR_TOLERANCE
+        });
+        if !anchored {
+            out.push(i);
+        }
+    }
+    out
+}
+
 fn build_geometry(chunk: &Chunk, turns: u32, offset: Vec3) -> Placement {
     let platforms: Vec<(u8, Aabb)> = chunk
         .platforms
@@ -2039,7 +2090,10 @@ fn catalog_fallback(
     Some(GeneratedLevel {
         data,
         enemy_spawns,
-        plan: Vec::new(),
+        // The hub is a real catalog chunk and it is on the map, so it belongs in the
+        // plan: an empty plan made every fallback level look like a malformed record to
+        // the pattern audit and hid the fallback rate behind a "no plan" error.
+        plan: vec![hub.id.clone()],
     })
 }
 
@@ -2824,6 +2878,46 @@ mod tests {
                 "turns={turns} kind={kind}: surface must rise from {low_h} to {high_h}"
             );
         }
+    }
+
+    /// A ramp is anchored when its high edge meets a surface the player can step onto,
+    /// and orphaned when it rises into open air. The tolerance is the walkable step
+    /// limit, so a 0.5 u lip counts as a join and a 2 u wall does not.
+    #[test]
+    fn orphaned_ramps_finds_ramps_that_rise_into_nothing() {
+        let plat = |kind: u8, min: [f32; 3], max: [f32; 3]| protocol::Platform {
+            id: 0,
+            kind,
+            bounds: Aabb {
+                min: Vec3::new(min[0], min[1], min[2]),
+                max: Vec3::new(max[0], max[1], max[2]),
+            },
+        };
+        // A ramp rising toward +X from y=0 at x=0 to y=4 at x=8.
+        let ramp = plat(PLATFORM_RAMP_PX, [0.0, 0.0, 0.0], [8.0, 4.0, 4.0]);
+
+        // Deck flush with the high edge: anchored.
+        let flush = plat(protocol::PLATFORM_NORMAL, [8.0, 3.5, 0.0], [14.0, 4.0, 4.0]);
+        assert!(orphaned_ramps(&[ramp.clone(), flush]).is_empty());
+
+        // Deck 0.5 u above the high edge: still a walkable step, so anchored.
+        let lip = plat(protocol::PLATFORM_NORMAL, [8.0, 4.0, 0.0], [14.0, 4.5, 4.0]);
+        assert!(orphaned_ramps(&[ramp.clone(), lip]).is_empty());
+
+        // Deck 2 u above the high edge: the player walks into a wall.
+        let wall = plat(protocol::PLATFORM_NORMAL, [8.0, 5.5, 0.0], [14.0, 6.0, 4.0]);
+        assert_eq!(orphaned_ramps(&[ramp.clone(), wall]), vec![0]);
+
+        // Nothing at the high edge at all.
+        let far = plat(protocol::PLATFORM_NORMAL, [20.0, 3.5, 0.0], [26.0, 4.0, 4.0]);
+        assert_eq!(orphaned_ramps(&[ramp.clone(), far]), vec![0]);
+
+        // A ramp leading onto another ramp is anchored when the surfaces meet: the
+        // second ramp's low edge is at y=4 at x=8 and rises to y=8 at x=16. The second
+        // ramp is itself orphaned here (nothing meets its own high edge), so only the
+        // first ramp's verdict is asserted.
+        let up = plat(PLATFORM_RAMP_PX, [8.0, 4.0, 0.0], [16.0, 8.0, 4.0]);
+        assert!(!orphaned_ramps(&[ramp, up]).contains(&0));
     }
 
     fn hub_json_variant() -> String {
