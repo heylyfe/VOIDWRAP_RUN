@@ -8,6 +8,7 @@ import type { Group, MeshStandardMaterial } from "three";
 import { ENEMY_ATTACK, ENEMY_DORMANT, ENEMY_TELEGRAPH } from "@/protocol/generated";
 import type { EnemyModelProps } from "../enemyLook";
 import { prog01 } from "../enemyLook";
+import { COMMON } from "../theme";
 
 const STAR_POINTS = 5;
 const STAR_OUTER = 0.62;
@@ -130,13 +131,15 @@ export function Lure({ anim }: EnemyModelProps): JSX.Element {
           />
         </mesh>
       </group>
-      {/* bright core — the false gift's shimmer */}
+      {/* bright core — the false gift's shimmer. It wears the normal gift's glow
+          colour so the shimmer reads as a gift; the violet fog pool and the star
+          silhouette stay LURE's tells (JUDGMENT CALL 2). */}
       <mesh position={[0, 0.045, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <circleGeometry args={[0.15, 20]} />
         <meshStandardMaterial
           ref={coreMat}
-          color="#d8b0ff"
-          emissive="#d8b0ff"
+          color={COMMON.gift.glow}
+          emissive={COMMON.gift.glow}
           emissiveIntensity={1.3}
           transparent
           opacity={0.9}

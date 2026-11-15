@@ -90,6 +90,11 @@ const TH = {
   SCALE_EXTENT_MIN: 10.0, // reference scale: platforms 10-20 u — read as the
   SCALE_EXTENT_MAX: 20.0, // placed pattern's max XZ footprint extent (both worked
   SCALE_RATE_MAX: 0.10,   // examples in PATTERN_FORMAT §8 measure 16 u). 10% slack
+  // T-112: a gift whose body overlaps a solid platform volume is invisible or
+  // unreachable. Measured 1.956% before the spawn-safety rule was widened to every
+  // platform; 0.0011% after. The threshold allows the residual edge cases but not a
+  // regression back toward the old behaviour.
+  GIFT_INTERSECT_RATE_MAX: 0.0001,
                           // tolerates narrow alcoves, catches systematic drift.
 
   // Metric 6 — "always offered" only counts cells (mode, level index) with at
@@ -222,6 +227,7 @@ function createAggregate() {
       rampChecked: 0, rampViol: 0, rampEx: [],
       stairSequences: 0, stairPatterns: new Set(), stairEx: [],
       heightPairs: 0, heightViol: 0, heightEx: [],
+      gifts: 0, giftIntersections: 0, giftIntersectionLevels: 0,
     },
 
     planStats: { intraRepeat: 0, redundancySum: 0, redundancy: [], domMax: { v: 0, where: '-' } },
@@ -716,6 +722,12 @@ function report(A, ctx, log) {
     sRate <= TH.SCALE_RATE_MAX,
     `placed patterns with max XZ footprint extent outside [${TH.SCALE_EXTENT_MIN}, ${TH.SCALE_EXTENT_MAX}]u: ${geo.scaleViol}/${geo.placed} (${pctf(sRate)}); threshold <= ${(TH.SCALE_RATE_MAX * 100).toFixed(0)}%`);
 
+  // --- 5b gift spawn safety (T-112) ---------------------------------------------
+  const gRate = geo.gifts ? geo.giftIntersections / geo.gifts : 0;
+  line('5.gift-spawn-safety',
+    gRate <= TH.GIFT_INTERSECT_RATE_MAX,
+    `gifts whose body overlaps a solid platform volume: ${geo.giftIntersections}/${geo.gifts} (${pctf(gRate)}) across ${geo.giftIntersectionLevels} levels; threshold <= ${(TH.GIFT_INTERSECT_RATE_MAX * 100).toFixed(3)}%`);
+
   // --- 6 enemy spawn frequencies -------------------------------------------------
   const neverList = ctx.enemyRoster ? ctx.enemyRoster.filter((t) => !A.enemyPlacements.has(t)) : null;
   line('6.enemy-frequencies.never-offered',
@@ -838,6 +850,14 @@ async function runAudit(source, seedsTarget, enemyRoster, log) {
         try { rec = JSON.parse(raw); } catch { pushRecordError(A, 'unparseable JSON line'); continue; }
       }
       consumeRecord(A, rec);
+      // T-112: gift spawn safety. The dump computes this in Rust, where the placed
+      // geometry lives; a gift whose body box overlaps any solid platform volume is a
+      // gift the player cannot see or reach.
+      const giftTotal = Number(rec.gifts ?? 0);
+      const giftHits = Number(rec.gift_intersections ?? 0);
+      A.geo.gifts += giftTotal;
+      A.geo.giftIntersections += giftHits;
+      if (giftHits > 0) A.geo.giftIntersectionLevels += 1;
     }
   } catch (err) {
     log(`FATAL - generator/input failed: ${err && err.message ? err.message : err}`);

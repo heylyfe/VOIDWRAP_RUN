@@ -120,24 +120,21 @@ function createWedgeGeometry(): BufferGeometry {
     [L0, B0, H0],
   ];
   const positions = new Float32Array(triangles.length * 9);
-  const uvs = new Float32Array(triangles.length * 6);
   let p = 0;
-  let u = 0;
   for (const [a, b, c] of triangles) {
     for (const v of [a, b, c]) {
       positions[p] = v[0];
       positions[p + 1] = v[1];
       positions[p + 2] = v[2];
       p += 3;
-      // Planar UVs sized to the unit wedge; the surface shader checkers in world space.
-      uvs[u] = v[0] + 0.5;
-      uvs[u + 1] = Math.abs(v[1] + 0.5) > Math.abs(v[2] + 0.5) ? v[1] + 0.5 : v[2] + 0.5;
-      u += 2;
     }
   }
+  // No uv attribute: the surface shader checkers from vWorldPos.xz, so a uv here
+  // would be dead weight. The previous one was also wrong — its V coordinate picked
+  // whichever of height/depth was larger per vertex, which is discontinuous across a
+  // face. T-106 tracks the real fix (arc-length checker coordinates on inclines).
   const geometry = new BufferGeometry();
   geometry.setAttribute("position", new BufferAttribute(positions, 3));
-  geometry.setAttribute("uv", new BufferAttribute(uvs, 2));
   geometry.computeVertexNormals();
   return geometry;
 }

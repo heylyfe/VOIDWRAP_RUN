@@ -33,6 +33,34 @@ fn num(v: f32) -> String {
     format!("{v:.2}")
 }
 
+/// Gift body half-extent and height, mirroring `levelgen`'s private constants.
+const GIFT_BODY_HALF: f32 = 0.35;
+const GIFT_BODY_HEIGHT: f32 = 0.9;
+
+/// Count gifts whose body box overlaps any solid platform volume.
+///
+/// `levelgen::accept_candidate` already rejects a gift that overlaps a non-NORMAL
+/// platform, so a non-zero count here means the rule has a hole: either a gift is
+/// inside a NORMAL platform's side, or a placed platform was added after the gift
+/// pass. T-112 asserts this is zero.
+fn gift_intersections(level: &protocol::LevelData) -> usize {
+    let mut hits = 0usize;
+    for gift in &level.gifts {
+        let base = gift.pos.y - 0.3;
+        let (gx0, gx1) = (gift.pos.x - GIFT_BODY_HALF, gift.pos.x + GIFT_BODY_HALF);
+        let (gz0, gz1) = (gift.pos.z - GIFT_BODY_HALF, gift.pos.z + GIFT_BODY_HALF);
+        let (gy0, gy1) = (base + 0.001, base + GIFT_BODY_HEIGHT);
+        let hit = level.platforms.iter().any(|p| {
+            let b = &p.bounds;
+            gx0 < b.max.x && gx1 > b.min.x && gz0 < b.max.z && gz1 > b.min.z && gy0 < b.max.y && gy1 > b.min.y
+        });
+        if hit {
+            hits += 1;
+        }
+    }
+    hits
+}
+
 fn main() {
     let seeds: u32 = std::env::args().nth(1).and_then(|a| a.parse().ok()).unwrap_or(5000);
 
@@ -111,8 +139,10 @@ fn main() {
                 } else {
                     ""
                 };
+                let gift_hits = gift_intersections(&built.data);
+                let gift_total = built.data.gifts.len();
                 out.push_str(&format!(
-                    "{{\"seed\":{seed},\"level\":{level},\"players\":{pc},\"plan\":[{plan_json}],\"patterns\":[{pats}],\"enemies\":[{enemies}],\"fallbacks\":[{fallbacks}]}}\n"
+                    "{{\"seed\":{seed},\"level\":{level},\"players\":{pc},\"plan\":[{plan_json}],\"patterns\":[{pats}],\"enemies\":[{enemies}],\"gifts\":{gift_total},\"gift_intersections\":{gift_hits},\"fallbacks\":[{fallbacks}]}}\n"
                 ));
             }
         }

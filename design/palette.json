@@ -101,9 +101,9 @@
   ],
   "common": {
     "gift": {
-      "body": "#ffd23d",
-      "ribbon": "#ff3db8",
-      "glow": "#ffe680"
+      "body": "#0b0b14",
+      "ribbon": "#3a3a52",
+      "glow": "#dfe6ff"
     },
     "beacon": {
       "core": "#ffffff",

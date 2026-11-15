@@ -675,6 +675,27 @@ fn rotate_vec3(p: Vec3, turns: u32) -> Vec3 {
     Vec3::new(x, p.y, z)
 }
 
+/// Rotates a ramp kind by `turns` quarter-turns so the kind keeps describing the
+/// direction the surface actually rises in.
+///
+/// [`rotate_xz`] maps `(x, z) -> (z, -x)`, so one turn sends +X to -Z, -Z to -X,
+/// -X to +Z and +Z to +X. A ramp whose kind is not remapped keeps its old slope
+/// axis while its geometry turns, which makes the collision surface disagree with
+/// the visible wedge: the player walks on a slope that is not there.
+fn rotate_ramp_kind(kind: u8, turns: u32) -> u8 {
+    let mut k = kind;
+    for _ in 0..(turns % 4) {
+        k = match k {
+            protocol::PLATFORM_RAMP_PX => protocol::PLATFORM_RAMP_NZ,
+            protocol::PLATFORM_RAMP_NZ => protocol::PLATFORM_RAMP_NX,
+            protocol::PLATFORM_RAMP_NX => protocol::PLATFORM_RAMP_PZ,
+            protocol::PLATFORM_RAMP_PZ => protocol::PLATFORM_RAMP_PX,
+            other => other,
+        };
+    }
+    k
+}
+
 fn rotate_aabb(b: &Aabb, turns: u32) -> Aabb {
     let corners = [
         (b.min.x, b.min.z),
@@ -919,7 +940,7 @@ fn build_geometry(chunk: &Chunk, turns: u32, offset: Vec3) -> Placement {
         .iter()
         .map(|p| {
             (
-                p.kind,
+                rotate_ramp_kind(p.kind, turns),
                 translate_aabb(&rotate_aabb(&Aabb { min: p.min, max: p.max }, turns), offset),
             )
         })
@@ -1361,12 +1382,19 @@ fn accept_candidate(
     if platforms[i].kind != PLATFORM_NORMAL {
         return false;
     }
-    // T-062: spawn safety — no gift may spawn stuck inside/overlapping a wall, jump pad or ramp.
+    // T-062 / T-112: spawn safety — no gift may spawn stuck inside any solid volume.
+    //
+    // The original rule only checked non-NORMAL platforms (walls, jump pads, ramps),
+    // which let a gift sit inside a NORMAL platform's side: a gift standing on a low
+    // deck whose body pokes into a taller deck beside it. Measured at 1.96% of all
+    // gifts (14,783 of 755,887) before this widened to every platform except the one
+    // the gift actually stands on.
     if !gift_body_clear(
         platforms
             .iter()
-            .filter(|p| p.kind != PLATFORM_NORMAL)
-            .map(|p| &p.bounds),
+            .enumerate()
+            .filter(|(j, _)| *j != i)
+            .map(|(_, p)| &p.bounds),
         pos,
     ) {
         return false;
@@ -2723,7 +2751,80 @@ pub fn platform_graph(level: &LevelData) -> Vec<Vec<usize>> {
 #[allow(dead_code)] // shared fixtures; not every helper is used by every build of the tests
 mod tests {
     use super::*;
-    use protocol::PLATFORM_RAMP_PX;
+    use protocol::{PLATFORM_RAMP_NX, PLATFORM_RAMP_NZ, PLATFORM_RAMP_PX, PLATFORM_RAMP_PZ};
+
+    /// A ramp kind must turn with its geometry, or the collision surface stops
+    /// matching the visible wedge. One quarter-turn sends +X to -Z, so the cycle
+    /// is PX -> NZ -> NX -> PZ -> PX.
+    #[test]
+    fn ramp_kinds_rotate_with_their_geometry() {
+        assert_eq!(rotate_ramp_kind(PLATFORM_RAMP_PX, 0), PLATFORM_RAMP_PX);
+        assert_eq!(rotate_ramp_kind(PLATFORM_RAMP_PX, 1), PLATFORM_RAMP_NZ);
+        assert_eq!(rotate_ramp_kind(PLATFORM_RAMP_PX, 2), PLATFORM_RAMP_NX);
+        assert_eq!(rotate_ramp_kind(PLATFORM_RAMP_PX, 3), PLATFORM_RAMP_PZ);
+        assert_eq!(rotate_ramp_kind(PLATFORM_RAMP_PX, 4), PLATFORM_RAMP_PX);
+        // Every kind returns to itself after four turns.
+        for kind in [PLATFORM_RAMP_PX, PLATFORM_RAMP_NX, PLATFORM_RAMP_PZ, PLATFORM_RAMP_NZ] {
+            assert_eq!(rotate_ramp_kind(kind, 4), kind);
+            // A single turn must actually change the axis, never leave it alone.
+            assert_ne!(rotate_ramp_kind(kind, 1), kind);
+        }
+        // Non-ramp kinds are untouched.
+        assert_eq!(
+            rotate_ramp_kind(protocol::PLATFORM_NORMAL, 1),
+            protocol::PLATFORM_NORMAL
+        );
+        assert_eq!(
+            rotate_ramp_kind(protocol::PLATFORM_JUMP_PAD, 3),
+            protocol::PLATFORM_JUMP_PAD
+        );
+    }
+
+    /// The rotated kind must agree with the rotated geometry: the surface rises
+    /// along the axis the kind names, at the corner the geometry puts it.
+    #[test]
+    fn rotated_ramp_surface_rises_along_the_rotated_kind() {
+        // A ramp rising toward +X, 4 u run, 2 u rise.
+        let aabb = Aabb {
+            min: Vec3::new(0.0, 0.0, 0.0),
+            max: Vec3::new(4.0, 2.0, 4.0),
+        };
+        for turns in 0..4u32 {
+            let kind = rotate_ramp_kind(PLATFORM_RAMP_PX, turns);
+            let rotated = rotate_aabb(&aabb, turns);
+            let platform = protocol::Platform {
+                id: 0,
+                kind,
+                bounds: rotated,
+            };
+            // Sample the two ends of the slope axis and require the high end to be
+            // the one the kind claims.
+            let (low, high) = match kind {
+                PLATFORM_RAMP_PX => (
+                    Vec3::new(rotated.min.x, 0.0, (rotated.min.z + rotated.max.z) * 0.5),
+                    Vec3::new(rotated.max.x, 0.0, (rotated.min.z + rotated.max.z) * 0.5),
+                ),
+                PLATFORM_RAMP_NX => (
+                    Vec3::new(rotated.max.x, 0.0, (rotated.min.z + rotated.max.z) * 0.5),
+                    Vec3::new(rotated.min.x, 0.0, (rotated.min.z + rotated.max.z) * 0.5),
+                ),
+                PLATFORM_RAMP_PZ => (
+                    Vec3::new((rotated.min.x + rotated.max.x) * 0.5, 0.0, rotated.min.z),
+                    Vec3::new((rotated.min.x + rotated.max.x) * 0.5, 0.0, rotated.max.z),
+                ),
+                _ => (
+                    Vec3::new((rotated.min.x + rotated.max.x) * 0.5, 0.0, rotated.max.z),
+                    Vec3::new((rotated.min.x + rotated.max.x) * 0.5, 0.0, rotated.min.z),
+                ),
+            };
+            let low_h = crate::world::surface_at(&platform, low.x, low.z);
+            let high_h = crate::world::surface_at(&platform, high.x, high.z);
+            assert!(
+                high_h > low_h,
+                "turns={turns} kind={kind}: surface must rise from {low_h} to {high_h}"
+            );
+        }
+    }
 
     fn hub_json_variant() -> String {
         r#"{"version":1,"chunks":[

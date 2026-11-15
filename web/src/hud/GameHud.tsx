@@ -66,7 +66,12 @@ export function GameHud(props: GameHudProps): JSX.Element {
         <span
           aria-hidden="true"
           className="inline-block h-4 w-4"
-          style={{ backgroundColor: COMMON.gift.body }}
+          // Normal gifts are black now, so the swatch needs its glow ring to stay
+          // visible against the dark HUD panel.
+          style={{
+            backgroundColor: COMMON.gift.body,
+            boxShadow: `inset 0 0 0 2px ${COMMON.gift.glow}`,
+          }}
         />
         <span
           data-testid="gift-counter"
