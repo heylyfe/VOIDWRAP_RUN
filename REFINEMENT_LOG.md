@@ -1204,3 +1204,104 @@ audit **9/9**. Voting real smoke **3/3**. Playthrough **8 pass / 3 skip /
 3. **Hazard coverage, not correctness.** All three platform-backed hazards are
    at 100 % entity fidelity but thin in the catalog: crumble 7/135,
    tripmine 4/135, trampoline 3/135. A 20-level run may never see a trampoline.
+
+---
+
+## Refinement Cycle 13 — 2026-11-15
+
+Baseline re-run before any ticket: pattern audit 16/16, economy audit 8/8,
+playthrough 8 pass / 3 skip / 0 fail. All three Cycle 12 candidates were taken,
+in the order the log ranked them.
+
+### T-127 — PASS, `d3ff3d6`
+
+`5.gift-spawn-safety` reported 5 intersecting gifts out of 755,878 and passed,
+because the threshold was 0.01 % — 75 gifts of slack against a rule the owner
+stated as "never". Root cause was measurement, not geometry: the dump
+re-implemented the gift body box test with its own constants and **no epsilon**,
+so a gift touching a platform face by less than the generator's 1 mm `EPS` was
+rejected by the generator and counted as a defect by the audit.
+
+The dump now calls `levelgen::gift_body_clear` itself, so the two definitions
+cannot drift. Count **5 -> 0**, threshold **0.01 % -> 0**.
+
+### T-128 — PASS, `d3ff3d6`
+
+`5.reference-scale` passed at 3.85 % against a 10 % ceiling, but **six patterns
+owned all 8,081 out-of-band placements**. An aggregate rate cannot see
+concentration.
+
+Fixed the three with no structural excuse: `ch25_hanging_gallery` 21 -> 20 u,
+`ch09_jump_pad_lift` and `ch16_misers_loft` 8 -> 10 u. The other three are
+**ramp-forced**: a chunk dropping `d` needs `2 * d / 0.5` of ramp plus decks, so
+`ch04` (5.0 u drop) has a 22 u floor and `ch06` (5.5 u) a 30 u floor, and `ch15`
+measures 25 u against a 26 u floor. Reshaping those means changing their drop,
+which is a redesign — parked and documented instead.
+
+The metric now names each offender with its extent, drop and forced minimum, so
+"tall set-piece" and "wrong number" are distinguishable. **3.85 % -> 2.11 %**,
+6 patterns -> 3, and 0 of the remaining 3 are unexplained.
+
+### T-129 — PASS, `d3ff3d6`
+
+The Cycle 12 concern ("a 20-level run may never see a trampoline") was **wrong**:
+trampolines were in 54.3 % of levels. The real defect was that **three patterns
+carried every trampoline in the game**.
+
+Added five patterns, additive only: `pa2_ember_bounce`, `pb_frost_bounce`,
+`pb_void_bounce` (trampoline) and `pa2_mine_gauntlet`, `pa3_mine_switchback`
+(tripmine). Catalog 135 -> 140. Trampoline patterns 3 -> 6, tripmine 4 -> 6.
+
+Found a silent-eligibility bug on the way: `pa3_mine_switchback` placed **0 times
+over 6,000 levels** because `pattern.rs::allowed_after` rejects `mech:fork` on a
+non-junction, and the piece is a two-socket path. Retagged `mech:climb`; it now
+places 958 times. This is the third instance of "parses, validates, counted by
+validate-content, never reaches a level" — logged as a candidate below.
+
+### T-130 — PASS, `fd60f22`
+
+The playthrough's `level-progression` failure had been parked since T-115 as a
+bot problem. It was a **missing measurement**: the harness could see that its
+bots died, not where or why.
+
+Added an optional NDJSON death log (`VOIDWRAP_DEATH_LOG`), a `--death-log`
+summary line in the playthrough kit, and wired it into `verify-live` so the cause
+split prints on every gate run.
+
+First measurement: **8 deaths, all void falls, all 8 ended the run.** Not one
+enemy kill. And `out: true` on all eight means `run.lives == 0` — `Run::new`
+starts at 0 lives and the only spare is the rare `spare_wick` upgrade, so **the
+first fall of a run is always fatal**. That is a balance decision, so it is the
+top tuning note rather than a change.
+
+### Gates
+
+`just verify` green: 246 sim tests, **151** server tests (+1), 317 vitest
+(36 files), clippy `-D warnings`, protocol-gen `--check`, check-names (639 files),
+validate-content (20 enemies, 10 upgrades, 19 curses, 4 classes, 34 shop items,
+3 events, 15 milestones, 4 altars, 10 achievements, **140 patterns**).
+
+`just verify-live --port 7979` **PASS 5/5**. Pattern audit **16/16**. Economy
+audit **8/8**. Voting real smoke **3/3**. Playthrough **8 pass / 3 skip /
+0 fail**, now with `PASS - death-log (8 deaths (void:8), 8 ended a run, deepest
+fall y=-17.21; levels: 1)`.
+
+### Release
+
+`v0.25.0-alpha.1`.
+
+### Top 3 candidates for Cycle 14
+
+1. **Every catalog pattern must be placed at least once.** Three separate bugs
+   this project has shipped were "the piece exists but never reaches a level"
+   (`platform_kind_from_str` missing `"TRIPMINE"`, `verify_socket` rejecting
+   ramps, `mech:fork` on a path). The count assertion catches the first two; an
+   eligibility filter is invisible to it. A harness assertion over N seeds would
+   have caught all three.
+2. **The remaining 14 pattern metrics and 7 economy metrics** for the T-126/T-127
+   shape — a threshold looser than the stated intent. Two found in two cycles;
+   the pattern is not exhausted.
+3. **Starting lives.** Measured: 8 of 8 deaths end a run, and the first fall is
+   always fatal. This is the harshest knob in the game and it is now measurable.
+   It is a balance change, so it needs the owner's call — but the *measurement*
+   (death rate per level per mode) is a legitimate Cycle 14 ticket.

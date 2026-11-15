@@ -1078,3 +1078,41 @@ audit **8/8**. Voting real smoke **3/3**. Playthrough **7 pass / 4 skip /
 - Tripmine is tagged on 1 pattern only — thin for a hazard the owner asked for.
 - `5.heights` at 4.47 % now passes at 5 %; it is a style metric, not a
   correctness one.
+
+## Refinement Cycle 13 — `v0.25.0-alpha.1`
+
+Baseline re-run before any ticket: pattern audit 16/16, economy audit 8/8,
+playthrough 8 pass / 3 skip / 0 fail. All three Cycle 12 candidates taken.
+
+| Ticket | Verdict | Commit | Evidence |
+|---|---|---|---|
+| T-127 gift spawn safety | **PASS** | `d3ff3d6` | 5 -> 0 intersecting gifts; threshold 0.01 % -> 0; dump now calls `levelgen::gift_body_clear` |
+| T-128 reference scale | **PASS** | `d3ff3d6` | 3.85 % -> 2.11 %; 6 -> 3 patterns; 3 fixed, 3 documented as ramp-forced |
+| T-129 hazard pool | **PASS** | `d3ff3d6` | 135 -> 140 patterns; trampoline 3 -> 6, tripmine 4 -> 6; `mech:fork` eligibility bug fixed |
+| T-130 death instrumentation | **PASS** | `fd60f22` | `VOIDWRAP_DEATH_LOG`; 8 deaths, all void, all ended a run; 150 -> 151 server tests |
+| T-131 regression gate | **PASS** | this commit | every kit re-run, no regressions |
+
+### Gates
+
+`just verify` green: 246 sim, **151** server, 317 vitest (36 files), clippy
+`-D warnings`, protocol-gen `--check`, check-names (639 files), validate-content
+(20 enemies, 10 upgrades, 19 curses, 4 classes, 34 shop items, 3 events,
+15 milestones, 4 altars, 10 achievements, **140 patterns**).
+
+`just verify-live --port 7979` **PASS 5/5**. Pattern audit **16/16**. Economy
+audit **8/8**. Voting real smoke **3/3**. Playthrough **8 pass / 3 skip /
+0 fail**.
+
+### Parked
+
+- `ch04_twin_terrace` (22 u), `ch06_descent_of_sighs` (30 u), `ch15_tri_crown`
+  (25 u) remain outside the `[10, 20] u` reference band. All three are
+  ramp-forced: a chunk dropping `d` needs `2 * d / 0.5` of ramp plus decks.
+  Reshaping them means changing their drop, which is a redesign.
+- Playthrough `level-progression` / `vote` / `shop` stay skipped. T-130 proved
+  the cause is the bot falling off the map, not the game.
+- Starting lives = 0 is a balance decision, recorded as the top tuning note.
+
+### Release
+
+`v0.25.0-alpha.1`.
