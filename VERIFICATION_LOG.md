@@ -585,3 +585,33 @@ tsc, eslint, vitest (279), and the three env-gated audits.
 
 `just verify` green: 127 server / 234 sim / 279 vitest, clippy `-D warnings`,
 protocol-gen --check, check-names, validate-content.
+
+## v0.13.0-alpha.1 — Refinement Cycle 3
+
+- T-096 ACCEPTED: the voting conformance stub selftest is green — matrix 10/10,
+  violation selftest 6/6, `--real` 3/3. The item parked twice in Cycle 2 was not a
+  progression problem: the stub's `Error` encoder wrote `code` as `u32` where the
+  protocol uses `u16`, so the length prefix of the following string was garbage and
+  `encodeServerMsg` threw inside `onVote` on the first late vote, killing the stub
+  process. The observer's log stopped after the first `VoteResult` because the server
+  was dead. Also fixed: `run.permanents` was read but never written, so
+  `RunState.enemies` was always empty; the `permanence` check compared against a
+  registry field that is `false` for every enemy and could never fail; the
+  `rejoin-safety` check accepted a later session's `VoteOpen`; and the selftest
+  runner compared the stub's pool against a different pool. New exported `stubPool()`
+  gives both sides one permanent-capable subset.
+- T-097 PARKED: pattern footprint normalization. Two mechanical transforms were
+  implemented and measured; both break `5.ramps` (7,205 violations — scaling shrinks
+  ramp run and width below the 2u / 3u minimums) and `0.input` (50 malformed
+  records). Reverted. Needs per-pattern redesign; human decision.
+- T-098 PARTIAL: `4.near-duplicates` 20.27% -> 17.63%. Measured cause: every level 1
+  was identical (315 of 315 records shared one pattern set) because only 8 patterns
+  had `min_level <= 1` while a plan needs ~11. `min_level` 2 -> 1 for the eight
+  level-2 patterns widens the level-1 pool to 16. `5.heights` 13.54% -> 12.69%,
+  `5.reference-scale` 25.98% -> 25.05%. Still failing; the remaining lever is the
+  pattern library expansion (backlog T-E).
+
+`just verify` green: 127 server / 234 sim / 279 vitest, clippy `-D warnings`,
+protocol-gen --check, check-names (577 files), validate-content (20 enemies, 10
+upgrades, 19 curses, 4 classes, 34 shop items, 3 events, 15 milestones, 4 altars, 10
+achievements, 85 patterns).

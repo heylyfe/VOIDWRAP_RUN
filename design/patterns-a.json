@@ -5,7 +5,7 @@
       "id": "pa_ember_span",
       "name": "Ember Span",
       "role": "path",
-      "min_level": 2,
+      "min_level": 1,
       "difficulty": 2,
       "tags": [
         "theme:ember",
@@ -340,7 +340,7 @@
       "id": "pa_garden_rest",
       "name": "Sheltered Garden",
       "role": "path",
-      "min_level": 2,
+      "min_level": 1,
       "difficulty": 1,
       "tags": [
         "theme:garden",
@@ -2274,7 +2274,7 @@
       "id": "pa_garden_bounce",
       "name": "Garden Springboard",
       "role": "path",
-      "min_level": 2,
+      "min_level": 1,
       "difficulty": 2,
       "tags": [
         "theme:garden",
@@ -3128,7 +3128,7 @@
       "id": "pa_garden_fork",
       "name": "Overgrown Crossing",
       "role": "junction",
-      "min_level": 2,
+      "min_level": 1,
       "difficulty": 1,
       "tags": [
         "theme:garden",

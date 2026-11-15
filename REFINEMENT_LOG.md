@@ -236,3 +236,122 @@ Release: `v0.12.0-alpha.1`.
 3. **`4.near-duplicates`** (20.33% against 0.2%). 161,579 near-duplicate pairs over
    3,000 levels. Needs a dedup lever in the generator — a repeat penalty on the
    pattern set, or chunk variants.
+
+---
+
+## Cycle 3
+
+### Audit baseline (measured before any change)
+
+| audit | result |
+|---|---|
+| pattern audit (3,000 records / 200 seeds) | 10 of 13 PASS |
+| economy audit | 7 of 8 PASS (`8.hazard_entities` parked) |
+| matchmaker conformance | 8/8 PASS |
+| voting conformance `--real` | 3/3 PASS |
+| voting conformance stub matrix | 6/10 PASS (parked in Cycle 2) |
+
+Failing pattern metrics: `4.near-duplicates` 20.27% (threshold 0.2%),
+`5.heights` 13.54% (threshold 2%), `5.reference-scale` 25.98% (threshold 10%).
+
+### What was picked and why
+
+1. **Voting stub selftest** — parked twice, and the kit is the authoritative gate for
+   the voting contract. A gate that cannot fail is not a gate.
+2. **`5.heights` / `5.reference-scale`** — the two largest measured deviations.
+3. **`4.near-duplicates`** — 20.27% against 0.2%, the largest relative miss.
+
+### T-096 — voting conformance stub selftest: PASS
+
+Root cause found, and it was not what the Cycle 2 note assumed. The stub was not
+failing to progress; it was **crashing**. Its `Error` frame encoder wrote `code` as
+`u32` where the real protocol uses `u16`, so the two-byte shift corrupted the string
+length prefix and `encodeServerMsg` threw. The throw happened inside `onVote` on the
+first late vote, which killed the stub process — which is why the observer's log
+stopped dead after the first `VoteResult` and never saw the next `RunState`. The
+"progression problem" was a dead server.
+
+Fixes, all in `tools/voting-conformance/`:
+
+- `stub/server.mjs`: `Error.code` encoded as `u16`. The stub now survives a late vote
+  and answers it with `Error` code 7.
+- `stub/server.mjs`: permanence is now tracked in run state. `run.permanents` was
+  read by `runInfo()` but never initialised or written, so `RunState.enemies` was
+  always `[]` and no permanence check could ever observe anything.
+- `stub/server.mjs`: new exported `stubPool()` — the real registry with a
+  deterministic permanent-capable subset. Permanence is a run-state property, not a
+  registry field, so the stub models it and the kit derives the same subset from the
+  same function; both sides agree by construction. `buildPool` guarantees at least
+  one permanent-capable option per session.
+- `run.mjs`: the `permanence` check compared `VoteResult.permanent` against a
+  registry field that is `false` for every enemy, so it could never fail. It now
+  compares against the pool's expectation **and** asserts cross-level persistence in
+  `RunState.enemies`.
+- `run.mjs`: the `rejoin-safety` check accepted any `VoteOpen`, including a later
+  session's. It is now scoped to the session that was open at rejoin time.
+- `run.mjs`: the selftest runner used `loadPool()` while the stub child used
+  `stubPool()`, so the faithful case compared two different pools.
+- Debug lines removed.
+
+Result: stub matrix **10/10**, violation selftest **6/6** (every deliberately broken
+stub is caught), `--real` **3/3** against the live server. The item parked twice is
+closed.
+
+### T-097 — pattern footprint normalization: PARKED
+
+22 patterns place outside the `[10, 20]u` reference extent. Two mechanical
+transforms were implemented and measured, and both fail:
+
+1. Scale XZ about the pattern's min corner to clamp the extent into `[10, 20]`:
+   `5.reference-scale` passes, but `5.ramps` fails with 7,205 violations (scaling
+   shrinks ramp run and width below the 2u / 3u minimums) and `0.input` fails with
+   50 malformed records.
+2. The same plus Y scaling: identical failures.
+
+Both were reverted; the data files are unchanged. Normalizing footprints needs
+per-pattern redesign, not a mechanical scale. **Human decision required.**
+
+### T-098 — near-duplicate reduction: PARTIAL (improved, still failing)
+
+The metric is an all-pairs MinHash-LSH scan at Jaccard >= 0.85, which for 11-pattern
+sets means *identical* sets. The uniform-random baseline for 3,000 levels over this
+pool is ~0%, so 20.27% was a real repeat, not a threshold artefact.
+
+Measured cause: **every level 1 was identical** — 315 of 315 level-1 records shared
+one pattern set. Only 8 patterns had `min_level <= 1` while a plan needs ~11, so the
+level-1 pool was starved and the bag had no choice to make.
+
+Fix (data only, additive, reversible): `min_level` 2 -> 1 for the eight level-2
+patterns in `design/patterns-a.json` and `design/patterns-b.json`. The level-1 pool
+goes from 8 to 16.
+
+| metric | before | after |
+|---|---|---|
+| `4.near-duplicates` | 20.27% | **17.63%** |
+| `5.heights` | 13.54% | 12.69% |
+| `5.reference-scale` | 25.98% | 25.05% |
+| distinct pattern sets | 2,438 / 3,000 | 2,438 / 3,000 |
+
+Still failing. The remaining 529 flagged levels are spread across all levels, not
+concentrated at level 1, so the next lever is the pattern library itself (backlog
+T-E, grow toward 100+ patterns) rather than another engine tweak. Parked pending T-E.
+
+### Merges and release
+
+`just verify` fully green: 127 server / 234 sim / 279 vitest, clippy `-D warnings`,
+protocol-gen --check, check-names (577 files), validate-content (20 enemies, 10
+upgrades, 19 curses, 4 classes, 34 shop items, 3 events, 15 milestones, 4 altars, 10
+achievements, 85 patterns).
+
+Release: `v0.13.0-alpha.1`.
+
+### Top 3 candidates for Cycle 4
+
+1. **Pattern library expansion (T-E)** — the only lever left for
+   `4.near-duplicates`, `5.heights` and `5.reference-scale` at once. Two batches,
+   odd/even slots, frozen format.
+2. **`8.hazard_entities`** (economy audit, parked twice) — converting a pattern's
+   jump pad breaks `every_graph_edge_kind_is_physically_doable`. Needs a hazard
+   placement pass that respects the graph-edge invariant.
+3. **Automated playthrough sweep (T-A)** — the audits are all static. Nothing has
+   exercised a real 8-player session end to end since Wave 5.

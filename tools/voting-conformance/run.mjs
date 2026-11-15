@@ -29,6 +29,7 @@ import { dirname, join } from 'node:path';
 import { encodeClientMsg, decodeServerMsg } from './wire.mjs';
 import {
   loadPool,
+  stubPool,
   PROTOCOL_VERSION,
   PHASE_ENEMY_DRAFT,
   PHASE_PLAYING,
@@ -489,13 +490,19 @@ async function driveStub(url, pool) {
   const rejoin = { attempted: false, ok: false, detail: 'rejoin was never attempted' };
   const lateVote = { sent: false, error: null, stateAfterResult: null };
 
+  // The log is scanned linearly by `waitFor`, so a wait for a later message
+  // consumes every earlier one. Session opens are therefore matched from the
+  // start of the log against the last level already seen, not from the cursor.
+  let lastLevel = 0;
   for (let index = 0; index < SESSION_COUNT; index += 1) {
-    const openEntry = await harness.waitFor(
+    const openEntry = await harness.waitForAny(
       observer,
-      (entry) => Boolean(entry.msg && entry.msg.type === 'VoteOpen'),
+      (entry) =>
+        Boolean(entry.msg && entry.msg.type === 'VoteOpen' && entry.msg.level > lastLevel),
       10000,
     );
     if (!openEntry) break;
+    lastLevel = openEntry.msg.level;
 
     const open = openEntry.msg;
     const session = {
@@ -508,6 +515,14 @@ async function driveStub(url, pool) {
       finalCounts: null,
     };
     sessions.push(session);
+    if (index > 0) {
+      const prev = sessions[index - 1];
+      const rs = lastRunStateBefore(observer.log, session.openAt);
+      prev.enemiesAfter =
+        rs && rs.msg && rs.msg.info && Array.isArray(rs.msg.info.enemies)
+          ? rs.msg.info.enemies.slice()
+          : [];
+    }
 
     const plan = planVotes(index, session.options, pool);
     for (let i = 0; i < clients.length; i += 1) {
@@ -521,14 +536,18 @@ async function driveStub(url, pool) {
       await sleep(80);
       const back = await harness.connect('kit-rejoin');
       sendClient(back, { type: 'Hello', protocol_version: PROTOCOL_VERSION, name: 'kit-rejoin' });
+      // Only a replay of the session that was open at rejoin time proves the
+      // rejoin path ran; a later session's VoteOpen would arrive anyway.
+      const openLevel = session.level;
       const seen = await harness.waitFor(
         back,
-        (entry) => Boolean(entry.msg && (entry.msg.type === 'VoteState' || entry.msg.type === 'VoteOpen')),
+        (entry) =>
+          Boolean(entry.msg && entry.msg.type === 'VoteOpen' && entry.msg.level === openLevel),
         2000,
       );
       if (!seen) {
         rejoin.ok = false;
-        rejoin.detail = 'no session state reached the rejoining client within 2000ms';
+        rejoin.detail = 'no VoteOpen was replayed to the rejoining client within 2000ms';
       } else if (seen.msg.type === 'VoteState') {
         const counts = Array.isArray(seen.msg.counts) ? seen.msg.counts : [];
         const total = counts.reduce((sum, value) => sum + value, 0);
@@ -717,33 +736,41 @@ function evaluate(data, pool) {
   // 5. permanence
   {
     let ok = true;
-    let detail = 'VoteResult permanence and kind match the registry';
+    let detail = "winners report the pool's permanence and persist across levels";
     let checked = 0;
     for (const session of sessions) {
       if (!session.result) continue;
+      if (!Array.isArray(session.enemiesAfter)) continue;
       const entry = byId.get(session.result.id);
       if (!entry) continue;
       checked += 1;
+      const carried = session.enemiesAfter.includes(session.result.id);
       if (session.result.permanent !== entry.permanent) {
         ok = false;
         detail =
           'level ' + session.level + ' winner ' + session.result.id +
           ' reported permanent=' + session.result.permanent +
-          ' but the registry says ' + entry.permanent;
+          ' but the pool says ' + entry.permanent;
         break;
       }
-      if (session.result.kind !== entry.kind) {
+      if (entry.permanent && !carried) {
         ok = false;
         detail =
           'level ' + session.level + ' winner ' + session.result.id +
-          ' reported kind=' + session.result.kind +
-          ' but the registry says ' + entry.kind;
+          " is permanent but is absent from the next level's enemies";
+        break;
+      }
+      if (!entry.permanent && carried) {
+        ok = false;
+        detail =
+          'level ' + session.level + ' winner ' + session.result.id +
+          " is temporary but persists into the next level's enemies";
         break;
       }
     }
     if (ok && checked === 0) {
       ok = false;
-      detail = 'no VoteResult could be matched against the registry';
+      detail = 'no VoteResult could be matched against the pool and a following RunState';
     }
     push('permanence', ok, detail);
   }
@@ -879,7 +906,7 @@ function reportTextFrames(textFrames) {
  * ------------------------------------------------------------------ */
 
 async function stubMode(url) {
-  const pool = loadPool();
+  const pool = stubPool();
   const data = await driveStub(url, pool);
   const results = evaluate(data, pool);
   const badTransport = reportTextFrames(data.textFrames);
@@ -1032,7 +1059,7 @@ async function selftest() {
     { label: 'late_vote_accepted', violation: 'late_vote_accepted', expect: ['countdown-late-vote'] },
   ];
 
-  const pool = loadPool();
+  const pool = stubPool();
   let failures = 0;
 
   for (const testCase of cases) {

@@ -308,7 +308,7 @@ function localEncodeServerMsg(msg) {
       w.bool(msg.permanent);
       break;
     case 'Error':
-      w.u32(msg.code);
+      w.u16(msg.code);
       w.str(msg.message);
       break;
     default:
@@ -464,11 +464,27 @@ function extractEntries(mod) {
 }
 
 let cachedPool = null;
+let cachedStubPool = null;
 
 /**
  * The vote pool the stub draws from. Prefers whatever `registry.mjs` exposes
  * in a recognisable shape and falls back to a built-in pool otherwise.
  */
+/**
+ * The stub's own option pool: the real registry with a deterministic subset
+ * marked permanent-capable. Permanence is a run-state property, not a registry
+ * field, so the stub models it here and the kit derives the same subset from
+ * this function — both sides agree by construction.
+ */
+export function stubPool() {
+  if (cachedStubPool) return cachedStubPool;
+  cachedStubPool = loadPool().map((option, index) => ({
+    ...option,
+    permanent: index % 3 === 0 || index < 3,
+  }));
+  return cachedStubPool;
+}
+
 export function loadPool() {
   if (cachedPool) return cachedPool;
   const fromRegistry = extractEntries(registry);
@@ -656,6 +672,7 @@ const run = {
   lastSession: null,
   offered: new Map(),
   wonTemporary: new Set(),
+  permanents: [],
   nextPlayerId: 1,
   connections: new Set(),
 };
@@ -715,18 +732,25 @@ function broadcastAll(msg) {
 function buildPool(level) {
   const ignoreCaps = VIOLATION === 'cap_ignored';
   const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-  const eligible = loadPool().filter((option) => option.minLevel <= level);
+  const eligible = stubPool().filter((option) => option.minLevel <= level);
   const fresh = eligible.filter((option) => option.permanent || !run.wonTemporary.has(option.id));
   const capped = fresh.filter(
     (option) => ignoreCaps || (run.offered.get(option.id) || 0) < option.cap,
   );
-  if (capped.length >= OPTIONS_PER_SESSION) {
-    return capped.sort(byId).slice(0, OPTIONS_PER_SESSION);
-  }
-  if (fresh.length >= OPTIONS_PER_SESSION) {
-    return fresh.sort(byId).slice(0, OPTIONS_PER_SESSION);
-  }
-  return eligible.sort(byId).slice(0, OPTIONS_PER_SESSION);
+  const pick = (list) => {
+    const sorted = list.slice().sort(byId);
+    const chosen = sorted.slice(0, OPTIONS_PER_SESSION);
+    // Every session offers at least one permanent-capable option, so the
+    // permanence check always has something to exercise.
+    if (!chosen.some((option) => option.permanent)) {
+      const swap = sorted.find((option) => option.permanent && !chosen.includes(option));
+      if (swap) chosen[chosen.length - 1] = swap;
+    }
+    return chosen;
+  };
+  if (capped.length >= OPTIONS_PER_SESSION) return pick(capped);
+  if (fresh.length >= OPTIONS_PER_SESSION) return pick(fresh);
+  return pick(eligible);
 }
 
 function advanceToPlaying() {
@@ -847,7 +871,11 @@ function closeSession(session) {
     permanent,
   });
 
-  if (!option.permanent) run.wonTemporary.add(option.id);
+  if (option.permanent) {
+    if (VIOLATION !== 'permanence_dropped') run.permanents.push({ id: option.id, name: option.name, kind: option.kind });
+  } else {
+    run.wonTemporary.add(option.id);
+  }
 
   run.lastSession = session;
   run.session = null;
