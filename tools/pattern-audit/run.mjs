@@ -228,11 +228,12 @@ function parseRoster(raw) {
 }
 
 function parseFlags(argv) {
-  const flags = { selftest: false, from: null };
+  const flags = { selftest: false, from: null, pool: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--selftest') flags.selftest = true;
     else if (a === '--from') flags.from = argv[++i] ?? null;
+    else if (a === '--pool') flags.pool = argv[++i] ?? null;
     else { console.error(`unknown argument: ${a}`); process.exit(2); }
   }
   return flags;
@@ -999,64 +1000,67 @@ function report(A, ctx, log) {
       + `levels with a measured near-miss: ${geo.nearMissLevels}`);
   }
 
-  // --- 6 enemy spawn frequencies -------------------------------------------------
-  // T-134: this used to report PASS when the roster was absent, which made it a
-  // check that could never fail. The dump carries generic `spawn` markers, not enemy
-  // types -- the type is chosen at runtime from the registry -- so this metric is
-  // structurally unmeasurable from a dump. It now says SKIP and points at the check
-  // that can measure it: `3.pedestal_pool` in the economy audit, which reads the
-  // registry directly and asserts every enemy is reachable by level 20 in every mode.
-  const neverList = ctx.enemyRoster ? ctx.enemyRoster.filter((t) => !A.enemyPlacements.has(t)) : null;
-  if (neverList) {
-    line('6.enemy-frequencies.never-offered',
-      neverList.length === 0,
-      `roster types with zero placements across the whole run: ${neverList.length ? neverList.join(', ') : 'none'}; threshold: 0`);
-  } else {
+  // --- 6 enemy pool coverage (T-155) ---------------------------------------------
+  // T-134/T-148: these two metrics used to read the LEVEL dump, which carries generic
+  // `spawn` markers rather than enemy types -- the type is chosen at runtime from the
+  // registry -- so neither could ever measure what its name promised. T-155 gives the
+  // pool its own dump (`voidwrap-server --dump-pool`), emitted from the crate that owns
+  // the filter, and these metrics read that table instead.
+  const pool = ctx.pool ?? null;
+  if (!pool) {
     skip('6.enemy-frequencies.never-offered',
-      'the dump carries generic spawn markers, not enemy types, so per-enemy placement is not measurable here; '
-      + 'registry coverage is asserted by economy-audit 3.pedestal_pool');
-  }
-
-  // T-148: this compared `cell.byType` (a PLACEMENT count) against `cell.levels` (a LEVEL
-  // count). A level carries several spawn markers, so placements always exceeded levels and
-  // `c === cell.levels` could only hold if every level had exactly one enemy -- which never
-  // happens. The check reported PASS on every run since it was written while measuring
-  // nothing. It now compares levels-containing-the-type against levels-in-the-cell, which is
-  // what "appears in 100% of levels" always meant.
-  const alwaysCells = [];
-  for (const [cellKey, cell] of A.enemyCells) {
-    if (cell.levels < cellMin) continue;
-    for (const [t, c] of cell.levelsWithType) {
-      // T-144: this used to require `cell.byType.size >= 2`, so a single type appearing in
-      // 100% of a cell's levels -- the strongest possible form of "never varies" -- was
-      // filtered out of the check built to catch exactly that. The filter is gone.
-      if (c === cell.levels) {
-        alwaysCells.push({ cellKey, type: t, count: c, cellLevels: cell.levels, distinct: cell.byType.size });
+      'no pool table supplied (--pool / PATTERN_AUDIT_POOL), so which enemies a run can be offered is not measurable from the level dump alone; '
+      + 'the level dump carries generic spawn markers, not enemy types');
+    skip('6.enemy-frequencies.pool-depth',
+      'no pool table supplied (--pool / PATTERN_AUDIT_POOL), so vote-pool depth is not measurable from the level dump alone');
+  } else if (pool.records.length === 0) {
+    line('6.enemy-frequencies.never-offered', false,
+      `the pool table at ${pool.path} held zero records, so "every enemy is offered somewhere" is vacuously true and proves nothing`);
+    line('6.enemy-frequencies.pool-depth', false,
+      `the pool table at ${pool.path} held zero records, so pool depth was measured over an empty denominator`);
+  } else {
+    // An enemy is REACHABLE when some (mode, level) pool offers it, or when it is held
+    // back only by a `requires` hook whose requirement the roster can actually satisfy.
+    // Without the second half, `chorus` (2x `small` permanents) would read as dead content.
+    const offered = new Set();
+    const gatedReachable = new Map();
+    const gatedUnreachable = new Set();
+    for (const r of pool.records) {
+      for (const id of r.pool ?? []) offered.add(id);
+      for (const g of r.gated ?? []) {
+        if (g.satisfiable) gatedReachable.set(g.id, g.requires ?? []);
+        else gatedUnreachable.add(g.id);
       }
     }
-  }
-  // T-148: the dump's `enemies` array carries generic `spawn` markers, not enemy types --
-  // the type is chosen at runtime from the registry. A marker that is present in every level
-  // by construction would make this check fire on every run for a reason that is not a
-  // defect, so say the input cannot answer the question instead.
-  const genericOnly = A.enemyPlacements.size > 0 && [...A.enemyPlacements.keys()].every((t) => t === GENERIC_SPAWN_MARKER);
-  if (A.enemyCells.size === 0) {
-    skip('6.enemy-frequencies.always-offered',
-      'no record carried an "enemies" array, so per-cell enemy variety is not measurable from this input');
-  } else if (genericOnly) {
-    skip('6.enemy-frequencies.always-offered',
-      `every placement in the dump is the generic "${GENERIC_SPAWN_MARKER}" marker, not an enemy type, so per-cell variety is not measurable here; `
-      + 'registry coverage is asserted by economy-audit 3.pedestal_pool');
-  } else if (![...A.enemyCells.values()].some((c) => c.levels >= cellMin)) {
-    // T-148: with no cell large enough, the loop above never runs and the metric would
-    // report PASS having examined zero cells -- the same empty-denominator defect T-144
-    // fixed elsewhere. Say so instead.
-    skip('6.enemy-frequencies.always-offered',
-      `no (mode, level) cell reached ${cellMin} levels (largest: ${Math.max(...[...A.enemyCells.values()].map((c) => c.levels))}), so the always-offered check examined nothing`);
-  } else {
-    line('6.enemy-frequencies.always-offered',
-      alwaysCells.length === 0,
-      `(mode, level) cells with >= ${cellMin} levels where a type appears in 100% of levels: ${alwaysCells.length} across ${A.enemyCells.size} cells; threshold: 0`);
+    const roster = ctx.enemyRoster;
+    if (!roster) {
+      skip('6.enemy-frequencies.never-offered',
+        `the pool table holds ${offered.size} distinct enemy ids across ${pool.records.length} (mode, level) cells, but no roster was supplied `
+        + '(PATTERN_AUDIT_ENEMY_TYPES), so there is nothing to check the pool against');
+    } else {
+      const unreachable = roster.filter((id) => !offered.has(id) && !gatedReachable.has(id));
+      const gatedNote = gatedReachable.size
+        ? [...gatedReachable.entries()].map(([id, reqs]) => `${id} (${reqs.map((q) => `${q.count}x ${q.tag}`).join(' + ')})`).join(', ')
+        : 'none';
+      line('6.enemy-frequencies.never-offered',
+        unreachable.length === 0,
+        `roster types no (mode, level) pool can ever offer: ${unreachable.length ? unreachable.join(', ') : 'none'} of ${roster.length}; `
+        + `gated but reachable: ${gatedNote}; `
+        + `gated with an unsatisfiable requirement: ${gatedUnreachable.size ? [...gatedUnreachable].join(', ') : 'none'}; threshold: 0`);
+    }
+    // T-155: replaces `6.enemy-frequencies.always-offered`. That metric asked whether a
+    // type appeared in 100% of a cell's levels, which for a POOL is true by construction
+    // for any low-`min_level` enemy -- the pool only grows -- so it could only ever fire
+    // on a defect that is not one. Pool depth is the question that matters: a vote needs
+    // three options, so a cell with fewer than three cannot build one.
+    const depths = pool.records.map((r) => ({ key: `${r.mode}@${r.level}`, n: (r.pool ?? []).length }));
+    const thin = depths.filter((d) => d.n < 3);
+    line('6.enemy-frequencies.pool-depth',
+      thin.length === 0,
+      `(mode, level) cells whose vote pool holds fewer than 3 options: ${thin.length} of ${depths.length}`
+      + `${thin.length ? ` (${thin.slice(0, 6).map((d) => `${d.key}: ${d.n}`).join(', ')}${thin.length > 6 ? ', ...' : ''})` : ''}; `
+      + `depth range ${Math.min(...depths.map((d) => d.n))}-${Math.max(...depths.map((d) => d.n))}; threshold: 0. `
+      + 'A vote needs 3 options, so a thinner pool cannot build one.');
   }
 
   // ---------------------------------------------------------------------------
@@ -1115,12 +1119,8 @@ function report(A, ctx, log) {
       }
     }
   }
-  if (alwaysCells.length) {
-    tlog('never-varying enemy types per cell:');
-    for (const x of alwaysCells) tlog(`  players/level=${x.cellKey}: type "${x.type}" in ${x.count}/${x.cellLevels} levels (cell has ${x.distinct} distinct types)`);
-  }
   if (A.enemyCells.size) {
-    tlog(`enemy cells (mode, level index); cell size >= ${cellMin} qualifies for the always-offered check:`);
+    tlog(`enemy cells (mode, level index); cell size >= ${cellMin} is the reporting floor:`);
     const cellKeys = [...A.enemyCells.keys()].sort((a, b) => {
       const [pa, la] = a.split('|').map(Number);
       const [pb, lb] = b.split('|').map(Number);
@@ -1151,8 +1151,30 @@ function report(A, ctx, log) {
 // ---------------------------------------------------------------------------
 // Runner
 // ---------------------------------------------------------------------------
-async function runAudit(source, seedsTarget, enemyRoster, log) {
+
+/**
+ * T-155: read the `--dump-pool` NDJSON table. One record per (mode, level):
+ *   { "mode": "standard", "level": 1, "pool": ["pallbearer", ...],
+ *     "gated": [ { "id": "chorus", "requires": [ { "tag": "small", "count": 2 } ],
+ *                  "satisfiable": true } ] }
+ * Returns null when the file cannot be read, so the caller can fail loudly rather
+ * than silently downgrade to SKIP.
+ */
+function readPoolTable(path) {
+  let raw;
+  try { raw = readFileSync(path, 'utf8'); } catch { return null; }
+  const records = [];
+  for (const line of raw.split(String.fromCharCode(10))) {
+    const t = line.trim();
+    if (t.length === 0) continue;
+    try { records.push(JSON.parse(t)); } catch { return null; }
+  }
+  return { path, records };
+}
+
+async function runAudit(source, seedsTarget, enemyRoster, pool, log) {
   log(`== T-077 pattern audit == seeds target: ${seedsTarget}, enemy roster: ${enemyRoster ? enemyRoster.join(',') : '(none provided)'}, source: ${source.kind === 'file' ? source.path : source.cmd}`);
+  log(`   pool table: ${pool ? `${pool.path} (${pool.records.length} cells)` : '(none supplied)'}`);
   const A = createAggregate();
   try {
     const lines = source.kind === 'file' ? iterLinesFromFile(source.path) : iterLinesFromCommand(source.cmd, seedsTarget);
@@ -1211,7 +1233,7 @@ async function runAudit(source, seedsTarget, enemyRoster, log) {
     log(`FATAL - generator/input failed: ${err && err.message ? err.message : err}`);
     return ['FATAL'];
   }
-  return report(A, { seedsTarget, enemyRoster, source }, log);
+  return report(A, { seedsTarget, enemyRoster, pool, source }, log);
 }
 
 // ---------------------------------------------------------------------------
@@ -1275,9 +1297,25 @@ function selftest() {
   const recs = selftestTags(buildSelftestRecords());
   const A = createAggregate();
   for (const rec of recs) consumeRecord(A, rec);
+  // T-155: a synthetic pool table with two planted defects -- `ghost` is offered by no
+  // cell at all, and one cell's pool is too thin to build a vote from. `gated-ok` proves
+  // the `requires` path does NOT fail (it is reachable once its gate opens) and
+  // `gated-bad` proves an unsatisfiable gate DOES fail.
+  const pool = {
+    path: '(synthetic pool table)',
+    records: [
+      { mode: 'standard', level: 1, pool: ['a', 'b', 'c'], gated: [] },
+      { mode: 'standard', level: 2, pool: ['a', 'b', 'c'], gated: [
+        { id: 'gated-ok', requires: [{ tag: 'small', count: 2 }], satisfiable: true },
+        { id: 'gated-bad', requires: [{ tag: 'small', count: 9 }], satisfiable: false },
+      ] },
+      { mode: 'standard', level: 3, pool: ['a', 'b'], gated: [] },
+    ],
+  };
   const fails = report(A, {
     seedsTarget: 3,
-    enemyRoster: ['a', 'b', 'c', 'ghost'],
+    enemyRoster: ['a', 'b', 'c', 'ghost', 'gated-ok', 'gated-bad'],
+    pool,
     // T-144: a synthetic catalog so `7.catalog-coverage` measures the metric instead of
     // tripping over the real catalog's ids.
     catalogIds: new Set(recs.flatMap((r) => r.plan)),
@@ -1297,7 +1335,7 @@ function selftest() {
     '4.near-duplicates',
     '5.ramps',
     '6.enemy-frequencies.never-offered',
-    '6.enemy-frequencies.always-offered',
+    '6.enemy-frequencies.pool-depth',
   ]);
   const got = new Set(fails);
   const ok = expected.size === got.size && [...expected].every((x) => got.has(x));
@@ -1322,7 +1360,14 @@ async function main() {
   const seeds = intEnv('PATTERN_AUDIT_SEEDS', 5000);
   const roster = parseRoster(process.env.PATTERN_AUDIT_ENEMY_TYPES);
   const source = flags.from !== null ? { kind: 'file', path: flags.from } : { kind: 'cmd', cmd };
-  const fails = await runAudit(source, seeds, roster, console.log);
+  const poolPath = flags.pool ?? (process.env.PATTERN_AUDIT_POOL || null);
+  const pool = poolPath === null ? null : readPoolTable(poolPath);
+  if (pool === null && poolPath !== null) {
+    console.error(`could not read the pool table at ${poolPath}`);
+    process.exitCode = 2;
+    return;
+  }
+  const fails = await runAudit(source, seeds, roster, pool, console.log);
   process.exitCode = fails.length ? 1 : 0;
 }
 

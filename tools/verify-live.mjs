@@ -15,7 +15,7 @@
 // The matchmaker kit needs a deployed matchmaker, which this repo does not ship, so it runs
 // only when MATCHMAKER_URL is set. Everything else always runs.
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -137,6 +137,33 @@ async function main() {
   log(`verify-live: ${lines} level records -> ${dumpPath}`);
   results.push({ label: 'level dump', ok: lines > 0, status: 0 });
 
+  // T-155: the level dump carries generic `spawn` markers, not enemy types, so the pattern
+  // audit's enemy-coverage metrics need the vote pool from the crate that owns the filter.
+  // `--dump-pool` prints it and exits without touching the network.
+  const poolPath = join(dumpDir, 'pool.ndjson');
+  log('');
+  log('=== vote pool table ===');
+  const poolDump = spawnSync(SERVER_BIN, ['--dump-pool'], {
+    cwd: join(root, 'server'),
+    shell: win,
+    encoding: 'buffer',
+    maxBuffer: 1 << 26,
+  });
+  if (poolDump.status !== 0) {
+    log(`verify-live: --dump-pool failed (${poolDump.status})`);
+    results.push({ label: 'vote pool table', ok: false, status: poolDump.status });
+    return finish();
+  }
+  writeFileSync(poolPath, poolDump.stdout);
+  const poolLines = poolDump.stdout.toString('utf8').split(String.fromCharCode(10)).filter((l) => l.trim()).length;
+  log(`verify-live: ${poolLines} (mode, level) pool records -> ${poolPath}`);
+  results.push({ label: 'vote pool table', ok: poolLines > 0, status: 0 });
+
+  // The roster the pool is checked against comes from the content file, so a new enemy that
+  // never reaches a pool fails the audit instead of silently missing from the check.
+  const enemyRoster = JSON.parse(readFileSync(join(root, 'design', 'content.json'), 'utf8'))
+    .enemies.map((e) => e.id).join(',');
+
   // Refuse to run against a server this script did not start. A desktop build or a
   // `just run` server already holding the port answers the kits with its own state -- a run
   // in progress, players already joined -- and every result would describe that server, not
@@ -191,7 +218,9 @@ async function main() {
   }
   log(`verify-live: server is listening on 127.0.0.1:${PORT}`);
 
-  run('pattern audit', 'node', ['tools/pattern-audit/run.mjs', '--from', dumpPath]);
+  run('pattern audit', 'node', ['tools/pattern-audit/run.mjs', '--from', dumpPath, '--pool', poolPath], {
+    env: { PATTERN_AUDIT_ENEMY_TYPES: enemyRoster },
+  });
   run('economy audit', 'node', ['tools/economy-audit/run.mjs', '--from', dumpPath]);
 
   // Playthrough runs BEFORE the voting kit: it opens 8 clients, and the server caps the

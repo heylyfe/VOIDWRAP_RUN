@@ -1022,7 +1022,7 @@ impl Run {
     }
 
     /// Build the pool entries from the registry content, in content order.
-    fn pool_entries(content: &Content) -> Vec<PoolEntry> {
+    pub(crate) fn pool_entries(content: &Content) -> Vec<PoolEntry> {
         content
             .enemies
             .iter()
@@ -1043,6 +1043,72 @@ impl Run {
                 content_order,
             })
             .collect()
+    }
+
+    /// T-155: the offered vote pool per (mode, level), as NDJSON.
+    ///
+    /// The pattern audit's `6.enemy-frequencies.*` metrics need to know which enemies a run
+    /// can actually be offered, and the pattern dump cannot answer that: it lives in `sim`,
+    /// which owns pattern data, while the pool is filtered by `vote_pool_with` here. Each dump
+    /// stays in the crate that owns its data, so this one lives here and the audit joins the
+    /// two by (mode, level).
+    ///
+    /// The table is the FRESH pool: no permanents held and no class picks, which is the state
+    /// every run starts from and the only one that is reproducible without simulating a run.
+    /// A held permanent removes its own type once `selection_cap` is reached, so a real run's
+    /// pool is this table minus what it has already taken.
+    pub(crate) fn pool_table(content: &Content) -> String {
+        use serde_json::json;
+        const MAX_LEVEL: u32 = 30;
+        let entries = Run::pool_entries(content);
+        let mut out = String::new();
+        for mode in sim::mode::DifficultyMode::all() {
+            for level in 1..=MAX_LEVEL {
+                let pool = vote_pool_with(&entries, level, &[], &[], mode);
+                // Enemies the fresh pool excludes ONLY because of a `requires` hook. Without this
+                // the audit cannot tell "never offered" from "offered once the gate opens", and
+                // `chorus` (2x `small` permanents) would read as a dead registry entry.
+                let gated: Vec<serde_json::Value> = entries
+                    .iter()
+                    .filter(|e| !e.requires.is_empty())
+                    .filter(|e| !pool.iter().any(|p| p.id == e.id))
+                    .filter(|e| (e.min_level as i32 + mode.min_level_shift()).max(1) <= level as i32)
+                    .filter(|e| !class_excluded(e, &[]))
+                    .map(|e| {
+                        // Reachable when every requirement can be met by entries that are
+                        // themselves ungated at this level. `selection_cap` is >= 1 for every
+                        // registry entry, so holding one of each is always possible.
+                        let satisfiable = e.requires.iter().all(|(tag, count)| {
+                            let n = entries
+                                .iter()
+                                .filter(|c| c.requires.is_empty())
+                                .filter(|c| c.tags.iter().any(|t| t == tag))
+                                .filter(|c| (c.min_level as i32 + mode.min_level_shift()).max(1) <= level as i32)
+                                .count() as u32;
+                            n >= *count
+                        });
+                        json!({
+                            "id": e.id.clone(),
+                            "requires": e
+                                .requires
+                                .iter()
+                                .map(|(tag, count)| json!({ "tag": tag, "count": count }))
+                                .collect::<Vec<_>>(),
+                            "satisfiable": satisfiable,
+                        })
+                    })
+                    .collect();
+                let record = json!({
+                    "mode": mode.id(),
+                    "level": level,
+                    "pool": pool.iter().map(|e| e.id.clone()).collect::<Vec<_>>(),
+                    "gated": gated,
+                });
+                out.push_str(&record.to_string());
+                out.push(char::from(10));
+            }
+        }
+        out
     }
 
     /// Build the vote options for the level being exited. Deterministic: enemy candidates come from the
@@ -3307,6 +3373,47 @@ mod tests {
         assert_eq!(run.currency, 40, "the currency is charged exactly once");
         assert_eq!(run.shop.as_ref().unwrap()[0].stock, 0);
         assert_eq!(run.lives, lives_before + 1, "the life is granted exactly once");
+    }
+
+    /// T-155: the pool dump is the input the pattern audit's enemy-coverage metrics read.
+    /// It must cover every mode and every level the audit asks about, and it must not
+    /// silently drop an enemy that only a `requires` gate holds back.
+    #[test]
+    fn pool_table_covers_every_mode_and_level() {
+        let c = Content::load().unwrap();
+        let table = Run::pool_table(&c);
+        let records: Vec<serde_json::Value> = table
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("every pool line is JSON"))
+            .collect();
+        assert_eq!(records.len(), sim::mode::DifficultyMode::all().len() * 30);
+        for r in &records {
+            let pool = r["pool"].as_array().expect("pool is an array");
+            assert!(pool.len() >= 3, "a vote needs 3 options: {r}");
+            assert!(r["gated"].is_array(), "gated is always present: {r}");
+        }
+        // Every registry enemy is either offered somewhere or gated with a satisfiable
+        // requirement -- the same rule the audit applies, asserted here so a content edit
+        // that strands an enemy fails the unit suite rather than only the live audit.
+        let mut offered = std::collections::BTreeSet::new();
+        let mut gated_ok = std::collections::BTreeSet::new();
+        for r in &records {
+            for id in r["pool"].as_array().unwrap() {
+                offered.insert(id.as_str().unwrap().to_string());
+            }
+            for g in r["gated"].as_array().unwrap() {
+                if g["satisfiable"].as_bool().unwrap() {
+                    gated_ok.insert(g["id"].as_str().unwrap().to_string());
+                }
+            }
+        }
+        let stranded: Vec<&str> = c
+            .enemies
+            .iter()
+            .map(|e| e.id.as_str())
+            .filter(|id| !offered.contains(*id) && !gated_ok.contains(*id))
+            .collect();
+        assert!(stranded.is_empty(), "enemies no pool can ever offer: {stranded:?}");
     }
 }
 

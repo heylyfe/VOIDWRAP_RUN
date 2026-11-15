@@ -75,6 +75,19 @@ fn startup() -> Startup {
 }
 
 fn main() {
+    // T-155: `--dump-pool` prints the offered vote pool per (mode, level) as NDJSON and exits.
+    // It runs before `startup()` so the dump never touches the network or the web directory.
+    if std::env::args().skip(1).any(|a| a == "--dump-pool") {
+        let content = match content::Content::load() {
+            Ok(content) => content,
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        };
+        print!("{}", run::Run::pool_table(&content));
+        return;
+    }
     init_logging();
     deathlog::init();
     let startup = startup();
