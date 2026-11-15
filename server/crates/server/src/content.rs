@@ -699,7 +699,7 @@ mod tests {
         let kept_flame = c.shop_item("kept_flame").unwrap();
         assert_eq!(
             (kept_flame.cost, kept_flame.stock, kept_flame.kind.as_str()),
-            (60, 1, "life")
+            (750, 1, "life")
         );
         let ice = c.event(2).unwrap();
         assert_eq!(ice.id, "slick_ice");

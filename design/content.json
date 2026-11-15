@@ -598,7 +598,7 @@
       "name": "Kept Flame",
       "flavor": "A light left burning for a fall that has not happened yet.",
       "effect": "+1 life; you respawn at the level start",
-      "cost": 60,
+      "cost": 750,
       "stock": 1,
       "kind": "life"
     },
@@ -607,7 +607,7 @@
       "name": "New Hand",
       "flavor": "The cards were never yours. Ask again.",
       "effect": "Reroll the reward cards offered this lobby",
-      "cost": 30,
+      "cost": 380,
       "stock": 2,
       "kind": "reroll"
     },
@@ -616,7 +616,7 @@
       "name": "Worn Treads",
       "flavor": "Old soles, already broken in by someone faster.",
       "effect": "+8% run speed for the rest of the run",
-      "cost": 24,
+      "cost": 300,
       "stock": 2,
       "kind": "mods",
       "mods": { "run_speed_mul": 1.08 }
@@ -626,7 +626,7 @@
       "name": "Spring Heel",
       "flavor": "A small coil of tension under each step.",
       "effect": "+6% jump velocity for the rest of the run",
-      "cost": 20,
+      "cost": 250,
       "stock": 2,
       "kind": "mods",
       "mods": { "jump_mul": 1.06 }
@@ -636,7 +636,7 @@
       "name": "Short Fuse",
       "flavor": "The dash comes back before you miss it.",
       "effect": "-10% dash cooldown for the rest of the run",
-      "cost": 28,
+      "cost": 350,
       "stock": 1,
       "kind": "mods",
       "mods": { "dash_cooldown_mul": 0.9 }
@@ -646,7 +646,7 @@
       "name": "Wide Palm",
       "flavor": "Your reach grows a finger's width at a time.",
       "effect": "+15% gift pickup reach for the rest of the run",
-      "cost": 16,
+      "cost": 200,
       "stock": 3,
       "kind": "mods",
       "mods": { "gift_radius_mul": 1.15 }
@@ -656,7 +656,7 @@
       "name": "Thin Veil",
       "flavor": "The mist thins where you look hardest.",
       "effect": "-12% fog density for the rest of the run",
-      "cost": 18,
+      "cost": 220,
       "stock": 2,
       "kind": "mods",
       "mods": { "fog_density_mul": 0.88 }
@@ -666,7 +666,7 @@
       "name": "Striker's Rhythm",
       "flavor": "The dash was never a burst. It was a decision.",
       "effect": "-12% dash cooldown for the rest of the run",
-      "cost": 45,
+      "cost": 560,
       "stock": 1,
       "kind": "perk",
       "mods": { "dash_cooldown_mul": 0.88 }
@@ -676,7 +676,7 @@
       "name": "Longshore Rhythm",
       "flavor": "Every pull is a step you did not have to take.",
       "effect": "+10% run speed for the rest of the run",
-      "cost": 45,
+      "cost": 560,
       "stock": 1,
       "kind": "perk",
       "mods": { "run_speed_mul": 1.1 }
@@ -686,7 +686,7 @@
       "name": "Still Water",
       "flavor": "The storm breaks on you, and learns to go quiet.",
       "effect": "enemies sense you 25% shorter for the rest of the run",
-      "cost": 45,
+      "cost": 560,
       "stock": 1,
       "kind": "perk",
       "mods": { "enemy_aggro_mul": 0.75 }
@@ -696,7 +696,7 @@
       "name": "Tailwind Lungs",
       "flavor": "One breath more than the fall was promised.",
       "effect": "+1 air jump for the rest of the run",
-      "cost": 45,
+      "cost": 560,
       "stock": 1,
       "kind": "perk",
       "mods": { "air_jumps_add": 1 }
@@ -706,7 +706,7 @@
       "name": "Spurred Heels",
       "flavor": "The hearse cannot toll a runner who never stops.",
       "effect": "Helps against the Footprint Chaser: +12% dash speed",
-      "cost": 35,
+      "cost": 440,
       "stock": 1,
       "kind": "counter",
       "mods": { "dash_speed_mul": 1.12 }
@@ -716,7 +716,7 @@
       "name": "Eyed Parries",
       "flavor": "You have watched the freeze a hundred times. It always telegraphs.",
       "effect": "Helps against the Orbit Dasher: -15% dash cooldown",
-      "cost": 35,
+      "cost": 440,
       "stock": 1,
       "kind": "counter",
       "mods": { "dash_cooldown_mul": 0.85 }
@@ -726,7 +726,7 @@
       "name": "Muted Bells",
       "flavor": "Pad your footfalls; let the hush find nothing.",
       "effect": "Helps against the Stillness Shrieker: -25% enemy aggro",
-      "cost": 35,
+      "cost": 440,
       "stock": 1,
       "kind": "counter",
       "mods": { "enemy_aggro_mul": 0.75 }
@@ -736,7 +736,7 @@
       "name": "Sea Anchor",
       "flavor": "When the walls push, lean the other way.",
       "effect": "Helps against the Wall Drifter: +12% run speed",
-      "cost": 35,
+      "cost": 440,
       "stock": 1,
       "kind": "counter",
       "mods": { "run_speed_mul": 1.12 }
@@ -746,7 +746,7 @@
       "name": "Farsight Draught",
       "flavor": "See the circle before it becomes the ground.",
       "effect": "Helps against the Shell Bomber: -25% fog density",
-      "cost": 35,
+      "cost": 440,
       "stock": 1,
       "kind": "counter",
       "mods": { "fog_density_mul": 0.75 }
@@ -756,7 +756,7 @@
       "name": "Leaden Net",
       "flavor": "Tangle the light before it reaches the gift.",
       "effect": "Helps against the Gift Stinger: enemies move 15% slower",
-      "cost": 35,
+      "cost": 440,
       "stock": 1,
       "kind": "counter",
       "mods": { "enemy_speed_mul": 0.85 }
@@ -766,7 +766,7 @@
       "name": "Flicker Treads",
       "flavor": "It predicts where you will be. Be elsewhere.",
       "effect": "Helps against the Bolt Turret: +20% dash speed",
-      "cost": 35,
+      "cost": 440,
       "stock": 1,
       "kind": "counter",
       "mods": { "dash_speed_mul": 1.2 }
@@ -776,7 +776,7 @@
       "name": "Quickdraw Charm",
       "flavor": "The gift flinches first. Now so can you.",
       "effect": "Helps against the False Gift: -15% dash cooldown",
-      "cost": 35,
+      "cost": 440,
       "stock": 1,
       "kind": "counter",
       "mods": { "dash_cooldown_mul": 0.85 }
@@ -786,7 +786,7 @@
       "name": "Clean Boots",
       "flavor": "The rot forgets a foot that never slows.",
       "effect": "Helps against the Floor Rotter: +12% run speed",
-      "cost": 35,
+      "cost": 440,
       "stock": 1,
       "kind": "counter",
       "mods": { "run_speed_mul": 1.12 }
@@ -796,7 +796,7 @@
       "name": "Crosswind Pivot",
       "flavor": "Walk your own line, but refuse to repeat it.",
       "effect": "Helps against the Path Replayer: +15% jump velocity",
-      "cost": 35,
+      "cost": 440,
       "stock": 1,
       "kind": "counter",
       "mods": { "jump_mul": 1.15 }
@@ -806,7 +806,7 @@
       "name": "Soft Soles",
       "flavor": "Take the gift; leave no footprint worth striking.",
       "effect": "Helps against the Gift Guard: enemies sense you 30% shorter",
-      "cost": 35,
+      "cost": 440,
       "stock": 1,
       "kind": "counter",
       "mods": { "enemy_aggro_mul": 0.7 }
@@ -816,7 +816,7 @@
       "name": "Soft Bellwax",
       "flavor": "Muffle the ringing before the third bell.",
       "effect": "Helps against the Bell Ringer: enemies move 15% slower",
-      "cost": 35,
+      "cost": 440,
       "stock": 1,
       "kind": "counter",
       "mods": { "enemy_speed_mul": 0.85 }
@@ -826,7 +826,7 @@
       "name": "Tailwind Sail",
       "flavor": "The farthest runner catches the kinder wind.",
       "effect": "Helps against the Tether Tracker: +12% run speed",
-      "cost": 35,
+      "cost": 440,
       "stock": 1,
       "kind": "counter",
       "mods": { "run_speed_mul": 1.12 }
@@ -836,7 +836,7 @@
       "name": "Clear Draught",
       "flavor": "Thin its fog; watch it dash before it disappears.",
       "effect": "Helps against the Fog Dasher: -30% fog density",
-      "cost": 35,
+      "cost": 440,
       "stock": 1,
       "kind": "counter",
       "mods": { "fog_density_mul": 0.7 }
@@ -846,7 +846,7 @@
       "name": "Salt and Ash",
       "flavor": "Scar the ground behind you; let the infection starve.",
       "effect": "Helps against the Ground Infector: +12% run speed",
-      "cost": 35,
+      "cost": 440,
       "stock": 1,
       "kind": "counter",
       "mods": { "run_speed_mul": 1.12 }
@@ -856,7 +856,7 @@
       "name": "Syncopated Heart",
       "flavor": "The beacon counts. Your heart refuses the beat.",
       "effect": "Helps against the Beat Keeper: -15% dash cooldown",
-      "cost": 35,
+      "cost": 440,
       "stock": 1,
       "kind": "counter",
       "mods": { "dash_cooldown_mul": 0.85 }
@@ -866,7 +866,7 @@
       "name": "Grey Veil",
       "flavor": "Wear the fog it watches through.",
       "effect": "Helps against the Marking Eye: -25% fog density",
-      "cost": 35,
+      "cost": 440,
       "stock": 1,
       "kind": "counter",
       "mods": { "fog_density_mul": 0.75 }
@@ -876,7 +876,7 @@
       "name": "Quiet Pockets",
       "flavor": "Applaud softly. Never on the beat.",
       "effect": "Helps against the Choir Summoner: -25% enemy aggro",
-      "cost": 35,
+      "cost": 440,
       "stock": 1,
       "kind": "counter",
       "mods": { "enemy_aggro_mul": 0.75 }
@@ -886,7 +886,7 @@
       "name": "Loose Springs",
       "flavor": "Unwind it before it unwinds you.",
       "effect": "Helps against the Spring Leaper: +15% dash speed",
-      "cost": 35,
+      "cost": 440,
       "stock": 1,
       "kind": "counter",
       "mods": { "dash_speed_mul": 1.15 }
@@ -896,7 +896,7 @@
       "name": "True Lantern",
       "flavor": "A light that does not promise. Look closer.",
       "effect": "Helps against the Fog Decoy: -30% fog density",
-      "cost": 35,
+      "cost": 440,
       "stock": 1,
       "kind": "counter",
       "mods": { "fog_density_mul": 0.7 }
@@ -906,7 +906,7 @@
       "name": "Gift Compass",
       "flavor": "It points at what you have not taken, never at what is pretending.",
       "effect": "arrow to the nearest gift, with distance",
-      "cost": 35,
+      "cost": 440,
       "stock": 1,
       "kind": "radar"
     },
@@ -915,7 +915,7 @@
       "name": "Hunter Ping",
       "flavor": "A short knock on the dark. Something always knocks back.",
       "effect": "ping permanent enemies every 10 s",
-      "cost": 50,
+      "cost": 620,
       "stock": 1,
       "kind": "radar"
     },
@@ -924,7 +924,7 @@
       "name": "Ground Sense",
       "flavor": "The floor has opinions about where you should stand.",
       "effect": "reveals nearby ground hazards",
-      "cost": 40,
+      "cost": 500,
       "stock": 1,
       "kind": "radar"
     }

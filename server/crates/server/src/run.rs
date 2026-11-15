@@ -38,9 +38,9 @@ const GREATER_EVERY: u32 = 10;
 /// Shop items offered per lobby (first, plain lobby gets none).
 const SHOP_OFFER: usize = 4;
 /// Cost of a contextual upgrade card offered in the shop.
-const SHOP_UPGRADE_COST: u32 = 25;
+const SHOP_UPGRADE_COST: u32 = 300;
 /// Cost of a curse-removal (purge) item; stock equals the stacks of that curse held.
-const SHOP_PURGE_COST: u32 = 30;
+const SHOP_PURGE_COST: u32 = 360;
 /// How many distinct upgrade cards are drawn into the shop per lobby.
 const SHOP_UPGRADE_DRAWS: usize = 2;
 /// Ticks of siren/banner before the collapse proper begins (design §1.4: 3.0 s).
@@ -55,7 +55,7 @@ const VOTE_COIN_SALT: u32 = 0xA5A5_5A5A;
 const VOTE_CURSE_SALT: u32 = 0x3A6F_1D2B;
 
 /// Currency advanced by the Debt altar.
-pub const DEBT_ADVANCE: u32 = 30;
+pub const DEBT_ADVANCE: u32 = 360;
 /// Levels of golden-gift income that repay a Debt altar advance.
 pub const DEBT_REPAY_LEVELS: u8 = 2;
 /// Temporary curses applied by the Shortcut altar.
@@ -2784,7 +2784,7 @@ mod tests {
     fn a_rejected_purchase_is_fully_refunded() {
         let c = content();
         let mut run = Run::new(&c, 42, 2);
-        run.currency = 100;
+        run.currency = 1_000;
         let before_speed = run.mods.run_speed_mul;
         let before_lives = run.lives;
         // Rejection by sold-out stock.
@@ -2794,15 +2794,15 @@ mod tests {
             stock: 0,
         }]);
         assert_eq!(run.buy_shop_item(&c, "kept_flame"), Err(ShopError::SoldOut));
-        assert_eq!(run.currency, 100);
+        assert_eq!(run.currency, 1_000);
         // Rejection by insufficient funds.
         run.shop = Some(vec![ShopOffer {
             id: "kept_flame".to_string(),
-            cost: 200,
+            cost: 2_000,
             stock: 1,
         }]);
         assert_eq!(run.buy_shop_item(&c, "kept_flame"), Err(ShopError::NotEnoughCurrency));
-        assert_eq!(run.currency, 100);
+        assert_eq!(run.currency, 1_000);
         assert_eq!(run.shop.as_ref().unwrap()[0].stock, 1);
         // Rejection by unknown item.
         run.shop = Some(vec![ShopOffer {
@@ -2811,7 +2811,7 @@ mod tests {
             stock: 1,
         }]);
         assert_eq!(run.buy_shop_item(&c, "not_a_thing"), Err(ShopError::UnknownItem));
-        assert_eq!(run.currency, 100);
+        assert_eq!(run.currency, 1_000);
         // Rejection after validation but before the effect: a purge for a curse the run does not hold
         // charges nothing and takes no stock.
         run.shop = Some(vec![ShopOffer {
@@ -2823,7 +2823,7 @@ mod tests {
             run.buy_shop_item(&c, "purge::leadened_soles"),
             Err(ShopError::UnknownItem)
         );
-        assert_eq!(run.currency, 100);
+        assert_eq!(run.currency, 1_000);
         assert_eq!(run.shop.as_ref().unwrap()[0].stock, 1);
         // Rejection by effect failure: a reroll whose draft offer is already gone charges nothing.
         run.offer = None;
@@ -2833,7 +2833,7 @@ mod tests {
             stock: 1,
         }]);
         assert_eq!(run.buy_shop_item(&c, "new_hand"), Err(ShopError::UnknownItem));
-        assert_eq!(run.currency, 100);
+        assert_eq!(run.currency, 1_000);
         assert_eq!(run.shop.as_ref().unwrap()[0].stock, 1);
         // Nothing leaked into mods or lives.
         assert_eq!(run.mods.run_speed_mul, before_speed);
@@ -2857,7 +2857,7 @@ mod tests {
         assert!(run.upgrades.iter().any(|id| id == "zephyr_tread"));
         assert_eq!(run.buy_shop_item(&c, "upgrade::zephyr_tread"), Err(ShopError::SoldOut));
         // An upgrade id that is not in content is refused without charging.
-        run.currency = 100;
+        run.currency = 1_000;
         run.shop = Some(vec![ShopOffer {
             id: "upgrade::not_a_real_upgrade".to_string(),
             cost: SHOP_UPGRADE_COST,
@@ -2867,7 +2867,7 @@ mod tests {
             run.buy_shop_item(&c, "upgrade::not_a_real_upgrade"),
             Err(ShopError::UnknownItem)
         );
-        assert_eq!(run.currency, 100);
+        assert_eq!(run.currency, 1_000);
     }
 
     #[test]
@@ -2902,12 +2902,12 @@ mod tests {
             "a counter is only sold against a permanent the run has"
         );
         // Buying a counter applies its mods and records the purchase for rebuilds.
-        run.currency = 100;
+        run.currency = 1_000;
         let before_dash = run.mods.dash_speed_mul;
         assert_eq!(run.buy_shop_item(&c, "counter_pallbearer"), Ok(ShopPurchase::Mods));
         assert!(run.mods.dash_speed_mul > before_dash);
         assert!(run.purchased_mods.iter().any(|id| id == "counter_pallbearer"));
-        assert_eq!(run.currency, 100 - 35);
+        assert_eq!(run.currency, 1_000 - 440);
     }
 
     #[test]
@@ -2924,14 +2924,14 @@ mod tests {
             (run.mods.run_speed_mul - 0.8).abs() < 1e-6,
             "two stacks clamp at the floor"
         );
-        run.currency = 100;
+        run.currency = 1_000;
         run.shop = Some(vec![ShopOffer {
             id: "purge::leadened_soles".to_string(),
             cost: SHOP_PURGE_COST,
             stock: 2,
         }]);
         assert_eq!(run.buy_shop_item(&c, "purge::leadened_soles"), Ok(ShopPurchase::Mods));
-        assert_eq!(run.currency, 100 - SHOP_PURGE_COST);
+        assert_eq!(run.currency, 1_000 - SHOP_PURGE_COST);
         assert_eq!(run.curses, vec!["leadened_soles".to_string()]);
         assert!((run.mods.run_speed_mul - 0.88).abs() < 1e-6, "one stack remains");
         assert_eq!(run.buy_shop_item(&c, "purge::leadened_soles"), Ok(ShopPurchase::Mods));
@@ -2947,11 +2947,11 @@ mod tests {
         let leadened = c.curse("leadened_soles").expect("curse exists").mods.clone();
         run.mods.apply(&leadened);
         run.curses = vec!["leadened_soles".to_string()];
-        run.currency = 200;
+        run.currency = 1_000;
         run.shop = Some(vec![
             ShopOffer {
                 id: "worn_treads".to_string(),
-                cost: 24,
+                cost: 300,
                 stock: 1,
             },
             ShopOffer {

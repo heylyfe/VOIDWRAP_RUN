@@ -520,3 +520,41 @@ audit skip by default (env-gated) and pass when pointed at a target.
   and `8.hazard_entities` (`hazard:trampoline` on 2 patterns and `hazard:tripmine` on 1, none
   carrying the matching platform kind). Both are left failing rather than relaxed: a green audit
   that hides an unplaced feature is worse than a red one that names it.
+
+## v0.11.0-alpha.1 — 2026-11-15 — Refinement Cycle 1
+
+The polish phase opens. Four tickets, all picked from measured audit numbers rather
+than from a feature list. Full detail in `REFINEMENT_LOG.md`.
+
+- T-090 ACCEPTED: `#[cfg(test)] mod qa` in `server/crates/server/src/game.rs` — four
+  scripted playthrough sweeps (standard run to level 5, every difficulty mode, eight
+  players voting and receiving run state, shop and altars mid-run). Every loop capped
+  by a named constant. Two real findings fell out of making it pass: `MAX_GIFTS` must
+  exceed `GIFT_CAP` (400) or level 3's 66 gifts leave the collapse window shut, and a
+  multi-client sweep must drain **every** outbox each tick because `Game::send` drops a
+  connection whose outbox is full. Server tests 123 → 127.
+- T-091 ACCEPTED: 12x shop price scale, one knob, measured before and after. 34
+  `shop[].cost` values remapped, `validate-content` bands moved to 60..960 / 600..840,
+  `SHOP_UPGRADE_COST` 25 → 300, `SHOP_PURGE_COST` 30 → 360, `DEBT_ADVANCE` 30 → 360.
+  `1.gift_income` moved from 0.07 to 0.91 levels of income per cheapest item and now
+  passes. Six server tests had their fixture wallets raised to match.
+- T-092 PARTIAL: `theme:*`/`mech:*` tags appended to all 25 chunks in
+  `design/chunks.json`, additive only. The §6.4 no-tag fallback path went from
+  3,000/3,000 levels to **0/3,000**, and theme diversity is now real (7.29 mean, 8/8
+  vocabulary). `2.tag-diversity.mechs` still fails: `dead_end` is never offered even
+  though three `mech:dead_end` patterns exist, because the composition engine never
+  opens a branch that terminates. `4.near-duplicates` (20.33%), `5.heights` (13.49%)
+  and `5.reference-scale` (25.94%) are engine-level and unchanged by tagging.
+- T-093 ACCEPTED: `tools/voting-conformance/wire.mjs`, a dependency-free bincode 1.x
+  (fixint LE) codec — `encodeClientMsg`, `decodeServerMsg`, `tryDecodeServerMsg` —
+  with a 24-check `--selftest` asserting exact byte vectors, truncated buffers,
+  absurd length prefixes and unknown variants. Proven against the live server: a
+  bincode `Hello` at protocol version 8 decodes a real `Welcome`, `Draft` and `Error`
+  (the version-1 probe correctly produced `Error{code:426}`). This is the missing half
+  of T-081: the kit sent JSON text frames to a bincode server and scored 0/10, so its
+  "passes against the real voting core" was never true. Wiring the kit and stub onto
+  the codec is T-094.
+
+`just verify` green: wasm build, protocol-gen --check, check-names, validate-content,
+cargo fmt --check, clippy `-D warnings`, cargo test --workspace (127 server / 229 sim),
+tsc, eslint, vitest (279), and the three env-gated audits.

@@ -192,9 +192,9 @@ else {
     checkText(w, "effect", s.effect, 60);
     if (!SHOP_KINDS.includes(s.kind)) err(`${w}.kind=${JSON.stringify(s.kind)} not one of ${SHOP_KINDS.join(", ")}`);
     else counts[s.kind] += 1;
-    if (!Number.isInteger(s.cost) || s.cost < 5 || s.cost > 80) err(`${w}.cost=${s.cost} must be an integer 5..80`);
+    if (!Number.isInteger(s.cost) || s.cost < 60 || s.cost > 960) err(`${w}.cost=${s.cost} must be an integer 60..960`);
     if (!Number.isInteger(s.stock) || s.stock < 1 || s.stock > 3) err(`${w}.stock=${s.stock} must be an integer 1..3`);
-    if (s.kind === "life" && !(s.cost >= 50 && s.cost <= 70)) err(`${w}.cost=${s.cost} must be 50..70 for a life`);
+    if (s.kind === "life" && !(s.cost >= 600 && s.cost <= 840)) err(`${w}.cost=${s.cost} must be 600..840 for a life`);
     if (s.kind === "mods" || s.kind === "counter" || s.kind === "perk") {
       checkMods(w, s.mods, false);
       for (const key of Object.keys(s.mods ?? {})) {

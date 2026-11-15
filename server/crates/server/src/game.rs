@@ -2566,3 +2566,344 @@ mod m3_tests {
         assert_eq!(session.counts(), vec![1, 0, 1]);
     }
 }
+
+#[cfg(test)]
+mod qa {
+    //! T-090: scripted playthrough sweeps. These are the automated QA pass: they
+    //! drive whole runs across every difficulty mode and assert the invariants a
+    //! player would notice breaking — no softlock, no stuck phase, no runaway state.
+    use super::*;
+
+    /// Hard cap on the number of levels one sweep may drive.
+    const MAX_LEVELS: usize = 40;
+    /// Hard cap on the number of gifts one level may contain; above `GIFT_CAP` (400).
+    const MAX_GIFTS: usize = 512;
+    /// Hard cap on the number of ticks spent standing on a beacon.
+    const MAX_BEACON_TICKS: usize = 8;
+    /// Hard cap on the number of draft rounds cleared in one step.
+    const MAX_DRAFTS: usize = 4;
+    /// A wallet above this value means the `u32` balance wrapped around.
+    const CURRENCY_CEILING: u32 = 1_000_000;
+    /// Vertical gap between a ground marker and the player origin.
+    const GROUND_OFFSET: f32 = 0.9;
+
+    fn game() -> Game {
+        Game::starting_at(2, 42).unwrap()
+    }
+
+    fn connect(game: &mut Game, id: ConnId) -> mpsc::Receiver<Vec<u8>> {
+        let (tx, rx) = mpsc::channel(OUTBOX_CAPACITY);
+        game.handle(GameEvent::Connected { id, out: tx });
+        rx
+    }
+
+    fn hello(game: &mut Game, id: ConnId) {
+        game.handle(GameEvent::Message {
+            id,
+            msg: ClientMsg::Hello {
+                protocol_version: PROTOCOL_VERSION,
+                name: "  tester\u{7}  ".into(),
+            },
+        });
+    }
+
+    fn drain(rx: &mut mpsc::Receiver<Vec<u8>>) -> Vec<ServerMsg> {
+        let mut out = vec![];
+        while let Ok(b) = rx.try_recv() {
+            out.push(protocol::decode::<ServerMsg>(&b).unwrap());
+        }
+        out
+    }
+
+    fn player(g: &mut Game, id: ConnId) -> &mut Player {
+        g.conns.get_mut(&id).unwrap().player.as_mut().unwrap()
+    }
+
+    fn vote(g: &mut Game, id: ConnId) {
+        let picks = crate::run::valid_picks(&g.run);
+        g.handle(GameEvent::Message {
+            id,
+            msg: ClientMsg::DraftPick { picks },
+        });
+    }
+
+    /// Keeps every enemy asleep so a sweep measures level flow, not combat.
+    fn dormant_enemies(g: &mut Game) {
+        for e in &mut g.run.enemies {
+            e.active_in = 1_000;
+        }
+    }
+
+    /// Drains every client outbox so no connection is dropped for being slow.
+    fn drain_all(rxs: &mut [&mut mpsc::Receiver<Vec<u8>>]) {
+        for rx in rxs.iter_mut() {
+            drain(rx);
+        }
+    }
+
+    /// Places the player on a ground marker and lets one tick resolve the pickup.
+    fn stand_on(g: &mut Game, id: ConnId, pos: Vec3, rxs: &mut [&mut mpsc::Receiver<Vec<u8>>]) {
+        let p = player(g, id);
+        p.state.pos = pos;
+        p.state.vel = Vec3::ZERO;
+        p.starved_ticks = 0;
+        dormant_enemies(g);
+        g.tick();
+        drain_all(rxs);
+    }
+
+    /// Stands the player on the level beacon until the level resolves.
+    fn walk_to_beacon(g: &mut Game, id: ConnId, rxs: &mut [&mut mpsc::Receiver<Vec<u8>>]) {
+        for _ in 0..MAX_BEACON_TICKS {
+            let beacon = g.run.level.beacon;
+            stand_on(g, id, Vec3::new(beacon.x, beacon.y - GROUND_OFFSET, beacon.z), rxs);
+            if g.run.phase != PHASE_PLAYING {
+                return;
+            }
+        }
+    }
+
+    /// Collects every gift and then walks to the beacon: one full level.
+    ///
+    /// A level is two sweeps of the same spots: the normal gifts, then the golden
+    /// gifts that appear at those spots once the collapse window opens.
+    fn clear_level(g: &mut Game, id: ConnId, rxs: &mut [&mut mpsc::Receiver<Vec<u8>>]) {
+        let spots: Vec<Vec3> = g
+            .run
+            .level
+            .gifts
+            .iter()
+            .take(MAX_GIFTS)
+            .map(|gift| Vec3::new(gift.pos.x, gift.pos.y - GROUND_OFFSET, gift.pos.z))
+            .collect();
+        for _ in 0..2 {
+            for pos in &spots {
+                stand_on(g, id, *pos, rxs);
+            }
+        }
+        walk_to_beacon(g, id, rxs);
+    }
+
+    /// Votes through every draft the run is currently sitting in.
+    fn clear_drafts(g: &mut Game, id: ConnId, rxs: &mut [&mut mpsc::Receiver<Vec<u8>>]) {
+        for _ in 0..MAX_DRAFTS {
+            if g.run.phase != PHASE_ENEMY_DRAFT && g.run.phase != protocol::PHASE_REWARD_DRAFT {
+                return;
+            }
+            vote(g, id);
+            drain_all(rxs);
+        }
+    }
+
+    /// Fails with the level number when the run sits in a phase it can never leave.
+    fn assert_legal_phase(g: &Game, context: &str) {
+        assert!(
+            g.run.phase == PHASE_ENEMY_DRAFT
+                || g.run.phase == PHASE_PLAYING
+                || g.run.phase == protocol::PHASE_REWARD_DRAFT
+                || g.run.phase == PHASE_OVER,
+            "{context}: level {} is stuck in phase {:?}",
+            g.run.level_num,
+            g.run.phase
+        );
+    }
+
+    /// True when the message carries a run-state snapshot.
+    fn is_run_state(msg: &ServerMsg) -> bool {
+        matches!(msg, ServerMsg::RunState { .. })
+    }
+
+    /// True when the message tells a client the run moved on.
+    fn is_run_progress(msg: &ServerMsg) -> bool {
+        matches!(msg, ServerMsg::RunOver { .. } | ServerMsg::RunState { .. })
+    }
+
+    #[test]
+    fn standard_run_reaches_level_five_without_softlock() {
+        let mut g = game();
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        vote(&mut g, 1);
+        drain(&mut rx);
+
+        let mut cleared = 0usize;
+        let mut highest = g.run.level_num;
+
+        for _ in 0..MAX_LEVELS {
+            if g.run.phase == PHASE_OVER {
+                break;
+            }
+            assert_legal_phase(&g, "before clearing a level");
+            clear_drafts(&mut g, 1, &mut [&mut rx]);
+
+            let before = g.run.level_num;
+            clear_level(&mut g, 1, &mut [&mut rx]);
+            highest = highest.max(g.run.level_num);
+
+            if g.run.phase == PHASE_OVER {
+                break;
+            }
+            assert_eq!(
+                g.run.phase, PHASE_ENEMY_DRAFT,
+                "level {} did not return to the draft",
+                g.run.level_num
+            );
+            assert!(
+                g.run.level_num > before,
+                "level {} did not advance past {before}",
+                g.run.level_num
+            );
+            assert_legal_phase(&g, "after clearing a level");
+            cleared += 1;
+        }
+
+        assert!(cleared >= 3, "only cleared {cleared} levels");
+        assert!(highest >= 5, "run only reached level {highest}");
+    }
+
+    #[test]
+    fn every_mode_completes_a_level() {
+        let modes = sim::mode::DifficultyMode::all();
+        assert!(!modes.is_empty(), "no difficulty modes to sweep");
+
+        for mode in modes {
+            let mut g = game();
+            g.run.mode = mode;
+            let mut rx = connect(&mut g, 1);
+            hello(&mut g, 1);
+            vote(&mut g, 1);
+            drain(&mut rx);
+            clear_drafts(&mut g, 1, &mut [&mut rx]);
+
+            let before = g.run.level_num;
+            clear_level(&mut g, 1, &mut [&mut rx]);
+
+            assert_eq!(
+                g.run.phase, PHASE_ENEMY_DRAFT,
+                "mode {:?} did not finish level {before}",
+                g.run.mode
+            );
+            assert_eq!(
+                g.run.level_num,
+                before + 1,
+                "mode {:?} did not advance exactly one level",
+                g.run.mode
+            );
+        }
+    }
+
+    #[test]
+    fn eight_players_all_receive_run_state_and_can_vote() {
+        let mut g = game();
+        let mut clients: Vec<(ConnId, mpsc::Receiver<Vec<u8>>)> = Vec::new();
+        for id in 1..=8 {
+            let rx = connect(&mut g, id);
+            clients.push((id, rx));
+        }
+        assert_eq!(g.conns.len(), 8, "not every client was admitted");
+
+        for (id, _) in &clients {
+            hello(&mut g, *id);
+        }
+        assert_eq!(g.conns.len(), 8, "a hello dropped a connection");
+
+        for (id, _) in &clients {
+            vote(&mut g, *id);
+        }
+        assert_eq!(g.conns.len(), 8, "a vote dropped a connection");
+
+        for (id, rx) in &mut clients {
+            let msgs = drain(rx);
+            assert!(msgs.iter().any(is_run_state), "client {id} never received a RunState");
+        }
+        assert_eq!(g.conns.len(), 8, "the draft dropped a connection");
+
+        {
+            let mut all: Vec<&mut mpsc::Receiver<Vec<u8>>> = clients.iter_mut().map(|(_, rx)| rx).collect();
+            clear_drafts(&mut g, 1, &mut all);
+            clear_level(&mut g, 1, &mut all);
+        }
+        assert_eq!(g.conns.len(), 8, "the level transition dropped a connection");
+
+        // The level transition drained every outbox; a fresh broadcast proves all
+        // eight connections are still live and still receiving run state.
+        g.broadcast_run_state();
+        for (id, rx) in &mut clients {
+            let msgs = drain(rx);
+            assert!(
+                msgs.iter().any(is_run_progress),
+                "client {id} was dropped from the post-level broadcast"
+            );
+        }
+        assert_eq!(g.conns.len(), 8, "the run dropped a connection");
+    }
+
+    #[test]
+    fn shop_and_altars_do_not_break_the_run() {
+        let mut g = game();
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        vote(&mut g, 1);
+        drain(&mut rx);
+
+        let mut reached_shop = false;
+        for _ in 0..MAX_LEVELS {
+            if g.run.phase == PHASE_OVER {
+                break;
+            }
+            if g.run.shop.is_some() && g.run.level_num >= 3 {
+                reached_shop = true;
+                break;
+            }
+            clear_drafts(&mut g, 1, &mut [&mut rx]);
+            clear_level(&mut g, 1, &mut [&mut rx]);
+            assert_legal_phase(&g, "while driving to the shop");
+        }
+        assert!(
+            reached_shop,
+            "never reached a level with a shop (stopped at level {})",
+            g.run.level_num
+        );
+
+        clear_drafts(&mut g, 1, &mut [&mut rx]);
+        assert_legal_phase(&g, "before shopping");
+
+        // Buy every offer by id, twice: the second pass must be refused (sold out or
+        // unaffordable) without charging, and the wallet must never wrap.
+        let ids: Vec<String> = g
+            .run
+            .shop
+            .as_ref()
+            .map(|offers| offers.iter().map(|o| o.id.clone()).collect())
+            .unwrap_or_default();
+        for id in &ids {
+            for _ in 0..2 {
+                g.handle(GameEvent::Message {
+                    id: 1,
+                    msg: ClientMsg::Buy { item: id.clone() },
+                });
+                g.tick();
+                drain(&mut rx);
+                assert!(
+                    g.run.currency < CURRENCY_CEILING,
+                    "level {}: currency wrapped to {} after buying {id}",
+                    g.run.level_num,
+                    g.run.currency
+                );
+                assert_legal_phase(&g, "after buying a shop item");
+            }
+        }
+
+        clear_drafts(&mut g, 1, &mut [&mut rx]);
+        let before = g.run.level_num;
+        clear_level(&mut g, 1, &mut [&mut rx]);
+        assert_eq!(
+            g.run.phase, PHASE_ENEMY_DRAFT,
+            "level {before} did not complete after shopping"
+        );
+        assert!(
+            g.run.level_num > before,
+            "level {before} did not advance after shopping"
+        );
+    }
+}

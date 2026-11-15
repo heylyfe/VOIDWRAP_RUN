@@ -46,7 +46,7 @@ for (const cat of catalogs) {
 // --- the constants the server actually uses (server/crates/server/src/run.rs) -----------------
 const GREATER_EVERY = 10;
 const SHOP_OFFER = 4;
-const SHOP_UPGRADE_COST = 25;
+const SHOP_UPGRADE_COST = 300;
 const SHOP_UPGRADE_DRAWS = 2;
 
 /** Mode knobs, mirroring `sim::mode::DifficultyMode`. */
