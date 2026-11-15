@@ -67,6 +67,9 @@ class Client {
     this.decodeFailures = [];
     this.closed = false;
     this.ws = null;
+    this.level = null;
+    this.pos = null;
+    this.collected = new Set();
   }
 
   connect(url) {
@@ -97,6 +100,12 @@ class Client {
         msg.type = msg.variant;
         this.log.push({ at: Date.now(), msg });
         if (msg.variant === 'Error') this.errors.push(msg);
+        if (msg.variant === 'Level') {
+          this.level = msg.data;
+          this.collected = new Set();
+        } else if (msg.variant === 'Snapshot') {
+          this.pos = msg.you && msg.you.pos ? msg.you.pos : null;
+        }
         this.react(msg);
       };
     });
@@ -111,19 +120,61 @@ class Client {
     }
   }
 
-  /** Random-walk so the player actually traverses the level and meets gifts. */
+  /**
+   * Steer toward the nearest uncollected gift.
+   *
+   * Returns `null` when there is nothing to steer to (no `Level` yet, no `Snapshot`
+   * yet, or every gift taken), which keeps the random walk as the fallback.
+   */
+  steer() {
+    const level = this.level;
+    const pos = this.pos;
+    if (!level || !pos || !Array.isArray(level.gifts)) return null;
+    let best = null;
+    let bestD = Infinity;
+    for (const gift of level.gifts) {
+      if (this.collected.has(gift.id)) continue;
+      const dx = gift.pos.x - pos.x;
+      const dz = gift.pos.z - pos.z;
+      const d = dx * dx + dz * dz;
+      if (d < bestD) {
+        bestD = d;
+        best = gift;
+      }
+    }
+    if (!best) return null;
+    if (bestD < 2.25) this.collected.add(best.id);
+    const dx = best.pos.x - pos.x;
+    const dz = best.pos.z - pos.z;
+    const len = Math.hypot(dx, dz) || 1;
+    const rise = best.pos.y - pos.y;
+    return {
+      x: dx / len,
+      z: dz / len,
+      jump: Boolean(pos.grounded) && (rise > 0.3 || len > 2.0),
+    };
+  }
+
+  /**
+   * Walk the level: steer at the nearest gift when the level is known, otherwise
+   * random-walk so a server that never sends `Level` still sees movement.
+   */
   startWalking() {
     this.seq = 0;
     this.walkTimer = setInterval(() => {
       if (this.closed) return;
+      const aim = this.steer();
       const frames = [];
       for (let i = 0; i < 4; i += 1) {
         this.seq += 1;
+        const moveX = aim ? Math.round(aim.x * 127) : Math.round((Math.random() * 2 - 1) * 127);
+        const moveZ = aim ? Math.round(aim.z * 127) : Math.round((Math.random() * 2 - 1) * 127);
+        const jump = aim ? aim.jump : Math.random() < 0.05;
         frames.push({
           seq: this.seq,
-          move_x: Math.round((Math.random() * 2 - 1) * 127),
-          move_z: Math.round((Math.random() * 2 - 1) * 127),
-          buttons: Math.random() < 0.05 ? 1 : 0,
+          move_x: moveX,
+          move_z: moveZ,
+          buttons: jump ? 1 : 0,
         });
       }
       this.send({ variant: 'Inputs', frames });

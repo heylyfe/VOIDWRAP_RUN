@@ -695,3 +695,31 @@ achievements, 85 patterns).
 protocol-gen --check, check-names (582 files), validate-content (20 enemies, 10
 upgrades, 19 curses, 4 classes, 34 shop items, 3 events, 15 milestones, 4 altars, 10
 achievements, 100 patterns).
+
+## v0.18.0-alpha.1 — Refinement Cycle 8
+
+- T-104 PASS: 20 low-level patterns (`pa3_*`, min_level 1-3) appended to
+  `design/patterns-a.json`, 20 of 20 accepted.
+- T-105 PASS: 12 level-1 patterns (`pa4_*`, min_level 1) appended, 12 of 12 accepted.
+  Pattern pool 100 -> 132.
+- `4.near-duplicates` 14.93% -> **0.00% PASS** (threshold 0.2%). The last unblocked
+  pattern metric is now green.
+- `5.heights` 9.75% -> **7.03%** (threshold 2%, still FAIL) — dominated by the four
+  frozen `chunks.json` patterns.
+- `1.pattern-repeat.within-level` 17.34% -> 11.38%. `5.reference-scale` 5.85% -> 4.12%.
+  `0.input` PASS. Pattern audit 11/13 -> **12/13**.
+- T-103 PARKED: `tools/voting-conformance/wire.mjs` did not decode `Level`/`Snapshot`
+  (returned `truncated`), so the sweep's bot never saw a gift position. Fixed properly —
+  added `Vec3`/`Aabb`/`Platform`/`Gift`/`Altar`/`LevelData`/`ControllerState` field tables,
+  `Level` decodes fully, `Snapshot` decodes through `you`. Voting kit re-verified at
+  10/10 + 6/6 + 3/3. The bot now steers at the nearest gift but still cannot finish a
+  level: it needs all 88 gifts plus the beacon, and straight-line steering walks off
+  ledges. Needs graph pathfinding. Playthrough stays at 7/11, 3 skipped, 1 failed.
+- PARKED: playthrough `level-progression` (needs pathfinding), sweep repeatability (one
+  run per server start), `8.hazard_entities`, `5.heights` (frozen `chunks.json`),
+  `pb_machine_gauntlet` pillars.
+
+`just verify` green: 127 server / 234 sim / 279 vitest, clippy `-D warnings`,
+protocol-gen --check, check-names (582 files), validate-content (20 enemies, 10
+upgrades, 19 curses, 4 classes, 34 shop items, 3 events, 15 milestones, 4 altars, 10
+achievements, 132 patterns).

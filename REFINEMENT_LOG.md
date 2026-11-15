@@ -714,3 +714,129 @@ Release: `v0.17.0-alpha.1`.
    that respects the graph-edge invariant.
 3. **The assembly tail** — trap removal plus id renumbering would retire the whole class
    of `no_plan` failures and unblock `pb_machine_gauntlet`.
+
+## Refinement Cycle 8 — near-duplicates closed
+
+### Baseline (400 seeds, 6,000 level records, `v0.17.0-alpha.1`)
+
+| audit | result |
+|---|---|
+| pattern | **11/13** — `4.near-duplicates` 14.93%, `5.heights` 9.75% |
+| economy | **7/8** — `8.hazard_entities` |
+| matchmaker conformance | **8/8** |
+| voting conformance | **10/10** matrix, **6/6** selftest, **3/3** real |
+| playthrough | **7/11**, 3 skipped, 1 failed |
+
+The 400-seed run is the honest number: the 200-seed sample in Cycle 7 read 11.80%,
+but near-duplicates rise with seed count because more seeds reach the levels where the
+pool is thinnest.
+
+### What was picked and why
+
+1. **`4.near-duplicates`** — largest measured gap, and the only failing pattern metric
+   not blocked on a frozen file.
+2. **Playthrough `level-progression`** — the sweep is the only end-to-end signal and it
+   was stuck at level 1, SKIPping draft/vote/shop. Highest leverage per fix.
+3. **`8.hazard_entities`** — deferred; parked twice already and needs a hazard placement
+   pass that respects the graph-edge invariant. Not attempted this cycle.
+
+### Tickets dispatched
+
+**T-104 — 20 low-level patterns** (`inkling-design`, 20 of 20 accepted). Level-3 plans
+are 23 slots and only 36 path/junction patterns were eligible at level 3, so two level-3
+plans always overlapped. Result: `4.near-duplicates` **14.93% -> 0.35%**.
+
+**T-105 — 12 level-1 patterns** (`inkling-design`, 12 of 12 accepted). After T-104 every
+remaining flagged pair was at level 1, where only 25 path/junction patterns were eligible
+for a 13–17 slot plan. Result: `4.near-duplicates` **0.35% -> 0.00% PASS**.
+
+**T-103 — playthrough navigation bot** (`deepseek`, then a lead fix). **PARKED**, see
+below.
+
+### The validator bug that rejected 20 good patterns
+
+The first T-104 run rejected all 20 patterns for "gift slot off-platform". The checker
+required a non-elevated gift slot to sit within 0.05 u of a platform top, but the shipped
+convention is `top + 0.3` — 455 of 552 existing gift slots use it. The checker was wrong,
+not the data; it now allows `top - 0.01 .. top + 0.35` (and `+0.85` for elevated). Worth
+recording because the same checker gates every future pattern batch.
+
+### T-103: what was actually blocking the sweep
+
+The dispatch returned a 629-line reconstruction with no wire imports — the worker has no
+repo access, so it could not reuse the codec. Doing it as a lead fix exposed the real
+blocker: `tools/voting-conformance/wire.mjs` **deliberately does not decode `Level`,
+`Snapshot` or `RunOver`** — it returns `{variant, truncated: true}` for them. The bot
+therefore never saw a gift position.
+
+That was fixed properly: `wire.mjs` gained `Vec3`, `Aabb`, `Platform`, `Gift`, `Altar`,
+`LevelData` and `ControllerState` field tables, `Level` now decodes fully, and `Snapshot`
+decodes through `you` and stops (the player/enemy views are large and nothing reads them).
+Verified: `Level` decodes 88 gifts / 61 platforms, `Snapshot.you.pos` decodes, and the
+voting kit still reports **10/10 + 6/6 + 3/3** against a fresh stub.
+
+The bot now steers at the nearest uncollected gift (`Client.steer`) with the random walk
+kept as the fallback. It still does not finish a level: a level needs **all 88 gifts**
+collected and then the beacon reached, and straight-line steering walks off ledges — the
+run reaches `PHASE_OVER` (3) instead of advancing. 200 s does not help. **PARKED**: needs
+graph pathfinding over `LevelData.platforms` plus hazard avoidance, which is a project,
+not a polish diff.
+
+Also noted: the sweep can only run **once per server start** — the server keeps one global
+run, so a second sweep sees `phase 3` and rejects every class. A `Restart` at sweep start
+would fix it; logged, not done.
+
+### Results
+
+| metric | before | after |
+|---|---|---|
+| `4.near-duplicates` | 14.93% | **0.00% PASS** |
+| `5.heights` | 9.75% | **7.03%** (still FAIL) |
+| `1.pattern-repeat.within-level` | 17.34% | **11.38%** |
+| `5.reference-scale` | 5.85% | **4.12% PASS** |
+| `0.input` | PASS | **PASS** |
+| pattern audit | 11/13 | **12/13** |
+
+`5.heights` improved again as a side effect of pool dilution. It remains dominated by the
+four frozen `chunks.json` patterns.
+
+### Autonomous choices, for review
+
+- **Two pattern batches in one cycle.** T-104 alone left 0.35% against a 0.2% threshold;
+  a second, smaller batch aimed only at level 1 closed it. Both were the same proven
+  dispatch shape, so the second was cheap.
+- **Extended the shared wire codec rather than forking it.** `wire.mjs` is used by both
+  the voting kit and the sweep; adding the struct tables keeps one decoder. Re-ran the
+  voting kit to prove no regression.
+- **Kept the steering even though it does not finish a level.** It is strictly better
+  than the random walk (the bot now moves toward gifts instead of wandering) and it is
+  the foundation the pathfinding work needs. No check was weakened.
+
+### PARKED, with the reason measured
+
+- **Playthrough `level-progression`** — needs graph pathfinding + hazard avoidance over
+  `LevelData.platforms`. Straight-line steering dies before collecting 88 gifts.
+- **Playthrough repeatability** — one sweep per server start; needs a `Restart` at start.
+- **`8.hazard_entities`** (economy audit) — parked twice; needs a hazard placement pass
+  that respects the graph-edge invariant.
+- **`5.heights` at 7.03%** — dominated by the four frozen `chunks.json` patterns. Editing
+  them breaks the generator (measured in Cycle 6: 190 `no_plan` records). Human decision.
+- **`pb_machine_gauntlet`'s three unreachable pillars** — unchanged from Cycle 7.
+
+### Merges and release
+
+`just verify` fully green: 127 server / 234 sim / 279 vitest, clippy `-D warnings`,
+protocol-gen --check, check-names (582 files), validate-content (20 enemies, 10 upgrades,
+19 curses, 4 classes, 34 shop items, 3 events, 15 milestones, 4 altars, 10 achievements,
+**132 patterns**).
+
+Release: `v0.18.0-alpha.1`.
+
+### Top 3 candidates for Cycle 9
+
+1. **`5.heights`** — 7.03%, the last failing pattern metric, and blocked on a frozen file.
+   Either get the human's decision on `chunks.json` or find the assembly invariant that
+   broke in Cycle 6.
+2. **Playthrough pathfinding** — would turn 7/11 into 11/11 and give every later cycle
+   real coverage of draft, vote and shop. Needs a platform-graph BFS in the sweep.
+3. **`8.hazard_entities`** — the last economy-audit failure.

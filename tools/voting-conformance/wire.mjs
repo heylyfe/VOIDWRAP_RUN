@@ -104,6 +104,55 @@ const STRUCT_FIELDS = Object.freeze({
     ['upgrades', 'vec:string'],
     ['curses', 'vec:string'],
   ]),
+  Vec3: Object.freeze([
+    ['x', 'f32'],
+    ['y', 'f32'],
+    ['z', 'f32'],
+  ]),
+  Aabb: Object.freeze([
+    ['min', 'Vec3'],
+    ['max', 'Vec3'],
+  ]),
+  Platform: Object.freeze([
+    ['id', 'u16'],
+    ['kind', 'u8'],
+    ['bounds', 'Aabb'],
+  ]),
+  Gift: Object.freeze([
+    ['id', 'u16'],
+    ['pos', 'Vec3'],
+    ['kind', 'u8'],
+  ]),
+  Altar: Object.freeze([
+    ['id', 'u16'],
+    ['pos', 'Vec3'],
+  ]),
+  LevelData: Object.freeze([
+    ['level', 'u32'],
+    ['seed', 'u32'],
+    ['spawn', 'Vec3'],
+    ['beacon', 'Vec3'],
+    ['kill_y', 'f32'],
+    ['platforms', 'vec:Platform'],
+    ['gifts', 'vec:Gift'],
+    ['event', 'u8'],
+    ['altars', 'vec:Altar'],
+  ]),
+  ControllerState: Object.freeze([
+    ['pos', 'Vec3'],
+    ['vel', 'Vec3'],
+    ['grounded', 'bool'],
+    ['coyote_frames', 'u8'],
+    ['jump_buffer_frames', 'u8'],
+    ['prev_buttons', 'u8'],
+    ['air_jumps_used', 'u8'],
+    ['ability_cooldown_frames', 'u16'],
+    ['ability_active_frames', 'u8'],
+    ['ability_dir', 'Vec3'],
+    ['class', 'u8'],
+    ['ward_frames', 'u16'],
+    ['stagger_frames', 'u8'],
+  ]),
 });
 
 // ---------------------------------------------------------------------------
@@ -458,13 +507,26 @@ export function decodeServerMsg(buf) {
         tick: r.u32('tick'),
       };
 
-    // Level / Snapshot / RunOver carry large payloads (LevelData, the full
-    // snapshot, RunSummary) that the conformance kit never inspects. Decoding
-    // them would be wasted work, so we stop right after the variant index and
-    // flag the result as truncated. Callers that need the payload must extend
-    // this file.
+    // `Level` carries the whole level (platforms, gifts, altars) and `Snapshot`
+    // carries the local controller state. The playthrough sweep navigates with
+    // both, so they are decoded. `Snapshot` stops after `you`: the player and
+    // enemy views are large and nothing reads them.
     case 'Level':
+      return { variant: variantName, data: readStruct(r, 'LevelData', 'data') };
+
     case 'Snapshot':
+      return {
+        variant: variantName,
+        tick: r.u32('tick'),
+        level: r.u32('level'),
+        last_input_seq: r.u32('last_input_seq'),
+        you: readStruct(r, 'ControllerState', 'you'),
+      };
+
+    // RunOver carries a RunSummary the conformance kit never inspects. Decoding
+    // it would be wasted work, so we stop right after the variant index and flag
+    // the result as truncated. Callers that need the payload must extend this
+    // file.
     case 'RunOver':
       return { variant: variantName, truncated: true };
 
