@@ -236,6 +236,10 @@ async function main() {
   for (let i = 0; i < clients.length; i += 1) {
     if (clients[i].closed) continue;
     clients[i].send({ variant: 'Hello', protocol_version: PROTOCOL_VERSION, name: clients[i].name });
+    // A finished run leaves the server in PHASE_OVER, where every class pick is
+    // rejected. Restart is a no-op unless the run is over, so sending it here is
+    // safe on a fresh server and makes the sweep repeatable on a used one.
+    clients[i].send({ variant: 'Restart' });
     clients[i].send({ variant: 'ChooseClass', class: i % CLASS_COUNT });
   }
   push('connect', connected === CLIENTS, connected + '/' + CLIENTS + ' clients connected');

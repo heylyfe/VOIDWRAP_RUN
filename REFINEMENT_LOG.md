@@ -840,3 +840,92 @@ Release: `v0.18.0-alpha.1`.
 2. **Playthrough pathfinding** — would turn 7/11 into 11/11 and give every later cycle
    real coverage of draft, vote and shop. Needs a platform-graph BFS in the sweep.
 3. **`8.hazard_entities`** — the last economy-audit failure.
+
+---
+
+## Refinement Cycle 9 — `v0.19.0-alpha.1`
+
+Baseline: `v0.18.0-alpha.1` (`65c2674`). Pattern audit 12/13, economy 7/8,
+matchmaker 8/8, voting 10/10 + 6/6 + 3/3, playthrough 7/11 + 3 skip + 1 fail.
+
+### What was picked and why
+
+The audits left only three red lines, and two of them are blocked on decisions
+rather than work. Cycle 9 therefore targeted the two items that were genuinely
+actionable, plus a root-cause investigation on the third.
+
+1. **`5.heights` — the one editable violation.** Cycle 8 measured 7.03% against a
+   2% threshold and attributed it to the frozen `chunks.json`. That attribution was
+   re-derived from the design files this cycle: of the 11 pattern-local adjacent-top
+   violations in the whole catalog, **10 are in the four frozen chunks**
+   (`ch02_hollow_market` 4, `ch25_hanging_gallery` 3, `ch04_twin_terrace` 2,
+   `ch06_descent_of_sighs` 1) and **1 is in `pb_ruin_rest`**. The audit counts per
+   *placement*, which is why 11 pattern-local violations become 27,068 measured
+   deltas. Only the editable one was in scope.
+2. **Playthrough repeatability.** The sweep could only run once per server start,
+   because a finished run leaves the server in `PHASE_OVER` where every class pick
+   is rejected. That made the sweep useless as a per-cycle regression signal.
+
+### Changes
+
+- **`design/patterns-b.json` — `pb_ruin_rest`.** Platform 6 (`x -5..-4, z 9..10`)
+  sat at top 1.0 against platform 2's top 0.5, a 0.5 u step. Raised to 1.5, which
+  matches the 1.0 u delta platform 4 already has against platform 2 — so the step
+  is one the pattern already proves climbable. No ramp is involved; the pattern is
+  all `NORMAL` platforms.
+- **`tools/playthrough/run.mjs` — `Restart` at sweep start.** Sent between `Hello`
+  and `ChooseClass`. `ClientMsg::Restart` is a no-op unless `phase == PHASE_OVER`
+  (`game.rs:649`), so it is safe on a fresh server and resets a used one.
+  `new_run()` keeps players and their last class (`game.rs:435`), so the following
+  `ChooseClass` lands in the fresh draft window.
+
+### Results
+
+| Metric | Before | After |
+| --- | --- | --- |
+| `5.heights` | 7.03% | **6.02%** (threshold 2%) |
+| `5.ramps` | 0 | 0 |
+| `5.stairs` | 0 | 0 |
+| `4.near-duplicates` | 0.00% | 0.00% |
+| `0.input` | PASS | PASS |
+| Playthrough, 2nd sweep on same server | all 8 classes rejected | **0/8 rejected**, phases `[3,0,1]` |
+
+The `5.heights` move of 1.01 pp from a single pattern confirms the per-placement
+accounting: the remaining 6.02% is the frozen chunks, unchanged.
+
+### PARKED, with the reason measured
+
+- **`5.heights` at 6.02%** — 10 of 11 pattern-local violations are in the four
+  frozen `chunks.json` patterns. Editing them took the metric to 1.75% PASS in
+  Cycle 6 but broke the generator (190 `no_plan` records). Human decision.
+- **`8.hazard_entities`** — root cause now pinned precisely, replacing the earlier
+  vague "needs a hazard placement pass". `PLATFORM_TRIPMINE` (`generated.rs:66`) is
+  a declared constant with **no consumer anywhere**; `validate` rejects it as an
+  unknown kind (`levelgen.rs:2299`); `LevelData` has no `tripmines` field
+  (`level, seed, spawn, beacon, kill_y, platforms, gifts, event, altars`); and
+  `sim/src/tripmine.rs` is a fully tested module that nothing instantiates. Making
+  the `hazard:tripmine` tag real is a protocol change plus generator plus client
+  rendering — a ticket, not a polish item. Third park.
+- **Playthrough `level-progression`** — needs graph pathfinding + hazard avoidance
+  over `LevelData.platforms`. Straight-line steering dies before collecting 88 gifts.
+- **`pb_machine_gauntlet`'s three unreachable pillars** — unchanged from Cycle 7.
+
+### Merges and release
+
+`just verify` fully green: 241 sim, 279 vitest, clippy `-D warnings`,
+protocol-gen --check, check-names, validate-content (20 enemies, 10 upgrades,
+19 curses, 4 classes, 34 shop items, 3 events, 15 milestones, 4 altars,
+10 achievements, **132 patterns**).
+
+Release: `v0.19.0-alpha.1`.
+
+### Top 3 candidates for Cycle 10
+
+1. **Playthrough pathfinding** — the only red line that is pure work with no
+   decision attached, and it would turn 7/11 into 11/11, giving every later cycle
+   real coverage of draft, vote and shop.
+2. **`8.hazard_entities`** — now fully specified; needs a `LevelData.tripmines`
+   field through `just gen` + `just fixtures`, a generator pass, and client
+   rendering. Large but unambiguous.
+3. **`5.heights`** — needs the human's call on `chunks.json`. Nothing further can
+   be done without it.

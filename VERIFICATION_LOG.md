@@ -723,3 +723,28 @@ achievements, 100 patterns).
 protocol-gen --check, check-names (582 files), validate-content (20 enemies, 10
 upgrades, 19 curses, 4 classes, 34 shop items, 3 events, 15 milestones, 4 altars, 10
 achievements, 132 patterns).
+
+---
+
+## Refinement Cycle 9 — `v0.19.0-alpha.1`
+
+Baseline `v0.18.0-alpha.1` (`65c2674`). Two changes, both verified mechanically.
+
+- `design/patterns-b.json` `pb_ruin_rest`: platform 6 top 1.0 -> 1.5, removing the
+  catalog's only editable adjacent-top violation (0.5 u step against platform 2).
+  `5.heights` 7.03% -> **6.02%** (threshold 2%, still FAIL — the remaining 10 of 11
+  pattern-local violations are in the four frozen `chunks.json` patterns).
+  `5.ramps` 0, `5.stairs` 0, `4.near-duplicates` 0.00%, `0.input` PASS — all held.
+- `tools/playthrough/run.mjs`: `Restart` sent between `Hello` and `ChooseClass`.
+  Proven by running the sweep twice against one server: first sweep 7/11 + 3 skip +
+  1 fail as before; second sweep `class-select` **0/8 rejected** and
+  `phase-coverage` `[3,0,1]` (Over -> draft -> playing), where before the fix every
+  class pick was rejected and the run stayed at phase 3. `level-progression` still
+  FAIL (needs pathfinding, parked).
+- `8.hazard_entities` root cause pinned: `PLATFORM_TRIPMINE` has no consumer,
+  `validate` rejects it (`levelgen.rs:2299`), `LevelData` has no `tripmines` field,
+  and `sim/src/tripmine.rs` is instantiated by nothing. Third park, now specified.
+
+`just verify` green: 241 sim, 279 vitest, clippy `-D warnings`, protocol-gen --check,
+check-names, validate-content (20 enemies, 10 upgrades, 19 curses, 4 classes, 34 shop
+items, 3 events, 15 milestones, 4 altars, 10 achievements, 132 patterns).
