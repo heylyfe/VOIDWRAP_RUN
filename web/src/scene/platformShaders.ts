@@ -30,14 +30,15 @@ function shadeColor(hex: string, factor: number): string {
   return `#${c.getHexString()}`;
 }
 
-const ATTRIBUTE_DECLARATIONS = "attribute vec4 aState;";
+const ATTRIBUTE_DECLARATIONS = "attribute vec4 aState;\nattribute vec2 aSlope;";
 
 // Varyings must be declared with identical types in BOTH stages.
 const VARYING_DECLARATIONS = `varying vec4 vStateF;
 varying vec3 vWorldPos;
 varying vec3 vLocalPos;
 varying vec3 vScaleW;
-varying vec3 vNrmW;`;
+varying vec3 vNrmW;
+varying vec2 vSlope;`;
 
 /**
  * GLSL type of a uniform value: numbers become `float`, three.js Colors and any
@@ -83,6 +84,7 @@ export function buildFragmentHeader(uniforms: UniformMap): string {
 // ---------------------------------------------------------------------------
 export const VERTEX_BEGIN = `#include <begin_vertex>
 vStateF = aState;
+vSlope = aSlope;
 vLocalPos = position;
 vec4 vwIp = vec4(transformed, 1.0);
 vec3 vwScale = vec3(1.0);
@@ -136,7 +138,23 @@ export const SURFACE_FRAGMENT_COLOR = `#include <color_fragment>
     base = uPillarColor * (0.82 + 0.18 * s + 0.08 * bands);
   } else if (topF > 0.5) {
     // World-space checkerboard: instances tile seamlessly without per-platform UVs.
-    vec2 cell = floor(vWorldPos.xz / ${CHECKER_CELL});
+    //
+    // A ramp's top face is inclined, so world XZ is a projection of it: along the
+    // slope axis the pattern is compressed by cos(theta) and the cells read as
+    // stretched by 1/cos(theta). Dividing that axis by cos(theta) restores arc
+    // length, so the cells stay square on the incline and line up with the flat
+    // path pieces at both ends. Flat platforms carry aSlope = (0, 0) and are
+    // untouched.
+    vec2 chkPos = vWorldPos.xz;
+    if (vSlope.y > 0.0) {
+      float slopeCos = max(vSlope.y, 0.05);
+      if (vSlope.x < 0.5) {
+        chkPos.x /= slopeCos;
+      } else {
+        chkPos.y /= slopeCos;
+      }
+    }
+    vec2 cell = floor(chkPos / ${CHECKER_CELL});
     float chk = mod(cell.x + cell.y, 2.0);
     base = mix(uCheckerA, uCheckerB, chk);
     if (uCrumble > 0.5) {

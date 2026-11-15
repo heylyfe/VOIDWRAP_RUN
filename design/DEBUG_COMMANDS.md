@@ -63,7 +63,7 @@ locally by the panel — fog is a client-side visual and has no server state.
 | `trigger_altar` | server | `{ "id": u16 }` | Fires an altar's benefit and cost as if the player had used it. |
 | `teleport` | server | `{ "x": f32, "y": f32, "z": f32 }` | Moves the calling player to the point. |
 | `set_fog` | client | `{ "near": f32, "far": f32 }` | Sets the client fog range. `near` must be less than `far`; both must be positive. |
-| `state` | server | `{}` | Readout: level, phase, seed, currency, permanents, curses, upgrades, live enemy ids, remaining gift count, vote state. |
+| `state` | server | `{}` | Readout: level, phase, seed, currency, permanents, curses, upgrades, live enemy ids, remaining gift count, vote state, and the caller's feet as `pos=x,y,z`. |
 
 ## Error codes
 

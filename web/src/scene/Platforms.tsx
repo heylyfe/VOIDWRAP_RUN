@@ -26,7 +26,7 @@ import {
 } from "@/protocol/generated";
 import type { Platform, TileState } from "@/protocol/generated";
 import { iceTint } from "./iceTint";
-import { isPillar, platformCenter, platformSize, rampInfo } from "./platformUtils";
+import { isPillar, platformCenter, platformSize, rampInfo, rampSlope } from "./platformUtils";
 import type { Vec3Tuple } from "./platformUtils";
 import type { Theme } from "./theme";
 import {
@@ -277,6 +277,12 @@ function buildGroups(platforms: readonly Platform[], theme: Theme, icy: boolean)
   const rampAttr = new InstancedBufferAttribute(new Float32Array(rampCount * 4), 4);
   rampAttr.setUsage(DynamicDrawUsage);
   rampGeometry.setAttribute("aState", rampAttr);
+  // Per-instance slope for the checker shader: (axis, cos). The top face is
+  // inclined, so world XZ compresses the pattern along the slope axis by
+  // cos(theta); the shader divides that axis back out so the cells stay square.
+  const rampSlopeAttr = new InstancedBufferAttribute(new Float32Array(rampCount * 2), 2);
+  rampSlopeAttr.setUsage(DynamicDrawUsage);
+  rampGeometry.setAttribute("aSlope", rampSlopeAttr);
 
   rampList.forEach((p, i) => {
     const size = platformSize(p);
@@ -290,6 +296,8 @@ function buildGroups(platforms: readonly Platform[], theme: Theme, icy: boolean)
     rampMesh.setMatrixAt(i, scratchMatrix);
     const pillar = isPillar(size);
     rampAttr.setXYZW(i, 0, 0, 1, pillar ? 1 : 0);
+    const slope = rampSlope(p.kind, size);
+    rampSlopeAttr.setXY(i, slope.axis, slope.cos);
     records.push({
       id: p.id,
       center,
@@ -307,6 +315,7 @@ function buildGroups(platforms: readonly Platform[], theme: Theme, icy: boolean)
   });
   rampMesh.instanceMatrix.needsUpdate = true;
   rampAttr.needsUpdate = true;
+  rampSlopeAttr.needsUpdate = true;
   holder.add(rampMesh);
 
   return { holder, records, timeUniform };

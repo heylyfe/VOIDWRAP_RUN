@@ -61,6 +61,32 @@ export function rampInfo(kind: number): RampInfo {
 }
 
 /**
+ * Slope of a ramp's top face, for the checker shader.
+ *
+ * The checker is drawn from world XZ, which is a projection of the inclined top
+ * face: along the slope axis the pattern is compressed by cos(theta), so the
+ * cells read as stretched by 1/cos(theta) on the incline. Dividing that axis by
+ * cos(theta) turns the projection back into arc length and the cells stay square.
+ *
+ * `axis` is 0 for a ramp that rises along X and 1 for one that rises along Z;
+ * `cos` is 0 for a flat platform (no correction).
+ */
+export interface RampSlope {
+  axis: 0 | 1;
+  cos: number;
+}
+
+export function rampSlope(kind: number, size: Vec3Tuple): RampSlope {
+  const info = rampInfo(kind);
+  if (!info.isRamp || info.axis === null) return { axis: 0, cos: 0 };
+  const run = info.axis === "x" ? size[0] : size[2];
+  const rise = size[1];
+  const len = Math.hypot(run, rise);
+  if (!(len > 0)) return { axis: 0, cos: 0 };
+  return { axis: info.axis === "x" ? 0 : 1, cos: run / len };
+}
+
+/**
  * Walk-surface height of a platform at world (x, z). For ramps this is the
  * sloped line between the low edge (bounds.min.y) and the high edge
  * (bounds.max.y); for other kinds it is bounds.max.y. (x, z) are clamped to

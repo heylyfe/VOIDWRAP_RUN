@@ -718,6 +718,16 @@ impl Game {
                     Err(message) => (false, message),
                 };
                 self.send(id, &ServerMsg::DebugResult { ok, message });
+                // A tester expects the world to react. The route is singleplayer-only, so a
+                // broadcast reaches exactly the tester who asked. `switch_level` also has to
+                // hand over the new level and put the player on its spawn deck.
+                if ok {
+                    if command == "switch_level" {
+                        self.respawn_all_and_broadcast();
+                    } else {
+                        self.broadcast_run_state();
+                    }
+                }
             }
             ClientMsg::Restart => {
                 // A new run starts once the run is over (the whole team is down); otherwise ignore.
@@ -1463,6 +1473,66 @@ mod tests {
         assert_eq!(g.run.currency, 777, "currency survives a level jump");
         assert_eq!(g.run.permanents, vec!["pallbearer".to_owned()], "permanents survive");
         assert!(!g.run.level.gifts.is_empty(), "the new level has gifts");
+    }
+
+    #[test]
+    fn a_successful_debug_command_pushes_the_new_run_state() {
+        let mut g = game();
+        g.debug = Gate::new(true, None);
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        drain(&mut rx);
+        g.handle(GameEvent::Message {
+            id: 1,
+            msg: ClientMsg::Debug {
+                code: String::new(),
+                command: "grant_gold".to_owned(),
+                args: r#"{"amount":500}"#.to_owned(),
+            },
+        });
+        // The tester's HUD reads RunState, so the command has to push one or the
+        // tester sees nothing change and concludes the panel is broken.
+        let msgs = drain(&mut rx);
+        assert!(
+            msgs.iter()
+                .any(|m| matches!(m, ServerMsg::RunState { info } if info.currency == 500)),
+            "no RunState carrying the new currency"
+        );
+    }
+
+    #[test]
+    fn switch_level_pushes_the_new_level_and_puts_the_player_on_its_spawn() {
+        let mut g = game();
+        g.debug = Gate::new(true, None);
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        drain(&mut rx);
+        g.handle(GameEvent::Message {
+            id: 1,
+            msg: ClientMsg::Debug {
+                code: String::new(),
+                command: "switch_level".to_owned(),
+                args: r#"{"level":12,"seed":7}"#.to_owned(),
+            },
+        });
+        let msgs = drain(&mut rx);
+        assert!(
+            msgs.iter()
+                .any(|m| matches!(m, ServerMsg::Level { data } if data.level == 12)),
+            "no Level message for the switched level"
+        );
+        assert!(
+            msgs.iter()
+                .any(|m| matches!(m, ServerMsg::RunState { info } if info.level == 12)),
+            "no RunState for the switched level"
+        );
+        let spawn = g.run.level.spawn;
+        let pos = g.conns[&1].player.as_ref().unwrap().state.pos;
+        let gap = ((pos.x - spawn.x).powi(2) + (pos.y - spawn.y).powi(2) + (pos.z - spawn.z).powi(2)).sqrt();
+        assert!(
+            gap < 1.0,
+            "the player was left at {pos:?} instead of the new spawn {spawn:?}"
+        );
     }
 
     #[test]

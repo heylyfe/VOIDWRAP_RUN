@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { Platform } from "@/protocol/generated";
-import { isPillar, platformCenter, platformSize } from "./platformUtils";
+import {
+  PLATFORM_JUMP_PAD,
+  PLATFORM_NORMAL,
+  PLATFORM_RAMP_NX,
+  PLATFORM_RAMP_NZ,
+  PLATFORM_RAMP_PX,
+  PLATFORM_RAMP_PZ,
+} from "@/protocol/generated";
+import { isPillar, platformCenter, platformSize, rampSlope } from "./platformUtils";
 
 function plat(
   id: number,
@@ -34,6 +42,38 @@ describe("isPillar", () => {
   it("is strict at the boundary (equal is not a pillar)", () => {
     expect(isPillar([1, 3, 1])).toBe(false);
     expect(isPillar([2, 6, 2])).toBe(false);
+  });
+});
+
+describe("rampSlope", () => {
+  it("reports the slope axis and cos(theta) for each ramp kind", () => {
+    // 8 u run, 4 u rise: cos = 8 / sqrt(80) = 0.8944.
+    const cos = 8 / Math.hypot(8, 4);
+    expect(rampSlope(PLATFORM_RAMP_PX, [8, 4, 4])).toEqual({ axis: 0, cos });
+    expect(rampSlope(PLATFORM_RAMP_NX, [8, 4, 4])).toEqual({ axis: 0, cos });
+    expect(rampSlope(PLATFORM_RAMP_PZ, [4, 4, 8])).toEqual({ axis: 1, cos });
+    expect(rampSlope(PLATFORM_RAMP_NZ, [4, 4, 8])).toEqual({ axis: 1, cos });
+  });
+
+  it("uses the run along the slope axis, not the other horizontal extent", () => {
+    // A ramp rising along X: the Z extent must not enter the angle.
+    const a = rampSlope(PLATFORM_RAMP_PX, [8, 4, 40]);
+    const b = rampSlope(PLATFORM_RAMP_PX, [8, 4, 4]);
+    expect(a.cos).toBeCloseTo(b.cos, 10);
+  });
+
+  it("reports no correction for flat platforms", () => {
+    expect(rampSlope(PLATFORM_NORMAL, [8, 4, 4])).toEqual({ axis: 0, cos: 0 });
+    expect(rampSlope(PLATFORM_JUMP_PAD, [8, 4, 4])).toEqual({ axis: 0, cos: 0 });
+  });
+
+  it("never divides by zero on a degenerate ramp", () => {
+    expect(rampSlope(PLATFORM_RAMP_PX, [0, 0, 0])).toEqual({ axis: 0, cos: 0 });
+    expect(rampSlope(PLATFORM_RAMP_PZ, [0, 0, 0])).toEqual({ axis: 0, cos: 0 });
+  });
+
+  it("a 45-degree ramp reports cos = 1/sqrt(2)", () => {
+    expect(rampSlope(PLATFORM_RAMP_PZ, [4, 4, 4]).cos).toBeCloseTo(Math.SQRT1_2, 10);
   });
 });
 

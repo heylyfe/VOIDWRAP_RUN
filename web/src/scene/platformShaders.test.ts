@@ -106,8 +106,28 @@ describe("platform shader chunks", () => {
     });
   }
 
-  it("declares all five varyings in the vertex stage", () => {
-    expect(varyingTypes(vertexSource).size).toBe(5);
+  it("declares all six varyings in the vertex stage", () => {
+    expect(varyingTypes(vertexSource).size).toBe(6);
+  });
+
+  it("vertex shader declares the per-instance slope attribute and forwards it", () => {
+    expect(vertexSource).toMatch(/attribute\s+vec2\s+aSlope\s*;/);
+    expect(vertexSource).toMatch(/vSlope\s*=\s*aSlope\s*;/);
+    expect(varyingTypes(vertexSource).get("vSlope")).toBe("vec2");
+  });
+
+  it("the checker divides the slope axis by cos(theta) so ramp cells stay square", () => {
+    // World XZ is a projection of an inclined top face: along the slope axis the
+    // pattern is compressed by cos(theta), which reads as a 1/cos stretch. The
+    // shader must undo it on exactly one axis, and must leave flat platforms
+    // (aSlope = (0, 0)) alone.
+    expect(SURFACE_FRAGMENT_COLOR).toMatch(/vec2\s+chkPos\s*=\s*vWorldPos\.xz\s*;/);
+    expect(SURFACE_FRAGMENT_COLOR).toMatch(/if\s*\(\s*vSlope\.y\s*>\s*0\.0\s*\)/);
+    expect(SURFACE_FRAGMENT_COLOR).toMatch(/chkPos\.x\s*\/=\s*slopeCos\s*;/);
+    expect(SURFACE_FRAGMENT_COLOR).toMatch(/chkPos\.y\s*\/=\s*slopeCos\s*;/);
+    expect(SURFACE_FRAGMENT_COLOR).toMatch(/floor\(\s*chkPos\s*\//);
+    // The raw world coordinate must no longer drive the cell index.
+    expect(SURFACE_FRAGMENT_COLOR).not.toMatch(/floor\(\s*vWorldPos\.xz\s*\//);
   });
 
   it("uniformDeclarations is deterministic and sorted", () => {

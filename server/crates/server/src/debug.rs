@@ -251,7 +251,15 @@ pub fn execute(ctx: Ctx<'_>, command: &str, args: &str) -> Result<String, String
             }
             Ok(format!("fog near={near} far={far}"))
         }
-        "state" => Ok(ctx.run.debug_state(ctx.content)),
+        // `pos` is the caller's feet, which only the connection knows: a tester needs it to
+        // teleport relative to where they stand.
+        "state" => Ok(format!(
+            "{} pos={:.1},{:.1},{:.1}",
+            ctx.run.debug_state(ctx.content),
+            ctx.feet.x,
+            ctx.feet.y,
+            ctx.feet.z
+        )),
         other => Err(format!("unknown command: {other}")),
     };
 
