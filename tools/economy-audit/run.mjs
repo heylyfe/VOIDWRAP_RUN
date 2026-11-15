@@ -49,6 +49,13 @@ const SHOP_OFFER = 4;
 const SHOP_UPGRADE_COST = 300;
 const SHOP_UPGRADE_DRAWS = 2;
 
+// T-133 thresholds. Each replaces a check that was looser than the metric's name.
+/** A hazard tag must appear in at least this share of levels to count as present. */
+const HAZARD_LEVEL_SHARE_MIN = 0.2;
+/** Composition band. Measured median 32 (min 17, max 59) at 400 seeds. */
+const PATTERNS_PER_LEVEL_MIN = 10;
+const PATTERNS_PER_LEVEL_MAX = 60;
+
 /** Mode knobs, mirroring `sim::mode::DifficultyMode`. */
 const MODES = {
   standard: { capBonus: 0, minLevelShift: 0, shopEveryLevel: false },
@@ -141,20 +148,41 @@ function auditPedestalPool() {
       `${modeId}: capacity ${capacity} permanents, overflow from level ${capacity + 1}; ` +
         `pool at level 1 = ${atLevel(1)}, 10 = ${atLevel(10)}, 20 = ${atLevel(20)}`,
     );
-    if (atLevel(1) < 3) allOk = false;
+    // T-133: the old check was `atLevel(1) < 3` and nothing else, so a pool that
+    // never grew past three options would pass. A vote needs three options at level
+    // 1, the pool has to *widen* with level or the level scaling does nothing, and a
+    // deep run needs real choice. Measured: pool@1 = 3 (standard/chaos/random) and 8
+    // (extreme), pool@10 = 19, pool@20 = 20.
+    const p1 = atLevel(1);
+    const p10 = atLevel(10);
+    const p20 = atLevel(20);
+    if (p1 < 3) allOk = false; // a vote needs three options
+    if (p10 <= p1) allOk = false; // the pool must widen with level
+    if (p20 < 10) allOk = false; // a deep run needs real choice
+    if (capacity <= p1) allOk = false; // overflow must not start before the pool is used
   }
   lines.push(`enemies in the registry: ${content.enemies.length}`);
+  lines.push('thresholds: pool@1 >= 3, pool@10 > pool@1, pool@20 >= 10, capacity > pool@1');
   metric(allOk, '3.pedestal_pool', lines);
 }
 
 function auditGreaterCurses() {
   const greater = content.curses.filter((c) => c.greater);
   const plain = content.curses.filter((c) => !c.greater);
-  metric(greater.length >= 3, '4.greater_curse_rate', [
+  // T-133: the metric is named `_rate` but only asserted `greater.length >= 3` -- a
+  // count of *definitions*, never an occurrence. A run could have reached level 50
+  // without ever being offered one and the metric would still pass. It now measures
+  // the drafts a 50-level run actually gets, and requires the pool to be deep enough
+  // that those drafts are not forced repeats.
+  const drafts50 = Math.floor(50 / GREATER_EVERY);
+  const rateOk = drafts50 >= 3 && drafts50 <= 8;
+  const poolOk = greater.length >= drafts50;
+  metric(rateOk && poolOk, '4.greater_curse_rate', [
     `greater curses: ${greater.length} (${greater.map((c) => c.id).join(', ')})`,
     `plain curses: ${plain.length}`,
     `greater-curse draft every ${GREATER_EVERY} levels`,
-    `over 50 levels: ${Math.floor(50 / GREATER_EVERY)} greater drafts`,
+    `over 50 levels: ${drafts50} greater drafts (threshold 3..8)`,
+    `pool depth vs drafts: ${greater.length} >= ${drafts50} (${poolOk ? 'no forced repeat' : 'FORCED REPEAT'})`,
   ]);
 }
 
@@ -170,12 +198,29 @@ function auditHazardTags(levels) {
       }
     }
   }
-  const detail = [`hazard-tagged placements: ${total}`];
-  for (const [tag, n] of [...counts.entries()].sort((a, b) => b[1] - a[1])) {
-    detail.push(`${tag}: ${n} (${pct(n, total)}%)`);
+  // T-133: `total > 0` passed on a single placement in 6,000 levels. A hazard that
+  // appears in fewer than one level in five is effectively absent from the game, so
+  // each tag is now measured by the share of LEVELS that contain it.
+  const levelsWith = new Map();
+  for (const lv of levels) {
+    const seen = new Set();
+    for (const id of lv.plan ?? []) {
+      for (const tag of byId.get(id)?.tags ?? []) {
+        if (tag.startsWith('hazard:')) seen.add(tag);
+      }
+    }
+    for (const tag of seen) levelsWith.set(tag, (levelsWith.get(tag) ?? 0) + 1);
   }
+  const detail = [`hazard-tagged placements: ${total}`];
+  let allOk = total > 0;
+  for (const [tag, n] of [...counts.entries()].sort((a, b) => b[1] - a[1])) {
+    const share = (levelsWith.get(tag) ?? 0) / levels.length;
+    if (share < HAZARD_LEVEL_SHARE_MIN) allOk = false;
+    detail.push(`${tag}: ${n} placements (${pct(n, total)}%), in ${levelsWith.get(tag) ?? 0} levels (${pct(share, 1)}%)`);
+  }
+  detail.push(`threshold: every hazard tag in >= ${pct(HAZARD_LEVEL_SHARE_MIN, 1)}% of levels`);
   if (total === 0) detail.push('no hazard tags placed — trampolines/tripmines are not in the engine yet');
-  metric(total > 0, '5.hazard_tags', detail);
+  metric(allOk, '5.hazard_tags', detail);
 }
 
 function auditRadar() {
@@ -189,8 +234,14 @@ function auditRadar() {
 
 function auditPatternsPerLevel(levels) {
   const lens = levels.map((lv) => (lv.plan ?? []).length);
-  metric(median(lens) >= 3, '7.patterns_per_level', [
-    `patterns per level: median ${median(lens)}, min ${Math.min(...lens)}, max ${Math.max(...lens)}`,
+  // T-133: `median >= 3` would pass a game where every level is three pieces long.
+  // Measured median is 32 (min 17, max 59), so the band is set around the real
+  // composition: below 10 the composition engine has collapsed, above 60 the plan
+  // length is unbounded.
+  const med = median(lens);
+  metric(med >= PATTERNS_PER_LEVEL_MIN && med <= PATTERNS_PER_LEVEL_MAX, '7.patterns_per_level', [
+    `patterns per level: median ${med}, min ${Math.min(...lens)}, max ${Math.max(...lens)}`,
+    `threshold: median in [${PATTERNS_PER_LEVEL_MIN}, ${PATTERNS_PER_LEVEL_MAX}]`,
     `catalog size: ${byId.size}`,
     `fallback levels: ${levels.filter((lv) => (lv.fallbacks ?? []).length > 0).length} of ${levels.length}`,
   ]);
