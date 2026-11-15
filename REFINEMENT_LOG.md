@@ -1026,3 +1026,102 @@ Release: `v0.20.0-alpha.1`.
 2. **`5.heights`** — needs the human's call on `chunks.json`.
 3. **Balance first pass (T-B)** — with the economy audit green, the audit numbers
    are now a stable baseline to tune against.
+
+## Refinement Cycle 11 — `v0.23.0-alpha.1`
+
+Baseline: `v0.22.0-alpha.1`, the first release where every black-box kit ran
+against a live server (`just verify-live`). Pattern audit 15/15, economy 8/8,
+voting 3/3, playthrough 7 pass / 3 skip / 1 fail.
+
+### What was picked and why
+
+1. **Playthrough bot navigation (T-121).** The playthrough kit is the only
+   end-to-end test in the repo and 4 of its 11 checks were permanently SKIP.
+   Highest measured impact in the backlog by a wide margin.
+2. **Tripmine coverage (T-122).** `8.hazard_entities` reported
+   `hazard:tripmine: 1 patterns tagged`. The owner asked for tripmines; one
+   pattern out of 132 is a hazard most runs never see.
+3. **The silently dropped patterns (T-123).** Parked as "2 of 132". It was
+   five, and it turned out to be the reason tripmines never existed.
+
+### T-121 — PASS (partial), `6432641`
+
+Root cause was a harness bug: `wire.mjs` decoded `Snapshot` only as far as
+`you`, so `msg.gifts_taken` was always `undefined` and the bot walked back to
+the gift it had just taken, forever. The decoder now skips `players` and
+`enemies` by size and reads `gifts_taken`.
+
+Four more bot defects fixed: `grounded` read off the position vector instead of
+`ControllerState` (so it never jumped); a straight-line steer that walked off
+the level (`DEATH_VOID` for every client); greedy nearest-target oscillation
+(velocity reversed sign every second); jump spam from `len > 2.0`, which is
+always true.
+
+Result: **39 of 88 gifts collected in 60 s, was 0.** `draft` is now a live check
+(it fires before level 1, so it never needed a completed level). Playthrough
+**7 pass / 3 skip / 1 fail -> 8 pass / 2 skip / 1 fail**.
+
+Parked: `level-progression`, `vote`, `shop`. The collect phase ends only when
+every gift is collected (`run.rs:2156`) and there is no timer, so clearing 88
+gifts across 75 platforms needs a BFS over the platform graph. Real pathfinder,
+not a tuning change.
+
+### T-122 — PASS, `18cfc75`
+
+Three new patterns with real `TRIPMINE` platforms: `pb_mine_corridor`,
+`pb_mine_plaza`, `pb_mine_terrace`. Additive only; gift slots on the safe decks.
+`hazard:tripmine` 1 pattern -> 4.
+
+### T-123 — PASS, `2cdd9ac`
+
+**Five chunks were being silently dropped by `parse_catalog_lenient`, and one
+of them was every tripmine pattern.** `platform_kind_from_str` never learned
+`"TRIPMINE"`, so the strict parser rejected any pattern using one and the
+lenient parser removed it. Tripmines were in the protocol, the sim, the hazard
+tags and the catalog — and never in a generated level. `8.hazard_entities`
+passed throughout because it reads the JSON dump, not the loaded catalog.
+
+Also fixed: `verify_socket` required a platform whose top face was at the
+socket height, which a ramp never has, so `ch05_ramp_of_embers` was dropped;
+`ch05` then needed a landing deck because its ramp top was only anchored if the
+neighbour sat at exactly y=6; `pa_frost_fork` had no legal socket width on its
+2.5 u arms; two patterns had 6 u sockets on 4 u arms; two had sockets straddling
+a platform seam.
+
+New test `every_shipped_chunk_parses_strictly` pins the count at 135 and
+asserts the lenient parser removes nothing. That is the alarm that was missing.
+
+| metric | before | after |
+| --- | --- | --- |
+| chunks loaded | 127 / 132 | **135 / 135** |
+| silently dropped | 5 | **0** |
+| tripmine patterns that load | 0 | **4** |
+| `5.heights` | 4.47 % | **4.09 %** |
+| `5.gift-spawn-safety` | 7 / 755,834 | **5 / 755,864** |
+
+### Gates
+
+`just verify` green: 246 sim tests, 150 server tests, 317 vitest (36 files),
+clippy `-D warnings`, protocol-gen `--check`, check-names (628 files),
+validate-content (20 enemies, 10 upgrades, 19 curses, 4 classes, 34 shop items,
+3 events, 15 milestones, 4 altars, 10 achievements, **135 patterns**).
+
+`just verify-live --port 7979` **PASS 5/5**. Pattern audit **16/16**. Economy
+audit **9/9**. Voting real smoke **3/3**. Playthrough **8 pass / 3 skip /
+0 fail**.
+
+### Release
+
+`v0.23.0-alpha.1`.
+
+### Top 3 candidates for Cycle 12
+
+1. **Platform-graph BFS for the playthrough bot.** The last three dark checks
+   (`level-progression`, `vote`, `shop`) all hang off it. Everything else in
+   the gate is now live.
+2. **`hazard:trampoline` is 3 tagged / 1 carrying the entity (33.3 %).** Same
+   class of thinness tripmine had, and the same fix: patterns that actually
+   carry a `TRAMPOLINE` platform.
+3. **`5.reference-scale` at 3.85 %** and **`5.heights` at 4.09 %** are the two
+   content metrics closest to their thresholds. Both are style rules; worth a
+   look before they drift into a failure.
