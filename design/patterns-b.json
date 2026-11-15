@@ -3419,6 +3419,336 @@
       "enemy_slots": [],
       "altar_slots": [],
       "beacon": null
+    },
+    {
+      "id": "pb_mine_corridor",
+      "name": "Tripwire Corridor",
+      "role": "path",
+      "min_level": 4,
+      "difficulty": 2,
+      "tags": [
+        "theme:void",
+        "mech:span",
+        "hazard:tripmine",
+        "corridor"
+      ],
+      "platforms": [
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            0,
+            0
+          ],
+          "max": [
+            2,
+            0.5,
+            6
+          ]
+        },
+        {
+          "kind": "TRIPMINE",
+          "min": [
+            -2,
+            0,
+            6
+          ],
+          "max": [
+            2,
+            0.5,
+            12
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            0,
+            12
+          ],
+          "max": [
+            2,
+            0.5,
+            18
+          ]
+        }
+      ],
+      "sockets": [
+        {
+          "id": "a",
+          "pos": [
+            0,
+            0.5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            0.5,
+            18
+          ],
+          "facing": "N",
+          "width": 4
+        }
+      ],
+      "gift_slots": [
+        {
+          "pos": [
+            -1.2,
+            0.8,
+            2
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            1.2,
+            0.8,
+            4
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            -1.2,
+            0.8,
+            14
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            1.2,
+            0.8,
+            16
+          ],
+          "elevated": false
+        }
+      ],
+      "enemy_slots": [],
+      "altar_slots": [],
+      "beacon": null
+    },
+    {
+      "id": "pb_mine_plaza",
+      "name": "Minefield Plaza",
+      "role": "junction",
+      "min_level": 6,
+      "difficulty": 3,
+      "tags": [
+        "theme:machine",
+        "mech:fork",
+        "hazard:tripmine",
+        "plaza"
+      ],
+      "platforms": [
+        {
+          "kind": "NORMAL",
+          "min": [
+            -6,
+            0,
+            -6
+          ],
+          "max": [
+            6,
+            0.5,
+            0
+          ]
+        },
+        {
+          "kind": "TRIPMINE",
+          "min": [
+            -6,
+            0,
+            0
+          ],
+          "max": [
+            6,
+            0.5,
+            6
+          ]
+        }
+      ],
+      "sockets": [
+        {
+          "id": "n",
+          "pos": [
+            0,
+            0.5,
+            6
+          ],
+          "facing": "N",
+          "width": 6
+        },
+        {
+          "id": "e",
+          "pos": [
+            6,
+            0.5,
+            0
+          ],
+          "facing": "E",
+          "width": 6
+        },
+        {
+          "id": "s",
+          "pos": [
+            0,
+            0.5,
+            -6
+          ],
+          "facing": "S",
+          "width": 6
+        },
+        {
+          "id": "w",
+          "pos": [
+            -6,
+            0.5,
+            0
+          ],
+          "facing": "W",
+          "width": 6
+        }
+      ],
+      "gift_slots": [
+        {
+          "pos": [
+            -3.5,
+            0.8,
+            -3.5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            3.5,
+            0.8,
+            -3.5
+          ],
+          "elevated": false
+        }
+      ],
+      "enemy_slots": [],
+      "altar_slots": [],
+      "beacon": null
+    },
+    {
+      "id": "pb_mine_terrace",
+      "name": "Tripwire Terrace",
+      "role": "path",
+      "min_level": 3,
+      "difficulty": 1,
+      "tags": [
+        "theme:ruin",
+        "mech:span",
+        "hazard:tripmine",
+        "terrace"
+      ],
+      "platforms": [
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            0,
+            0
+          ],
+          "max": [
+            3,
+            0.5,
+            6
+          ]
+        },
+        {
+          "kind": "TRIPMINE",
+          "min": [
+            -3,
+            0,
+            6
+          ],
+          "max": [
+            3,
+            0.5,
+            10
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            0,
+            10
+          ],
+          "max": [
+            3,
+            0.5,
+            16
+          ]
+        }
+      ],
+      "sockets": [
+        {
+          "id": "a",
+          "pos": [
+            0,
+            0.5,
+            0
+          ],
+          "facing": "S",
+          "width": 6
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            0.5,
+            16
+          ],
+          "facing": "N",
+          "width": 6
+        }
+      ],
+      "gift_slots": [
+        {
+          "pos": [
+            -1.5,
+            0.8,
+            2
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            1.5,
+            0.8,
+            4
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            -1.5,
+            0.8,
+            12
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            1.5,
+            0.8,
+            14
+          ],
+          "elevated": false
+        }
+      ],
+      "enemy_slots": [],
+      "altar_slots": [],
+      "beacon": null
     }
   ]
 }
