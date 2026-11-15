@@ -103,10 +103,15 @@ const TH = {
   SCALE_RATE_MAX: 0.10,   // examples in PATTERN_FORMAT §8 measure 16 u). 10% slack
   // T-112: a gift whose body overlaps a solid platform volume is invisible or
   // unreachable. Measured 1.956% before the spawn-safety rule was widened to every
-  // platform; 0.0011% after. The threshold allows the residual edge cases but not a
-  // regression back toward the old behaviour.
-  GIFT_INTERSECT_RATE_MAX: 0.0001,
-                          // tolerates narrow alcoves, catches systematic drift.
+  // platform; 0.0011% after.
+  //
+  // T-127: the threshold was 0.0001 (0.01%) to absorb 5 "hits" that turned out to be
+  // measurement error -- the dump re-implemented the box test without the generator's
+  // 1 mm epsilon, so gifts merely touching a platform face counted as intersecting.
+  // The dump now calls `levelgen::gift_body_clear` itself, the count is 0 over
+  // 755,878 gifts, and the owner's rule is "NEVER inside a platform", so the
+  // threshold is exactly zero. Any hit is now a real defect.
+  GIFT_INTERSECT_MAX: 0,
 
   // Metric 6 — "always offered" only counts cells (mode, level index) with at
   // least this many levels; below that, 100% presence is statistically noise.
@@ -351,6 +356,7 @@ function measurePatternGeometry(A, entry, id, pat) {
 
   const boxes = [], ramps = [];
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity, hasBox = false;
+  let minY = Infinity, maxY = -Infinity;
   for (const raw of plats) {
     const p = normPlat(raw);
     if (!p) {
@@ -364,6 +370,8 @@ function measurePatternGeometry(A, entry, id, pat) {
     if (p.max[0] > maxX) maxX = p.max[0];
     if (p.min[2] < minZ) minZ = p.min[2];
     if (p.max[2] > maxZ) maxZ = p.max[2];
+    if (p.min[1] < minY) minY = p.min[1];
+    if (p.max[1] > maxY) maxY = p.max[1];
   }
   if (!hasBox && ramps.length) {
     // ramp-only pattern: fall back to the wedges for the footprint extent
@@ -379,8 +387,14 @@ function measurePatternGeometry(A, entry, id, pat) {
     if (!(ext >= TH.SCALE_EXTENT_MIN - 1e-6 && ext <= TH.SCALE_EXTENT_MAX + 1e-6)) {
       A.geo.scaleViol++;
       bump(A.geo.scaleByPattern, id);
+      const drop = Number.isFinite(minY) && Number.isFinite(maxY) ? maxY - minY : 0;
       pushEx(A.geo.scaleEx, {
-        where: loc(entry), pattern: id, extent: f2(ext),
+        where: loc(entry), pattern: id, extent: f2(ext), drop: f2(drop),
+        // A chunk that drops `d` needs `2 * d / RAMP_MAX_RISE_RUN` of ramp plus its
+        // decks, so a big drop forces a big footprint. Reporting the implied minimum
+        // separates "out of band because it is a tall set-piece" from "out of band
+        // because someone typed the wrong number".
+        minExtent: f2(2 * (drop / TH.RAMP_MAX_RISE_RUN)),
         note: `max XZ extent outside [${TH.SCALE_EXTENT_MIN}, ${TH.SCALE_EXTENT_MAX}]u`,
       });
     }
@@ -736,15 +750,28 @@ function report(A, ctx, log) {
     hRate <= TH.HEIGHT_DIFF_RATE_MAX,
     `adjacent surface deltas measured: ${geo.heightPairs}; outside [${TH.HEIGHT_DIFF_MIN}, ${TH.HEIGHT_DIFF_MAX}]u (flat continuations ~0u excluded): ${geo.heightViol} (${pctf(hRate)}); threshold <= ${(TH.HEIGHT_DIFF_RATE_MAX * 100).toFixed(0)}%`);
   const sRate = geo.placed ? geo.scaleViol / geo.placed : 1;
+  // T-128: name the patterns that own the outlier budget. An aggregate rate hides
+  // concentration: six patterns used to account for all 8,081 out-of-band placements,
+  // and the metric still passed at 3.85% against a 10% ceiling. The per-pattern list
+  // makes the concentration visible, and `minExtent` shows how much of each footprint
+  // is forced by the 0.5 ramp-slope cap rather than chosen.
+  const scaleOwners = [...geo.scaleByPattern.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([id, n]) => {
+      const ex = geo.scaleEx.find((e) => e.pattern === id);
+      return ex ? `${id}:${n} (${ex.extent}u, drop ${ex.drop}u, ramp-forced >= ${ex.minExtent}u)` : `${id}:${n}`;
+    });
   line('5.reference-scale',
     sRate <= TH.SCALE_RATE_MAX,
-    `placed patterns with max XZ footprint extent outside [${TH.SCALE_EXTENT_MIN}, ${TH.SCALE_EXTENT_MAX}]u: ${geo.scaleViol}/${geo.placed} (${pctf(sRate)}); threshold <= ${(TH.SCALE_RATE_MAX * 100).toFixed(0)}%`);
+    `placed patterns with max XZ footprint extent outside [${TH.SCALE_EXTENT_MIN}, ${TH.SCALE_EXTENT_MAX}]u: ${geo.scaleViol}/${geo.placed} (${pctf(sRate)}); threshold <= ${(TH.SCALE_RATE_MAX * 100).toFixed(0)}%; `
+    + `by pattern id: ${scaleOwners.length ? scaleOwners.join(' ') : 'none'}`);
 
   // --- 5b gift spawn safety (T-112) ---------------------------------------------
   const gRate = geo.gifts ? geo.giftIntersections / geo.gifts : 0;
   line('5.gift-spawn-safety',
-    gRate <= TH.GIFT_INTERSECT_RATE_MAX,
-    `gifts whose body overlaps a solid platform volume: ${geo.giftIntersections}/${geo.gifts} (${pctf(gRate)}) across ${geo.giftIntersectionLevels} levels; threshold <= ${(TH.GIFT_INTERSECT_RATE_MAX * 100).toFixed(3)}%`);
+    geo.giftIntersections <= TH.GIFT_INTERSECT_MAX,
+    `gifts whose body overlaps a solid platform volume: ${geo.giftIntersections}/${geo.gifts} (${pctf(gRate)}) across ${geo.giftIntersectionLevels} levels; threshold: ${TH.GIFT_INTERSECT_MAX} (the owner's rule is "never inside a platform")`);
 
   // --- 5c reachability (T-118) ---------------------------------------------------
   // The generator's promise is that every gift is reachable from the spawn. `validate`

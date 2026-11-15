@@ -2953,7 +2953,10 @@ mod tests {
         );
         // The count is asserted so a chunk that stops being included at all is
         // also caught, not just one that fails to parse.
-        assert_eq!(strict.chunks.len(), 135, "catalog chunk count changed");
+        //
+        // T-129: 135 -> 140. Five hazard patterns were added (three trampoline, two
+        // tripmine) because three trampoline patterns were carrying 54% of levels.
+        assert_eq!(strict.chunks.len(), 140, "catalog chunk count changed");
     }
 
     /// A ramp kind must turn with its geometry, or the collision surface stops
@@ -3447,7 +3450,7 @@ const GIFT_SPACING_MUL_MIN: f32 = 0.25;
 
 /// The volume a spawned gift occupies: a small box rising from its support surface
 /// (base = pos.y - 0.3). Used by the gift spawn-safety rule.
-fn gift_body_aabb(pos: Vec3) -> Aabb {
+pub fn gift_body_aabb(pos: Vec3) -> Aabb {
     let base = pos.y - 0.3;
     Aabb {
         min: Vec3::new(pos.x - GIFT_BODY_HALF, base + EPS, pos.z - GIFT_BODY_HALF),
@@ -3458,7 +3461,7 @@ fn gift_body_aabb(pos: Vec3) -> Aabb {
 /// True when no blocking volume overlaps the gift body box at `pos`.
 /// Kept free of `Platform` (pure AABBs in, bool out) so the spawn-safety rule stays
 /// trivially unit-testable. Blockers are the non-NORMAL platforms (walls, jump pads, ramps).
-fn gift_body_clear<'a>(blockers: impl Iterator<Item = &'a Aabb>, pos: Vec3) -> bool {
+pub fn gift_body_clear<'a>(blockers: impl Iterator<Item = &'a Aabb>, pos: Vec3) -> bool {
     let body = gift_body_aabb(pos);
     !blockers.into_iter().any(|b| aabb_intersect(&body, b))
 }

@@ -33,32 +33,21 @@ fn num(v: f32) -> String {
     format!("{v:.2}")
 }
 
-/// Gift body half-extent and height, mirroring `levelgen`'s private constants.
-const GIFT_BODY_HALF: f32 = 0.35;
-const GIFT_BODY_HEIGHT: f32 = 0.9;
-
 /// Count gifts whose body box overlaps any solid platform volume.
 ///
-/// `levelgen::accept_candidate` already rejects a gift that overlaps a non-NORMAL
-/// platform, so a non-zero count here means the rule has a hole: either a gift is
-/// inside a NORMAL platform's side, or a placed platform was added after the gift
-/// pass. T-112 asserts this is zero.
+/// T-127: this used to re-implement the box test with its own constants and no
+/// epsilon margin, so a gift touching a platform face by less than `levelgen::EPS`
+/// (1 mm) was rejected by the generator but counted as a hit here. The audit then
+/// reported 5 "intersecting" gifts out of 755,878 that were geometrically clean,
+/// and the threshold had to be loosened to 0.01% to absorb the measurement error.
+/// The dump now calls the generator's own predicate, so the audit measures exactly
+/// what the generator promises and the threshold can be zero.
 fn gift_intersections(level: &protocol::LevelData) -> usize {
-    let mut hits = 0usize;
-    for gift in &level.gifts {
-        let base = gift.pos.y - 0.3;
-        let (gx0, gx1) = (gift.pos.x - GIFT_BODY_HALF, gift.pos.x + GIFT_BODY_HALF);
-        let (gz0, gz1) = (gift.pos.z - GIFT_BODY_HALF, gift.pos.z + GIFT_BODY_HALF);
-        let (gy0, gy1) = (base + 0.001, base + GIFT_BODY_HEIGHT);
-        let hit = level.platforms.iter().any(|p| {
-            let b = &p.bounds;
-            gx0 < b.max.x && gx1 > b.min.x && gz0 < b.max.z && gz1 > b.min.z && gy0 < b.max.y && gy1 > b.min.y
-        });
-        if hit {
-            hits += 1;
-        }
-    }
-    hits
+    level
+        .gifts
+        .iter()
+        .filter(|gift| !sim::levelgen::gift_body_clear(level.platforms.iter().map(|p| &p.bounds), gift.pos))
+        .count()
 }
 
 fn main() {

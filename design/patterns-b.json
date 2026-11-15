@@ -3749,6 +3749,301 @@
       "enemy_slots": [],
       "altar_slots": [],
       "beacon": null
+    },
+    {
+      "id": "pb_frost_bounce",
+      "name": "Frost Pit Bounce",
+      "role": "path",
+      "min_level": 6,
+      "difficulty": 2,
+      "tags": [
+        "theme:frost",
+        "mech:bounce",
+        "mech:drop",
+        "hazard:trampoline",
+        "pit"
+      ],
+      "platforms": [
+        {
+          "kind": "NORMAL",
+          "min": [
+            -4,
+            4,
+            -7
+          ],
+          "max": [
+            4,
+            4.5,
+            -3
+          ]
+        },
+        {
+          "kind": "TRAMPOLINE",
+          "min": [
+            -3,
+            0,
+            -3
+          ],
+          "max": [
+            3,
+            0.5,
+            1
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -4,
+            0,
+            1
+          ],
+          "max": [
+            4,
+            0.5,
+            5
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -4,
+            4,
+            5
+          ],
+          "max": [
+            4,
+            4.5,
+            9
+          ]
+        }
+      ],
+      "sockets": [
+        {
+          "id": "a",
+          "pos": [
+            0,
+            4.5,
+            -7
+          ],
+          "facing": "S",
+          "width": 8
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            4.5,
+            9
+          ],
+          "facing": "N",
+          "width": 8
+        }
+      ],
+      "gift_slots": [
+        {
+          "pos": [
+            -2,
+            4.8,
+            -5
+          ],
+          "elevated": true
+        },
+        {
+          "pos": [
+            2,
+            4.8,
+            -5
+          ],
+          "elevated": true
+        },
+        {
+          "pos": [
+            0,
+            0.8,
+            3
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            -2,
+            4.8,
+            7
+          ],
+          "elevated": true
+        },
+        {
+          "pos": [
+            2,
+            4.8,
+            7
+          ],
+          "elevated": true
+        }
+      ],
+      "enemy_slots": [],
+      "altar_slots": [
+        [
+          2,
+          4.5,
+          7
+        ]
+      ],
+      "beacon": null
+    },
+    {
+      "id": "pb_void_bounce",
+      "name": "Void Spring Span",
+      "role": "path",
+      "min_level": 12,
+      "difficulty": 3,
+      "tags": [
+        "theme:void",
+        "mech:bounce",
+        "mech:span",
+        "hazard:trampoline",
+        "pad"
+      ],
+      "platforms": [
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            0,
+            -7
+          ],
+          "max": [
+            3,
+            0.5,
+            -4
+          ]
+        },
+        {
+          "kind": "TRAMPOLINE",
+          "min": [
+            -2,
+            0,
+            -4
+          ],
+          "max": [
+            2,
+            0.5,
+            -1
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            2,
+            1
+          ],
+          "max": [
+            3,
+            2.5,
+            4
+          ]
+        },
+        {
+          "kind": "TRAMPOLINE",
+          "min": [
+            -2,
+            2,
+            4
+          ],
+          "max": [
+            2,
+            2.5,
+            7
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            4,
+            9
+          ],
+          "max": [
+            3,
+            4.5,
+            12
+          ]
+        }
+      ],
+      "sockets": [
+        {
+          "id": "a",
+          "pos": [
+            0,
+            0.5,
+            -7
+          ],
+          "facing": "S",
+          "width": 6
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            4.5,
+            12
+          ],
+          "facing": "N",
+          "width": 6
+        }
+      ],
+      "gift_slots": [
+        {
+          "pos": [
+            -1.5,
+            0.8,
+            -5.5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            1.5,
+            0.8,
+            -5.5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            2.8,
+            2.5
+          ],
+          "elevated": true
+        },
+        {
+          "pos": [
+            -1.5,
+            4.8,
+            10.5
+          ],
+          "elevated": true
+        },
+        {
+          "pos": [
+            1.5,
+            4.8,
+            10.5
+          ],
+          "elevated": true
+        }
+      ],
+      "enemy_slots": [],
+      "altar_slots": [
+        [
+          1.5,
+          4.5,
+          10.5
+        ]
+      ],
+      "beacon": null
     }
   ]
 }
