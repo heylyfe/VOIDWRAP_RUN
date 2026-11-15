@@ -2136,3 +2136,122 @@ Vote integration 6/6. Silhouette 3/3, selftest 6/6.
 3. **The silhouette outliers.** `peal`/`coil` at 0.780 and `peal`/`blight` at 0.737 are the
    tightest pairs. Both are roundish zone enemies of similar radius. A small silhouette
    differentiator on one of them would widen the gap without touching behaviour.
+
+---
+
+## Cycle 24 — 2026-11-15
+
+### What the owner decided
+
+All three Cycle 23 candidates approved, in order, plus a new capability: **Blender, for models
+only.** The "no binary assets" rule is amended — geometry may be authored headlessly by Blender
+scripts in the repo, with the exported `.glb` committed as a build artifact. The script is the
+source of truth; CI has no Blender and the gates validate rather than author. Incremental wins
+only; do not wholesale-refactor models that already pass their checks.
+
+### Audit baseline (measured before any change)
+
+| Audit | Result |
+|---|---|
+| Pattern audit (5,000 seeds) | 17 lines, 0 failed, **2 skipped** — both `6.enemy-frequencies.*`, blind to the vote pool |
+| Economy audit | 8/8 PASS |
+| Voting conformance (real) | 3/3 PASS |
+| Debug conformance | 13/13 PASS |
+| Vote integration | 6/6 PASS |
+| Playthrough (8 clients, 90 s) | 9 pass / 4 skip / 0 fail; gift rate 48.9% |
+| Silhouette (190 pairs) | PASS; **peal/coil 0.780**, p90 0.432, max 0.780 |
+
+### Picked, and why
+
+1. **Dump record fix** — the only remaining route to the two SKIPs after the owner closed the
+   crate-move. Small, additive, unblocks two metrics that have never run.
+2. **Bot completes a level by walking** — the priority item. `gift-rate` at 48.9% says traversal
+   works; nothing says a level can be finished. Biggest coverage hole in the suite.
+3. **peal/coil silhouette redesign** — 0.780 against a p90 of 0.432 is the one pair a player can
+   genuinely confuse, and Blender makes a real redesign cheap.
+
+### T-155 — vote pool dump (PASS, `d12c89e`)
+
+`voidwrap-server --dump-pool` emits 120 NDJSON records (4 modes x 30 levels) and exits before
+`startup()`. Each carries the fresh pool plus a `gated` list with a `satisfiable` flag computed
+where the tag data lives — without it `chorus` (2x `small` permanents) reads as dead content.
+
+`6.enemy-frequencies.never-offered` and `6.enemy-frequencies.pool-depth` replace the two SKIPs.
+`pool-depth` replaces `always-offered`, which asked whether a type appeared in 100% of a cell's
+levels — true by construction for a pool, so it could only fire on a non-defect.
+
+**Pattern audit: 2 skipped -> 0 skipped.** Pool depth 3-19; all 20 enemies reachable.
+
+### T-156 — the bot walks (PARTIAL, `78db039`)
+
+Two real bugs, both invisible because the symptom was always "the bot fell off the map":
+
+1. **80 input frames/s into a 60 frames/s drain.** The queue filled to `MAX_QUEUED_INPUTS` and
+   dropped the excess, so every input was applied ~1 s late. The bot could see an edge, press
+   jump, and still fall.
+2. **No horizontal control in the air.** `nearestLanding` returns the point directly below an
+   airborne bot, so the aim became the bot's own position. **2715 of 3431 steer frames (79%)
+   degenerate, every one airborne.** After: **0 in 818.**
+
+Also: edge probe in 0.15 u steps against `jumpReach(rise)`; the `rise > 0.3` bunny-hop heuristic
+removed; `safeToJump` gates the unstick jump; `nearestOn` insets 1 u. New `VOIDWRAP_SEED` (every
+run used a clock seed, which is how the input-rate bug survived several "it got better" readings
+that were really easier levels) and `--trace`.
+
+**Fixed seed 7, 240 s, one client:** 22/46 (47.8%) + 1 void death -> **25/46 (54.3%), 0 deaths**.
+8-client seed 7, 90 s: 30.7% -> **48.9%**; this cycle's sweep reads **58.0%**.
+
+**PARKED:** emptying a level. The blocker is vertical routing — a gift directly above or below has
+no route, so the bot blacklists it and holds. Two shortcuts measured worse and were reverted
+(jump when degenerate 14/46 + a death; blacklist when degenerate 9/46). `level-completion` SKIPs
+with the number and reason, and PASSes the moment a level is emptied. Deliberately not a FAIL.
+
+### T-157 — peal/coil silhouette (PASS, `f68d9e7`)
+
+| metric | before | after |
+|---|---|---|
+| **peal / coil** | **0.780** | **0.200** |
+| roster max | 0.780 | 0.660 (warden/blight, unchanged) |
+| p90 | 0.432 | 0.410 |
+
+Peal is now a squat flared trapezoid (1.79 wide, 1.45 tall) with the clapper hanging clear below
+the lip; Coil is a 1.20-wide flat disc under a 0.56-wide column 1.70 tall. `MAX_IOU = 0.82`
+untouched. Behaviour, hitboxes, accents and telegraphs unchanged.
+
+Blender **5.3.0** at `C:/Program Files/Blender Foundation/Blender 5.3/blender.exe`. The folder the
+owner named is a workshop repo, not the install. `tools/blender/run.mjs` mirrors its wrapper;
+`--python-exit-code 1` is load-bearing, because without it a script that raises still exits 0.
+
+The first client cut cloned the glTF scene per instance. Wrong twice: `MODEL_COMPONENTS` mounts 24
+slots of every model and one `Object3D` cannot have two parents, and a shared material cannot
+animate `emissiveIntensity` per enemy. Cloning plus detached materials fixed both, and then
+`react-hooks/immutability` rejected mutating a `useMemo` value inside `useFrame` — correctly. The
+shipped version is declarative like the other 18 models: shared geometry, node translation read at
+render time, per-instance JSX materials, refs for the animation.
+
+### Gates
+
+`just verify` **exit 0** — 246 sim, **152 server**, **331 vitest (38 files)**, clippy
+`-D warnings`, protocol-gen `--check`, check-names, validate-content, pattern-audit `--selftest`
+PASS, silhouette `--selftest` 6/6.
+
+`node tools/verify-live.mjs --port 7979` **PASS 11/11**. Pattern audit 17 lines / 0 failed /
+**0 skipped**. Economy 8/8. Voting real 3/3. Debug 13/13. Vote integration 6/6. Playthrough
+9 pass / 4 skip / 0 fail. Playthrough actuated 12 pass / 4 skip / 0 fail. Silhouette 3/3.
+
+### Release
+
+`v0.36.0-alpha.1`.
+
+### Top 3 candidates for Cycle 25
+
+1. **Vertical routing for the bot.** The last blocker on level completion, and now the only thing
+   standing between the suite and a real end-to-end. The shape of the fix is a route that can
+   climb: the bot needs to recognise a gift on a platform above it and path to a ramp or jump pad
+   rather than blacklisting. Worth real effort — it is the backbone of every future audit.
+2. **The pre-match theme/difficulty poll.** Approved for a future cycle. Protocol message, server
+   handler, tally, and a consumer in the pattern engine's tag weights, through the full
+   `just gen` + `just fixtures` pipeline.
+3. **`warden`/`blight` at 0.660** — now the roster's worst pair, and both are roundish chase
+   enemies of similar radius. Blender makes a silhouette differentiator cheap, and the same
+   pipeline now exists. `peal`/`blight` at 0.298 is already fine.

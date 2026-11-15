@@ -1671,3 +1671,63 @@ PASS  vote integration
 ### Release
 
 `v0.35.0-alpha.1`.
+
+---
+
+## Cycle 24 — 2026-11-15
+
+### Gates
+
+`just verify` **exit 0** — 246 sim, **152 server**, **331 vitest (38 files)**, clippy
+`-D warnings`, protocol-gen `--check`, check-names (682 files), validate-content (20 enemies,
+10 upgrades, 19 curses, 4 classes, 34 shop items, 3 events, 15 milestones, 4 altars,
+10 achievements, 140 patterns), pattern-audit `--selftest` PASS, silhouette `--selftest` 6/6.
+
+`node tools/verify-live.mjs --port 7979` **PASS 11/11** — build wasm, build server, level dump,
+vote pool table, pattern audit, economy audit, playthrough, playthrough actuated, voting
+conformance (real), debug conformance, vote integration.
+
+### What each audit actually measured
+
+| Audit | Result |
+|---|---|
+| Pattern audit (5,000 seeds) | 17 lines, 0 failed, **0 skipped** (was 2) |
+| Economy audit | 8/8 PASS |
+| Voting conformance (real) | 3/3 PASS |
+| Debug conformance | 13/13 PASS |
+| Vote integration | 6/6 PASS |
+| Playthrough (8 clients, 90 s, seed 7) | 9 pass / 4 skip / 0 fail; gift rate **58.0%** |
+| Playthrough actuated | 12 pass / 4 skip / 0 fail |
+| Silhouette (190 pairs) | PASS; **peal/coil 0.200**, p90 0.410, max 0.660 |
+
+### Negative tests added or re-proved
+
+- **Pool metrics can fail.** The pattern-audit selftest plants four defects: an enemy absent from
+  every pool, an unsatisfiable gate, a pool shallower than 3, and a gated-but-reachable enemy.
+  The first three FAIL, the fourth correctly does not.
+- **The silhouette gate can fail.** `--selftest` 6/6: identical masks score 1.0 and exceed
+  `MAX_IOU`, a hairline falls under `MIN_FILL`, bit and mask IoU agree.
+- **The Blender wrapper cannot silently succeed.** `--python-exit-code 1` is in the argument list;
+  without it a script that raises still exits 0. Verified by the wrapper's own exit-code contract
+  (0 ok / 1 script failed / 2 setup problem).
+- **`level-completion` cannot false-pass.** It SKIPs with the collected count and the reason, and
+  only PASSes when a level is actually emptied. Deliberately not a FAIL — a permanently red line
+  trains the gate to be ignored.
+
+### Test count
+
+331 -> **331** (38 files). T-155 added one server unit test (`pool_table_covers_every_mode_and_level`)
+and T-157 added none — the model change is covered by the silhouette capture, which is a live
+check, not a unit test.
+
+### Parked
+
+- A player completing a level by walking: vertical routing. Two shortcuts measured worse and were
+  reverted.
+- A pre-match theme/difficulty poll: approved for a future cycle, needs the full protocol pipeline.
+- `ch04_twin_terrace`'s 22 u deck: frozen chunk, human decision.
+- `EnemyModelProps` carrying the look instead of 20 hardcoded literals: a redesign.
+
+### Release
+
+`v0.36.0-alpha.1`.
