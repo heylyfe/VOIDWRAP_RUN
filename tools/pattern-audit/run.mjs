@@ -410,6 +410,11 @@ function measurePatternGeometry(A, entry, id, pat) {
   const boxes = [], ramps = [];
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity, hasBox = false;
   let minY = Infinity, maxY = -Infinity;
+  // T-143: the largest single platform, which is what the reference scale is actually
+  // about. A 30 u footprint made of a 6 u deck and two 10 u ramps is a valley; a 22 u
+  // footprint made of one 22 u deck is one oversized platform. The whole-footprint
+  // extent cannot tell those apart, and the old `minExtent` guess could not either.
+  let maxPlatform = 0;
   for (const raw of plats) {
     const p = normPlat(raw);
     if (!p) {
@@ -425,6 +430,7 @@ function measurePatternGeometry(A, entry, id, pat) {
     if (p.max[2] > maxZ) maxZ = p.max[2];
     if (p.min[1] < minY) minY = p.min[1];
     if (p.max[1] > maxY) maxY = p.max[1];
+    maxPlatform = Math.max(maxPlatform, p.max[0] - p.min[0], p.max[2] - p.min[2]);
   }
   if (!hasBox && ramps.length) {
     // ramp-only pattern: fall back to the wedges for the footprint extent
@@ -443,11 +449,15 @@ function measurePatternGeometry(A, entry, id, pat) {
       const drop = Number.isFinite(minY) && Number.isFinite(maxY) ? maxY - minY : 0;
       pushEx(A.geo.scaleEx, {
         where: loc(entry), pattern: id, extent: f2(ext), drop: f2(drop),
-        // A chunk that drops `d` needs `2 * d / RAMP_MAX_RISE_RUN` of ramp plus its
-        // decks, so a big drop forces a big footprint. Reporting the implied minimum
-        // separates "out of band because it is a tall set-piece" from "out of band
-        // because someone typed the wrong number".
-        minExtent: f2(2 * (drop / TH.RAMP_MAX_RISE_RUN)),
+        // T-143: the old field here was `2 * drop / RAMP_MAX_RISE_RUN`, a guess at the
+        // extent the ramp slope cap forces. It was wrong in both directions: it claimed
+        // `ch15_tri_crown` was forced to 26 u when that chunk has no ramp covering its
+        // drop at all (it is a stepped terrace), and it claimed `ch04_twin_terrace` was
+        // forced to 20 u when its ramps sit *inside* its 22 u deck. Report the largest
+        // single platform instead: that is the number the reference scale is about, and
+        // it separates "big because it is composed of many pieces" from "big because
+        // one deck is oversized".
+        maxPlatform: f2(maxPlatform),
         note: `max XZ extent outside [${TH.SCALE_EXTENT_MIN}, ${TH.SCALE_EXTENT_MAX}]u`,
       });
     }
@@ -833,7 +843,9 @@ function report(A, ctx, log) {
     .slice(0, 6)
     .map(([id, n]) => {
       const ex = geo.scaleEx.find((e) => e.pattern === id);
-      return ex ? `${id}:${n} (${ex.extent}u, drop ${ex.drop}u, ramp-forced >= ${ex.minExtent}u)` : `${id}:${n}`;
+      return ex
+        ? `${id}:${n} (${ex.extent}u footprint, largest platform ${ex.maxPlatform}u, drop ${ex.drop}u)`
+        : `${id}:${n}`;
     });
   line('5.reference-scale',
     sRate <= TH.SCALE_RATE_MAX,
