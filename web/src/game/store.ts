@@ -62,6 +62,14 @@ export interface GameStore {
    * with a random pick. `RunVoteOverlay` consumes this log.
    */
   voteMessages: unknown[];
+  /**
+   * Poll traffic from the server, oldest first (T-161).
+   *
+   * The pre-match poll asks two questions before level 1 (theme, then
+   * difficulty — T-159) and the server broadcasts PollOpen / PollState /
+   * PollResult. `PollOverlay` consumes this log.
+   */
+  pollMessages: unknown[];
   /** This player's class (CLASS_*), from the latest snapshot. */
   myClass: number;
   /** Platforms not in their normal state (crumbling or gone), from the latest snapshot. */
@@ -102,6 +110,7 @@ export const useGameStore = create<GameStore>((set) => ({
   shop: null,
   notices: [],
   voteMessages: [],
+  pollMessages: [],
   myClass: 0,
   tiles: [],
   altarsUsed: [],

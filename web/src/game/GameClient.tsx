@@ -37,6 +37,7 @@ import { Beacon } from "@/scene/Beacon";
 import { BlockyAvatar } from "@/scene/BlockyAvatar";
 import { classColor } from "@/scene/classColors";
 import { RunVoteOverlay } from "@/hud/RunVoteOverlay";
+import { PollOverlay } from "@/hud/PollOverlay";
 import type { AvatarMotion } from "@/scene/avatarPose";
 import { Crystals } from "@/scene/Crystals";
 import { DashStreak } from "@/scene/DashStreak";
@@ -314,6 +315,7 @@ export default function GameClient() {
   const shop = useGameStore((s) => s.shop);
   const notices = useGameStore((s) => s.notices);
   const voteMessages = useGameStore((s) => s.voteMessages);
+  const pollMessages = useGameStore((s) => s.pollMessages);
   const myClass = useGameStore((s) => s.myClass);
   const levelPhase = useGameStore((s) => s.levelPhase);
   const goldenTaken = useGameStore((s) => s.goldenTaken);
@@ -446,6 +448,11 @@ export default function GameClient() {
           window; this overlay is the only thing that renders it and the only thing that
           can send a ballot. It renders nothing outside a vote. */}
       <RunVoteOverlay messages={voteMessages} onVote={(option) => session?.vote(option)} />
+      {/* Pre-match poll (T-161). The server opens the theme then the difficulty
+          poll before level 1 (T-159); this overlay renders the question and is the
+          only thing that can answer it. It renders nothing outside a poll, and sits
+          above the lobby draft screen (DraftScreen is z-40; this is z-50). */}
+      <PollOverlay messages={pollMessages} onPoll={(option) => session?.poll(option)} />
       {level && playing && normalTotal > 0 && (
         <>
           {phase2 ? (

@@ -220,6 +220,14 @@ export class GameSession {
       case "VoteResult":
         store.set({ voteMessages: [...store.voteMessages.slice(-63), msg] });
         return;
+      // T-161: the pre-match poll. The server opens two questions before level 1
+      // (theme, then difficulty — T-159) and broadcasts these three; `PollOverlay`
+      // replays this log through `usePoll`. Capped at 64 like voteMessages.
+      case "PollOpen":
+      case "PollState":
+      case "PollResult":
+        store.set({ pollMessages: [...store.pollMessages.slice(-63), msg] });
+        return;
     }
   }
 
@@ -259,6 +267,17 @@ export class GameSession {
    */
   vote(option: number): void {
     this.conn.send({ type: "Vote", option });
+  }
+
+  /**
+   * Send this player's pre-match poll answer (T-161).
+   *
+   * The server opens the theme then the difficulty poll before level 1 and rejects
+   * an answer when no poll is open, so the client does not need to track that state --
+   * it just forwards the option the overlay offered.
+   */
+  poll(option: number): void {
+    this.conn.send({ type: "Poll", option });
   }
 
   /** Projectile positions drawn at the newest server position (like enemies). */
