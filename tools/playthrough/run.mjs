@@ -69,6 +69,49 @@ function encodeInputs(frames) {
   return buf;
 }
 
+// --- platform graph -------------------------------------------------------
+//
+// A greedy straight-line steer cannot clear a level: the collect phase ends
+// only when every gift is taken, and gifts sit on platforms that are only
+// reachable by jumping a specific gap. These helpers give the bot a route.
+//
+// The envelope mirrors `sim::levelgen::design_max_gap`: 6.0 u on the flat,
+// 4.0 u at a +2.0 u rise, 8.0 u at a -4.0 u drop, and nothing above +2.0 u
+// because the jump apex is +2.25 u.
+const RAMP_KINDS = new Set([3, 4, 5, 6]);
+
+function maxGapForRise(rise) {
+  if (rise > 2.0) return 0;
+  if (rise >= 0) return 6.0 - rise;
+  return Math.min(8.0, 6.0 - rise * 0.5);
+}
+
+/** Edge-to-edge horizontal gap between two platform AABBs. */
+function gapBetween(a, b) {
+  const dx = Math.max(0, a.min.x - b.max.x, b.min.x - a.max.x);
+  const dz = Math.max(0, a.min.z - b.max.z, b.min.z - a.max.z);
+  return Math.hypot(dx, dz);
+}
+
+/** Adjacency over platforms: an edge exists when the gap is jumpable either way. */
+function buildPlatformGraph(platforms) {
+  const adj = Array.from({ length: platforms.length }, () => []);
+  for (let i = 0; i < platforms.length; i += 1) {
+    for (let j = i + 1; j < platforms.length; j += 1) {
+      const a = platforms[i].bounds;
+      const b = platforms[j].bounds;
+      const gap = gapBetween(a, b);
+      const up = b.max.y - a.max.y;
+      const down = a.max.y - b.max.y;
+      if (gap <= maxGapForRise(up) || gap <= maxGapForRise(down)) {
+        adj[i].push(j);
+        adj[j].push(i);
+      }
+    }
+  }
+  return adj;
+}
+
 /** One connected client with a decoded message log. */
 class Client {
   constructor(name) {
@@ -89,6 +132,8 @@ class Client {
     this.lastPos = null;
     this.target = null;
     this.index = 0;
+    this.graph = null;
+    this.graphFor = null;
   }
 
   connect(url) {
@@ -169,21 +214,86 @@ class Client {
    * face is at or just below the player's feet -- `upTol` widens that for
    * landing probes, where a step up is allowed.
    */
-  groundAt(x, z, y, upTol = 0.6) {
+  groundAt(x, z, y, upTol = 0.6, downTol = 3.0) {
+    return this.platformUnder(x, z, y, upTol, downTol) >= 0;
+  }
+
+  /** Index of the platform a player at `(x, z, y)` could stand on, or -1. */
+  platformUnder(x, z, y, upTol = 0.6, downTol = 3.0) {
     const platforms = this.level && this.level.platforms;
-    if (!Array.isArray(platforms)) return true;
-    for (const p of platforms) {
-      const b = p.bounds;
+    if (!Array.isArray(platforms)) return -1;
+    for (let i = 0; i < platforms.length; i += 1) {
+      const b = platforms[i].bounds;
       if (x < b.min.x - 0.25 || x > b.max.x + 0.25) continue;
       if (z < b.min.z - 0.25 || z > b.max.z + 0.25) continue;
-      const ramp = p.kind >= 3 && p.kind <= 6;
-      if (ramp) {
-        if (y >= b.min.y - 0.8 && y <= b.max.y + 0.8) return true;
-      } else if (b.max.y <= y + upTol && b.max.y >= y - 3.0) {
-        return true;
+      if (RAMP_KINDS.has(platforms[i].kind)) {
+        if (y >= b.min.y - 0.8 && y <= b.max.y + 0.8) return i;
+      } else if (b.max.y <= y + upTol && b.max.y >= y - downTol) {
+        return i;
       }
     }
-    return false;
+    return -1;
+  }
+
+  /**
+   * Nearest point on any platform at or below `y`. Used for air control: a bot
+   * that drifts off an edge with no input falls into the void, and the edge
+   * probe cannot help once it is airborne.
+   */
+  nearestLanding(x, z, y) {
+    const platforms = this.level && this.level.platforms;
+    if (!Array.isArray(platforms)) return null;
+    let best = null;
+    let bestD = Infinity;
+    for (const p of platforms) {
+      const b = p.bounds;
+      if (b.max.y > y + 0.5) continue;
+      const px = Math.min(Math.max(x, b.min.x), b.max.x);
+      const pz = Math.min(Math.max(z, b.min.z), b.max.z);
+      const d = (px - x) ** 2 + (pz - z) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = { x: px, z: pz };
+      }
+    }
+    return best;
+  }
+
+  /** Nearest point on platform `i` to `(x, z)`. */
+  nearestOn(i, x, z) {
+    const b = this.level.platforms[i].bounds;
+    return {
+      x: Math.min(Math.max(x, b.min.x), b.max.x),
+      z: Math.min(Math.max(z, b.min.z), b.max.z),
+    };
+  }
+
+  /** First platform to step onto on a route from `from` to `to`, or -1. */
+  nextHop(from, to) {
+    if (from < 0 || to < 0 || from === to) return -1;
+    const platforms = this.level.platforms;
+    if (this.graphFor !== this.level) {
+      this.graph = buildPlatformGraph(platforms);
+      this.graphFor = this.level;
+    }
+    const prev = new Int32Array(platforms.length).fill(-1);
+    const seen = new Uint8Array(platforms.length);
+    const queue = [from];
+    seen[from] = 1;
+    for (let head = 0; head < queue.length; head += 1) {
+      const cur = queue[head];
+      if (cur === to) break;
+      for (const nxt of this.graph[cur]) {
+        if (seen[nxt]) continue;
+        seen[nxt] = 1;
+        prev[nxt] = cur;
+        queue.push(nxt);
+      }
+    }
+    if (!seen[to]) return -1;
+    let step = to;
+    while (prev[step] !== from && prev[step] !== -1) step = prev[step];
+    return step;
   }
 
   /**
@@ -241,8 +351,34 @@ class Client {
     this.target = best.id;
     this.lastTarget = best.pos;
 
-    const dx = best.pos.x - pos.x;
-    const dz = best.pos.z - pos.z;
+    // Route over the platform graph. Aiming straight at a gift on another
+    // platform walks into the void; aim at the next platform on the route
+    // instead and let the edge probe below decide when to jump.
+    let aimX = best.pos.x;
+    let aimZ = best.pos.z;
+    const here = this.platformUnder(pos.x, pos.z, pos.y);
+    const there = this.platformUnder(best.pos.x, best.pos.z, best.pos.y, 2.0, 12.0);
+    if (here >= 0 && there >= 0 && here !== there) {
+      const hop = this.nextHop(here, there);
+      if (hop >= 0) {
+        const p = this.nearestOn(hop, pos.x, pos.z);
+        aimX = p.x;
+        aimZ = p.z;
+      }
+    }
+    // Air control: while airborne, steer toward the nearest landing instead of
+    // the route. The edge probe only runs when grounded, so a bot that drifts
+    // off an edge mid-jump has nothing else keeping it out of the void.
+    if (!you.grounded) {
+      const landing = this.nearestLanding(pos.x, pos.z, pos.y);
+      if (landing) {
+        aimX = landing.x;
+        aimZ = landing.z;
+      }
+    }
+
+    const dx = aimX - pos.x;
+    const dz = aimZ - pos.z;
     const len = Math.hypot(dx, dz) || 1;
     const dirX = dx / len;
     const dirZ = dz / len;
@@ -263,7 +399,7 @@ class Client {
     if (you.grounded && !this.groundAt(pos.x + dirX * 0.9, pos.z + dirZ * 0.9, pos.y)) {
       let landing = null;
       for (let d = 1.5; d <= 5.5; d += 0.5) {
-        if (this.groundAt(pos.x + dirX * d, pos.z + dirZ * d, pos.y, 2.0)) {
+        if (this.groundAt(pos.x + dirX * d, pos.z + dirZ * d, pos.y, 2.0, 12.0)) {
           landing = d;
           break;
         }
