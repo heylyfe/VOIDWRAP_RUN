@@ -446,3 +446,41 @@ Release: `v0.14.0-alpha.1`.
    starts, so it is a candidate for the human rather than an autonomous change.
 3. **Navigation bot for the playthrough sweep** — turns the 3 SKIPs and the
    `level-progression` FAIL into real coverage of the draft, the vote and the shop.
+
+---
+
+## Cycle 5 — baseline only (session ended before dispatch)
+
+### Audit baseline (re-run at cycle start)
+
+| audit | result |
+|---|---|
+| pattern audit (3,000 records / 200 seeds) | 10 of 13 PASS |
+| economy audit | 7 of 8 PASS (`8.hazard_entities`) |
+| matchmaker conformance | **8/8 PASS** (first re-measure since Cycle 1) |
+| voting conformance stub matrix | 10/10 PASS |
+| voting conformance violation selftest | 6/6 PASS |
+| voting conformance `--real` | 3/3 PASS |
+| playthrough sweep (8 clients, 90 s) | 7/11 passed, 3 skipped, 1 failed |
+
+### Why no ticket was dispatched
+
+The top candidate is the pattern library expansion (T-E): 50+ new patterns against the
+frozen format, the only lever left for `4.near-duplicates` (17.63%), `5.heights`
+(12.69%) and `5.reference-scale` (25.05%). It is a multi-hour authoring job with a
+strict validator behind it (`validate-content`, `5.ramps`, `0.input`). Starting it and
+leaving it half-authored would put unvalidated geometry in the catalog, which is worse
+than not starting. Per the discipline rule — bounded sessions, stop and summarize
+rather than grind — the cycle stops at the baseline.
+
+The other two candidates are blocked on decisions rather than effort:
+
+- **Class-selection window** — needs a decision on when a run starts. Logged for the
+  human, not changed autonomously.
+- **Navigation bot for the playthrough sweep** — a pathfinding bot over the level
+  graph. Large, and the sweep already reports honestly without it.
+
+### State at handback
+
+`just verify` green. Latest release `v0.14.0-alpha.1`. Nothing is half-merged; the
+tree is clean.
