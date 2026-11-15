@@ -23,12 +23,6 @@ const here = dirname(fileURLToPath(import.meta.url));
  */
 const TEST_ONLY = new Map<string, string>([
   ["scene/enemyPalette.ts", "CIELAB + delta-E maths; the palette itself is asserted by enemyLook.test.ts"],
-  [
-    "hud/LobbyPoll.tsx",
-    "the lobby variant of the pedestal vote; the lobby already has DraftScreen for card picks, "
-      + "so mounting both would put two vote surfaces on screen. The in-run vote is mounted "
-      + "(T-149). Deleting this is a human decision, not a wiring fix.",
-  ],
 ]);
 
 /** Every .ts/.tsx under web/src, excluding tests. */

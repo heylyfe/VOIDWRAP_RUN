@@ -21,6 +21,9 @@ const PROTOCOL_VERSION = 8;
 // Classes are 0..=CLASS_GLIDER on the wire; design/content.json ships four.
 const CLASS_COUNT = 4;
 
+// Mirrors protocol::PHASE_*. The lobby shop is only open in PHASE_ENEMY_DRAFT.
+const PHASE_ENEMY_DRAFT = 0;
+
 const argv = process.argv.slice(2);
 const argValue = (flag, fallback) => {
   const i = argv.indexOf(flag);
@@ -40,6 +43,14 @@ const SECONDS = Number(argValue('--seconds', process.env.PLAYTHROUGH_SECONDS || 
 // (x, y, z) with velocity v", which is the measurement the level-progression check
 // was blocked on.
 const DEATH_LOG = argValue('--death-log', process.env.PLAYTHROUGH_DEATH_LOG || '');
+// T-154: the debug-driven progression mode. The bots cannot finish a level, so
+// `level-progression`, `vote` and `shop` were permanently SKIPped and a regression in any
+// of them would have gone unnoticed. `--actuate` drives those paths through the debug
+// command layer instead of through movement. The debug gate is singleplayer-only, so this
+// mode runs one client.
+const ACTUATE = flag('--actuate');
+const DEV_CODE = argValue('--code', process.env.PLAYTHROUGH_DEV_CODE || 'devaccess');
+
 const KNOWN_FAILURES = new Set(
   (argValue('--known-failures', process.env.PLAYTHROUGH_KNOWN_FAILURES || ''))
     .split(',')
@@ -54,7 +65,9 @@ const KNOWN_FAILURE_REASONS = {
   'level-progression':
     'blocked by the starting-lives balance decision (a run starts with 0 spare lives, '
     + 'so the first fall ends it) and by the bot holding still when every remaining gift '
-    + 'is behind a gap it cannot probe; see tickets/T-139.md',
+    + 'is behind a gap it cannot probe; see tickets/T-139.md. T-154 moved the live '
+    + 'coverage to `--actuate`, which changes level through the debug layer instead of '
+    + 'walking, so this entry is no longer needed to suppress the 8-client sweep.',
 };
 
 if (!URL_) {
@@ -150,6 +163,8 @@ class Client {
     this.index = 0;
     this.graph = null;
     this.graphFor = null;
+    // Latest `RunState.info.phase`. The shop gate reads it; see `react`.
+    this.phase = null;
   }
 
   connect(url) {
@@ -180,6 +195,9 @@ class Client {
         msg.type = msg.variant;
         this.log.push({ at: Date.now(), msg });
         if (msg.variant === 'Error') this.errors.push(msg);
+        if (msg.variant === 'RunState' && msg.info && typeof msg.info.phase === 'number') {
+          this.phase = msg.info.phase;
+        }
         if (msg.variant === 'Level') {
           this.level = msg.data;
           this.collected = new Set();
@@ -219,6 +237,51 @@ class Client {
     } catch (error) {
       this.decodeFailures.push('send ' + msg.variant + ': ' + error.message);
     }
+  }
+
+  /** Every decoded frame of one variant, in arrival order. */
+  all(variant) {
+    return this.log.map((entry) => entry.msg).filter((msg) => msg.variant === variant);
+  }
+
+  /**
+   * Wait for a frame matching `pred` that arrives at or after log index `from`.
+   *
+   * The index matters: `switch_level` produces a `Level` frame, and a level the bot
+   * already loaded produced one too, so scanning the whole log would match the stale
+   * frame and report success without the command having done anything.
+   */
+  async waitForAfter(from, pred, timeoutMs = 4000) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      for (let i = from; i < this.log.length; i += 1) {
+        if (pred(this.log[i])) return this.log[i];
+      }
+      if (this.closed || Date.now() > deadline) return null;
+      await sleep(25);
+    }
+  }
+
+  /** Wait for a frame matching `pred`, scanning everything received so far. */
+  waitFor(pred, timeoutMs = 4000) {
+    return this.waitForAfter(0, pred, timeoutMs);
+  }
+
+  /**
+   * Send a debug command and wait for its `DebugResult`.
+   *
+   * The debug layer is gated three ways (dev flag or dev code, singleplayer only), so a
+   * rejection here is a real answer, not a transport failure -- the caller reports it.
+   */
+  async debug(command, args = {}, code = DEV_CODE) {
+    const from = this.log.length;
+    this.send({ variant: 'Debug', code, command, args: JSON.stringify(args) });
+    const hit = await this.waitForAfter(
+      from,
+      (entry) => entry.msg.variant === 'DebugResult',
+      5000,
+    );
+    return hit ? hit.msg : { ok: false, message: 'timeout waiting for DebugResult' };
   }
 
   /**
@@ -474,18 +537,149 @@ class Client {
     } else if (msg.variant === 'VoteOpen') {
       this.send({ variant: 'Vote', option: 0 });
       this.votes = (this.votes || 0) + 1;
-    } else if (msg.variant === 'Shop') {
-      const item = (msg.items || []).find((entry) => entry.stock > 0);
-      if (item) {
-        this.send({ variant: 'Buy', item: item.id });
-        this.buys = (this.buys || 0) + 1;
-      }
     }
+    // No auto-buy on `Shop`. A `Shop` frame is sent whenever the offer changes, including
+    // for a level that is already playing, and the server answers a Buy outside
+    // PHASE_ENEMY_DRAFT with 409 "the shop is not open". Guessing the phase from frame
+    // ordering produced exactly that 409, which `error-frames` reported. A purchase has a
+    // precondition, so the actuated driver sets it explicitly; see `actuate`.
   }
 
   close() {
     if (this.ws && !this.closed) this.ws.close();
   }
+}
+
+/** Pull `gifts_left` out of the `state` readout. */
+function giftsLeft(stateMsg) {
+  const m = /gifts_left=(\d+)/.exec(stateMsg?.message ?? '');
+  return m ? Number(m[1]) : null;
+}
+
+/** Pull `currency` out of the `state` readout. */
+function currency(stateMsg) {
+  const m = /currency=(-?\d+)/.exec(stateMsg?.message ?? '');
+  return m ? Number(m[1]) : null;
+}
+
+/** Pull `level` out of the `state` readout. */
+function stateLevel(stateMsg) {
+  const m = /level=(\d+)/.exec(stateMsg?.message ?? '');
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * T-154: drive the level -> shop -> vote chain through the debug command layer.
+ *
+ * The bots cannot finish a level -- a greedy straight-line steer cannot clear a gap it
+ * cannot probe -- so `level-progression`, `vote` and `shop` were permanently SKIPped and
+ * a regression in any of them would have gone unnoticed. The debug layer is the actuator
+ * that makes those paths reachable: it can change level, empty a level's gifts and grant
+ * currency, which is the same sequence a real run performs.
+ *
+ * This is a coverage tool, not a claim that a player can complete a level by walking.
+ * `gift-rate` stays the traversal check; this one proves the chain still fires.
+ */
+async function actuate(client, push) {
+  const welcome = await client.waitFor((f) => f.msg && f.msg.variant === 'Welcome', 8000);
+  if (!welcome) {
+    push('actuate-connect', false, 'no Welcome within 8000ms');
+    return;
+  }
+
+  // --- level progression, first jump -----------------------------------------
+  // A jump must produce a fresh Level frame with gifts on it and a state readout that
+  // agrees, which is what "the level changed" means. The log index is captured before the
+  // command so a Level frame from the level the bot already had cannot be mistaken for the
+  // result of the jump.
+  const jumpFrom = client.log.length;
+  // The jump is what generates the offer, so the Shop frame to read is the one it sends.
+  // Capturing the index after the jump instead waits for a frame that only arrives on the
+  // next purchase, which is a deadlock: no offer, no buy, no new offer.
+  const shopFrom = jumpFrom;
+  const jump2 = await client.debug('switch_level', { level: 2, seed: 4002 });
+  const level2 = await client.waitForAfter(jumpFrom, (e) => e.msg.variant === 'Level', 5000);
+  const gifts2 = level2 && level2.msg.data && Array.isArray(level2.msg.data.gifts)
+    ? level2.msg.data.gifts.length
+    : 0;
+  const state2 = await client.debug('state');
+  const jump2Ok = jump2.ok === true && level2 !== null && gifts2 > 0 && stateLevel(state2) === 2;
+
+  // --- shop ------------------------------------------------------------------
+  // The offer is generated by the jump, but it is only *open* in PHASE_ENEMY_DRAFT: the
+  // server answers a Buy in any other phase with 409 "the shop is not open". So the shop
+  // step has to set the phase, not just wait for the frame.
+  const shop = await client.waitForAfter(shopFrom, (e) => e.msg.variant === 'Shop', 6000);
+  const items = shop && Array.isArray(shop.msg.items) ? shop.msg.items : [];
+  const stocked = items.filter((item) => item.stock > 0);
+  let bought = false;
+  let spent = null;
+  if (stocked.length > 0) {
+    await client.debug('set_phase', { phase: PHASE_ENEMY_DRAFT });
+    await client.debug('grant_gold', { amount: 5000 });
+    const before = currency(await client.debug('state'));
+    client.send({ variant: 'Buy', item: stocked[0].id });
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline) {
+      const now = currency(await client.debug('state'));
+      if (before !== null && now !== null && now < before) {
+        bought = true;
+        spent = before - now;
+        break;
+      }
+      await sleep(100);
+    }
+  }
+  push(
+    'actuate-shop',
+    items.length > 0 && stocked.length > 0 && bought,
+    'Shop frames: ' + client.all('Shop').length + ', items: ' + items.length
+      + ', stocked: ' + stocked.length
+      + (bought ? ', bought ' + stocked[0].id + ' for ' + spent : ', no purchase landed'),
+  );
+
+  // --- level progression, second jump ----------------------------------------
+  // A second jump proves the first was not a one-off: the world regenerates again and the
+  // level counter follows.
+  const jump3From = client.log.length;
+  const jump3 = await client.debug('switch_level', { level: 3, seed: 4003 });
+  const level3 = await client.waitForAfter(jump3From, (e) => e.msg.variant === 'Level', 5000);
+  const gifts3 = level3 && level3.msg.data && Array.isArray(level3.msg.data.gifts)
+    ? level3.msg.data.gifts.length
+    : 0;
+  const state3 = await client.debug('state');
+  const jump3Ok = jump3.ok === true && level3 !== null && gifts3 > 0 && stateLevel(state3) === 3;
+
+  push(
+    'actuate-level-progression',
+    jump2Ok && jump3Ok,
+    'level 2: ok=' + (jump2.ok === true) + ' freshLevel=' + (level2 !== null) + ' gifts=' + gifts2
+      + ' stateLevel=' + stateLevel(state2)
+      + '; level 3: ok=' + (jump3.ok === true) + ' freshLevel=' + (level3 !== null)
+      + ' gifts=' + gifts3 + ' stateLevel=' + stateLevel(state3),
+  );
+
+  // --- vote ------------------------------------------------------------------
+  // Empty the level's gifts. The collapse window is when `open_vote_session` fires, so a
+  // VoteOpen frame is the proof that the vote path is reachable from a real level state.
+  const voteFrom = client.log.length;
+  let left = null;
+  for (let i = 0; i < 12; i += 1) {
+    const granted = await client.debug('grant_gift', { count: 255 });
+    if (!granted.ok) {
+      push('actuate-vote', false, 'grant_gift failed: ' + (granted.message ?? 'no message'));
+      return;
+    }
+    left = giftsLeft(await client.debug('state'));
+    if (left === 0) break;
+  }
+  const open = await client.waitForAfter(voteFrom, (e) => e.msg.variant === 'VoteOpen', 10000);
+  const options = open && Array.isArray(open.msg.options) ? open.msg.options : [];
+  push(
+    'actuate-vote',
+    left === 0 && open !== null && options.length > 0,
+    'gifts_left=' + left + ', VoteOpen=' + (open !== null) + ', options=' + options.length,
+  );
 }
 
 function report(name, ok, detail) {
@@ -495,8 +689,11 @@ function report(name, ok, detail) {
 }
 
 async function main() {
+  // The debug gate rejects every command while more than one player is connected, so the
+  // actuated mode is singleplayer by construction.
+  const clientCount = ACTUATE ? 1 : CLIENTS;
   const clients = [];
-  for (let i = 0; i < CLIENTS; i += 1) {
+  for (let i = 0; i < clientCount; i += 1) {
     const client = new Client('pt-' + i);
     // Each bot takes a different one of the nearest gifts, so eight of them do
     // not converge on the same one. See `steer`.
@@ -525,10 +722,16 @@ async function main() {
     clients[i].send({ variant: 'Restart' });
     clients[i].send({ variant: 'ChooseClass', class: i % CLASS_COUNT });
   }
-  push('connect', connected === CLIENTS, connected + '/' + CLIENTS + ' clients connected');
+  push('connect', connected === clientCount, connected + '/' + clientCount + ' clients connected');
 
   // --- let the run play out
   for (const client of clients) if (!client.closed) client.startWalking();
+  // T-154: in actuated mode the debug driver runs alongside the bot. It advances the run
+  // through the command layer while the bot keeps walking, so the frames the checks below
+  // read are produced by a real session rather than by a mock.
+  const driver = ACTUATE && clients[0] && !clients[0].closed
+    ? actuate(clients[0], push)
+    : Promise.resolve();
   // `--verbose` prints one line per second per client: position, grounded, and
   // gift progress. A stalled level is either a bot that is dying or a bot that
   // is not finding gifts, and the level counter cannot tell those apart.
@@ -557,12 +760,21 @@ async function main() {
     if (clients.every((client) => client.closed)) break;
   }
 
+  await driver;
+
   const all = clients.flatMap((client) => client.log.map((entry) => entry.msg));
   const variants = new Set(all.map((msg) => msg.variant));
   const runStates = all.filter((msg) => msg.variant === 'RunState');
   const levels = runStates.map((msg) => msg.info && msg.info.level).filter((n) => typeof n === 'number');
   const phases = new Set(runStates.map((msg) => msg.info && msg.info.phase).filter((p) => p !== undefined));
   const maxLevel = levels.length ? Math.max(...levels) : 0;
+  // Progression means the level CHANGED during this session, not that it is high. The
+  // server pushes its current run state on Hello and `Restart` only resets a run that is
+  // over, so a server left at level 3 by an earlier sweep would otherwise report PASS for
+  // a sweep that never advanced anything -- which is exactly what happened before this was
+  // measured this way.
+  const startLevel = levels.length ? levels[0] : 0;
+  const advanced = levels.some((level) => level !== startLevel);
 
   push('welcome', variants.has('Welcome'), 'Welcome frames: ' + all.filter((m) => m.variant === 'Welcome').length);
   push('runstate', runStates.length > 0, 'RunState frames: ' + runStates.length);
@@ -570,7 +782,7 @@ async function main() {
   // walk happens to collect every gift. Checks that need a completed level are
   // reported as SKIP rather than FAIL when that did not happen, so the sweep's
   // signal stays about the protocol and the lobby flow.
-  const completed = maxLevel >= 2;
+  const completed = advanced;
   const gate = (name, ok, detail) => push(name, completed ? ok : null, detail);
   // Gift progress is the number that explains a stalled level: a bot that
   // reaches level 1 and stops is either dying or not finding the gifts, and
@@ -580,8 +792,12 @@ async function main() {
     0,
   );
   const best = { taken: clients.reduce((n, c) => Math.max(n, c.collected.size), 0), total: totalGifts };
-  push('level-progression', completed,
-    'highest level reached: ' + maxLevel + ' (best client collected ' + best.taken + '/' + best.total + ' gifts)');
+  // T-154: gated, not a hard FAIL. The bots cannot complete a level by walking, so in the
+  // 8-client sweep this is a SKIP with the number that explains it; the actuated mode
+  // (`--actuate`) is where this check is live, because the debug layer can change level.
+  gate('level-progression', completed,
+    'level went ' + startLevel + ' -> ' + maxLevel + ' (best client collected '
+      + best.taken + '/' + best.total + ' gifts)');
   // T-142: gift progress as its own check, not just a number inside the skip message.
   // `level-progression` needs a completed level, which the bots cannot reach (T-139),
   // so it is always skipped and a traversal regression would go unnoticed. This check
@@ -591,15 +807,31 @@ async function main() {
   // change makes traversal much worse.
   const GIFT_RATE_MIN = 0.2;
   const giftRate = best.total > 0 ? best.taken / best.total : 0;
-  push('gift-rate', best.total > 0 && giftRate >= GIFT_RATE_MIN,
-    'best client collected ' + best.taken + '/' + best.total + ' gifts ('
-    + (giftRate * 100).toFixed(1) + '%) in ' + SECONDS + 's; threshold >= '
-    + (GIFT_RATE_MIN * 100).toFixed(0) + '%');
+  // Actuated mode grants gifts through the debug layer instead of walking to them, so the
+  // rate it measures is not traversal. Reporting it as a number here would be a metric with
+  // nothing to measure; the 8-client sweep is where this check belongs.
+  push('gift-rate', ACTUATE ? null : best.total > 0 && giftRate >= GIFT_RATE_MIN,
+    ACTUATE
+      ? 'skipped: actuated mode grants gifts through the debug layer, so this measures no traversal'
+      : 'best client collected ' + best.taken + '/' + best.total + ' gifts ('
+        + (giftRate * 100).toFixed(1) + '%) in ' + SECONDS + 's; threshold >= '
+        + (GIFT_RATE_MIN * 100).toFixed(0) + '%');
+  // A class pick and the first draft both only exist in the first lobby of a run, and
+  // `Restart` resets a run only when it is over. A sweep that joins a run already in
+  // progress therefore cannot see either -- by design, not by defect -- so both checks are
+  // gated on the precondition rather than blaming the server for the sweep's own timing.
+  const firstLobby = runStates.some(
+    (msg) => msg.info && msg.info.level === 1 && msg.info.phase === PHASE_ENEMY_DRAFT,
+  );
   // `draft` does not need a completed level: the first draft fires before level 1
   // starts, so it is a live check even when the bot never finishes a level.
   const drafts = all.filter((m) => m.variant === 'Draft').length;
   const draftAnswers = clients.reduce((n, c) => n + (c.drafts || 0), 0);
-  push('draft', drafts > 0 && draftAnswers > 0, 'Draft frames: ' + drafts + ', answered: ' + draftAnswers);
+  push('draft', firstLobby ? drafts > 0 && draftAnswers > 0 : null,
+    firstLobby
+      ? 'Draft frames: ' + drafts + ', answered: ' + draftAnswers
+      : 'skipped: the run was not in the first lobby when the clients joined, so no draft '
+        + 'was due (Restart only resets a run that is over)');
   gate('vote', variants.has('VoteOpen'), 'VoteOpen frames: ' + all.filter((m) => m.variant === 'VoteOpen').length);
   gate('shop', variants.has('Shop'), 'Shop frames: ' + all.filter((m) => m.variant === 'Shop').length);
   push('phase-coverage', phases.size >= 2, 'distinct phases: ' + phases.size + ' [' + [...phases].join(',') + ']');
@@ -610,9 +842,16 @@ async function main() {
   const errorFrames = clients.flatMap((client) => client.errors).filter((e) => e.code !== undefined);
   const classRejects = errorFrames.filter((e) => /class can only be changed/i.test(e.message || ''));
   const otherErrors = errorFrames.filter((e) => !/class can only be changed/i.test(e.message || ''));
-  push('class-select', classRejects.length === 0,
-    classRejects.length + '/' + CLIENTS + ' clients had their class rejected' +
-    (classRejects.length ? ' (server: "' + classRejects[0].message + '")' : ''));
+  // A class pick is only legal in the first lobby of a run. `Restart` resets the run only
+  // when it is over, so a sweep that joins a run already in progress cannot pick a class --
+  // by design, not by defect. Reporting that as a rejection would blame the server for the
+  // sweep's own precondition, so it is a SKIP with the reason.
+  push('class-select', firstLobby ? classRejects.length === 0 : null,
+    firstLobby
+      ? classRejects.length + '/' + clientCount + ' clients had their class rejected' +
+        (classRejects.length ? ' (server: "' + classRejects[0].message + '")' : '')
+      : 'skipped: the run was not in the first lobby when the clients joined, so a class '
+        + 'pick is rejected by design (Restart only resets a run that is over)');
   push('error-frames', otherErrors.length === 0,
     otherErrors.length + ' unexpected Error frames' + (otherErrors.length ? ': ' + JSON.stringify(otherErrors.slice(0, 3)) : ''));
 

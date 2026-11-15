@@ -10,7 +10,6 @@ import { initialVoteState, isVotingOpen, secondsRemaining, voteReducer } from '.
 import type { VoteEvent, VoteOption, VoteViewState } from '../model';
 import { parseVoteMessage } from '../protocolAdapter';
 import { VoteWidget } from '../VoteWidget';
-import { LobbyPoll } from '../../LobbyPoll';
 import { RunVoteOverlay } from '../../RunVoteOverlay';
 
 // Test fixtures only — real option ids/names come from the server (content.json).
@@ -221,25 +220,9 @@ describe('VoteWidget', () => {
   });
 });
 
-// LobbyPoll and RunVoteOverlay are thin `useVote` containers: they ingest server messages in an
-// effect, which does not run under renderToStaticMarkup. Their message-driven states are covered
-// above through parseVoteMessage + voteReducer + VoteWidget; here we pin the idle render.
-describe('LobbyPoll', () => {
-  it('offers a start button and a skip, and never gates the run start', () => {
-    const out = html(createElement(LobbyPoll, { onStartPoll: noop, onVote: noop, messages: [] }));
-    expect(out).toContain('START POLL');
-    expect(out).toContain('Skip the poll');
-    expect(out).toContain('Optional — the run can start without it.');
-    expect(out).toMatch(/pattern engine/);
-  });
-
-  it('renders the poll variant of the widget, not the pedestal one', () => {
-    const out = html(createElement(LobbyPoll, { messages: [] }));
-    expect(out).toContain('PRE-MATCH POLL');
-    expect(out).not.toContain('CHOOSE THE NEW PERMANENT');
-  });
-});
-
+// RunVoteOverlay is a thin `useVote` container: it ingests server messages in an effect, which
+// does not run under renderToStaticMarkup. Its message-driven states are covered above through
+// parseVoteMessage + voteReducer + VoteWidget; here we pin the idle render.
 describe('RunVoteOverlay', () => {
   it('renders nothing while no vote is running', () => {
     expect(html(createElement(RunVoteOverlay, { messages: [] }))).toBe('');

@@ -2047,3 +2047,92 @@ Playthrough 9 pass / 3 skip / 0 fail.
 3. **The playthrough bot finishing a level.** It is the last thing keeping three checks
    dark, and T-150 proved the debug layer can drive a run to the collapse — the same
    technique could let the bot skip the parts it cannot navigate.
+
+---
+
+## Cycle 23 — the parked list, decided
+
+**Picked:** the four items the owner ruled on at the end of Cycle 22. No new candidates were
+chosen; the rulings were the scope.
+
+### T-152 — silhouette distinctness (PASS)
+
+The owner approved the dev-only `/dev/enemies` gallery as the capture source. Built it, plus
+`tools/silhouette.mjs`, which takes the pixels that differ from the flat background as the
+silhouette and compares every pair with IoU.
+
+Excluded from production by construction: `pageExtensions` drops `dev.tsx` when
+`NODE_ENV === "production"`, so a release build lists only `/`, `/_not-found` and `/play`, and
+the component is not in the bundle at all.
+
+Two measurement bugs, both caught by reading the numbers:
+
+- A head-on camera rendered LURE as an empty silhouette — it is a flat ground-plane creature.
+  The camera moved to the gameplay 3/4 view.
+- Normalising the bounding box threw away size: Pallbearer (1.3) and Mimic (0.5) both became
+  "a solid rectangle" and scored **0.948**. The gallery now applies the body radius from
+  `design/content.json` and the tool compares exact pixel masks in a fixed frame.
+
+Measured over 190 pairs: `min 0.000  p25 0.129  median 0.245  p75 0.339  p90 0.432  max 0.780`.
+`MAX_IOU = 0.82` is a regression guard anchored to the shipped roster, not a perceptual
+constant. `--selftest` 6/6 proves the gate can fail.
+
+### T-153 — `LobbyPoll` (PASS)
+
+Neither branch of the ruling applied. T-120 is not a physical lobby, and `LobbyPoll` is a
+pre-match theme/difficulty poll, not the pedestal vote. It is **unimplemented, not superseded**:
+no `Poll` message in the protocol, no server handler. Deleted with its two tests and its
+allowlist entry. A pre-match poll is logged as a candidate, not smuggled into a cleanup.
+
+### T-154 — playthrough bot via debug actuators (PASS)
+
+`--actuate` runs a singleplayer session and drives the run through the frozen debug manifest
+while the bot keeps walking. `verify-live` runs both passes. `level-progression`, `vote` and
+`shop` are live checks for the first time since T-139.
+
+Four measurement bugs found on the way:
+
+1. `level-progression` was passing on stale frames — the server pushes its run state on `Hello`
+   and `Restart` only resets an over run, so a server left at level 3 reported PASS for a sweep
+   that advanced nothing. It now asks whether the level **changed**.
+2. The bot bought into a closed shop (409), caught by `error-frames`. Auto-buy removed.
+3. The shop step deadlocked on its own capture point.
+4. `draft` and `class-select` blamed the server for the sweep's own timing; both now SKIP.
+
+Negative test: `--code nope` fails every actuated check, the rate limiter fires, and
+`level-progression` SKIPs instead of false-passing.
+
+### Decision logged, not ticketed
+
+**Dump enemy types — closed.** `vote_pool_with` stays in `server`, `pattern_dump` stays in
+`sim`. Each dump lives in the crate that owns its data. The two `6.enemy-frequencies.*` metrics
+stay SKIP and that is the accepted cost.
+
+### Gates
+
+`just verify` **exit 0** — 246 sim, 151 server, **331 vitest (38 files)**, clippy
+`-D warnings`, protocol-gen `--check`, check-names, validate-content, pattern-audit `--selftest`
+PASS.
+
+`node tools/verify-live.mjs --port 7979` **PASS 10/10** (was 9/9; `playthrough actuated` is new).
+Pattern audit 17 lines / 0 failed / 2 skipped. Economy 8/8. Voting real 3/3. Debug 13/13.
+Playthrough 9 pass / 3 skip / 0 fail. Playthrough actuated 12 pass / 3 skip / 0 fail.
+Vote integration 6/6. Silhouette 3/3, selftest 6/6.
+
+### Release
+
+`v0.35.0-alpha.1`.
+
+### Top 3 candidates for Cycle 24
+
+1. **The two `6.enemy-frequencies.*` SKIPs.** The owner closed the crate-move route, so the only
+   remaining path is to give `sim` its own thin vote-pool readout — but that is the same
+   architecture churn under a different name. Better: make the metric answerable from the dump
+   alone by recording the offered pool per level in the dump record. That is additive to the
+   dump format, not a crate move.
+2. **A player completing a level by walking.** Still the last dark corner. `gift-rate` at 30.7%
+   says traversal works; nothing says a level can be finished. The starting-lives decision is
+   the blocker and it is a balance call, not a code call.
+3. **The silhouette outliers.** `peal`/`coil` at 0.780 and `peal`/`blight` at 0.737 are the
+   tightest pairs. Both are roundish zone enemies of similar radius. A small silhouette
+   differentiator on one of them would widen the gap without touching behaviour.

@@ -1596,3 +1596,78 @@ the module-wiring guard. The count went down and the coverage went up.
 ### Release
 
 `v0.34.0-alpha.1`.
+
+---
+
+## Cycle 23 — v0.35.0-alpha.1
+
+### Gates
+
+| gate | result |
+|---|---|
+| `just verify` | **exit 0** |
+| sim tests | 246 |
+| server tests | 151 |
+| vitest | **331** (38 files) |
+| clippy | `-D warnings` clean |
+| protocol-gen `--check` | clean |
+| check-names | clean |
+| validate-content | clean |
+| pattern-audit `--selftest` | PASS |
+| silhouette `--selftest` | PASS (6/6, new in the gate) |
+
+`node tools/verify-live.mjs --port 7979` **PASS 10/10**:
+
+```
+PASS  build wasm
+PASS  build server
+PASS  level dump
+PASS  pattern audit
+PASS  economy audit
+PASS  playthrough
+PASS  playthrough actuated
+PASS  voting conformance (real)
+PASS  debug conformance
+PASS  vote integration
+```
+
+### Kit detail
+
+- Pattern audit: 17 lines, 0 failed, 2 skipped (`6.enemy-frequencies.*`, accepted cost of the
+  owner's decision to keep each dump in its own crate).
+- Economy audit: 8/8.
+- Voting conformance (real): 3/3.
+- Debug conformance: 13/13.
+- Playthrough (8 clients): 9 pass / 3 skip / 0 fail. `level-progression`, `vote`, `shop` SKIP —
+  the bots cannot complete a level by walking.
+- Playthrough actuated: 12 pass / 3 skip / 0 fail. `level-progression`, `vote`, `shop` **live**.
+- Vote integration: 6/6.
+- Silhouette: 3/3 (`overlap` 0.780 <= 0.82, `fill` 0.129 >= 0.08, `framing` 0 clipped),
+  selftest 6/6.
+
+### Negative tests
+
+- **Silhouette gate can fail.** `--selftest` feeds known-answer masks: identical shapes score
+  1.0 and exceed `MAX_IOU`; a hairline falls under `MIN_FILL`; bit and mask IoU agree. 6/6.
+- **Production exclusion is real.** `npm run build` lists only `/`, `/_not-found`, `/play`;
+  `out/dev/enemies/index.html` absent; `grep -rl "DevEnemyGallery" out/` returns nothing.
+- **Actuated driver depends on the debug layer.** `--code nope` fails all three actuated checks,
+  the rate limiter fires, and `level-progression` SKIPs (`level went 3 -> 3`) rather than
+  false-passing.
+- **Module-wiring allowlist is honest.** T-153 removed the `LobbyPoll` entry; the stale-entry
+  test would have failed otherwise.
+
+### Test count
+
+333 → **331** (38 files). Two tests deleted with `LobbyPoll` — they pinned copy, not behaviour.
+
+### Parked
+
+- A player completing a level by walking: the starting-lives balance decision.
+- A pre-match theme/difficulty poll: needs a `Poll` message, a handler, a tally, and a consumer.
+- `ch04_twin_terrace`'s 22 u deck: frozen chunk, human decision.
+- `EnemyModelProps` carrying the look instead of 20 hardcoded literals: a redesign.
+
+### Release
+
+`v0.35.0-alpha.1`.

@@ -35,6 +35,7 @@ verify: wasm
     node tools/check-names.mjs
     node tools/validate-content.mjs
     node tools/pattern-audit/run.mjs --selftest
+    node tools/silhouette.mjs --selftest
     cd server; cargo fmt --all --check
     cd server; cargo clippy --workspace --all-targets -- -D warnings
     cd server; cargo test --workspace
@@ -47,6 +48,7 @@ verify: wasm
     node tools/vote-integration/run.mjs
     node tools/economy-audit/run.mjs
     node tools/playthrough/run.mjs
+    node tools/silhouette.mjs
 
 # The live half of the gate: builds, starts a server, runs the four black-box kits
 # against it, stops it. `verify` stays hermetic; this is the one that proves the game

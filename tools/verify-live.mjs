@@ -206,8 +206,17 @@ async function main() {
     '--url', WS_URL,
     '--clients', '8',
     '--seconds', '60',
-    '--known-failures', 'level-progression',
     '--death-log', deathLog,
+  ]);
+  // T-154: the 8-client sweep cannot complete a level, so `level-progression`, `vote` and
+  // `shop` are SKIPped there. This second pass drives the same server through the debug
+  // command layer in singleplayer, which is the only way those three paths are reachable,
+  // and it is where they are live checks.
+  run('playthrough actuated', 'node', [
+    'tools/playthrough/run.mjs',
+    '--url', WS_URL,
+    '--actuate',
+    '--seconds', '40',
   ]);
   run('voting conformance (real)', 'node', ['tools/voting-conformance/run.mjs', '--real', '--url', WS_URL]);
   // T-141: the debug command layer is the only way to reach voting, the shop and

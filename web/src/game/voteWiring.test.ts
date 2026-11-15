@@ -3,7 +3,8 @@
 // `VoteWidget`, `useVote`, `protocolAdapter`, `LobbyPoll` and `RunVoteOverlay` all existed
 // and all had tests, but no file imported `LobbyPoll` or `RunVoteOverlay` outside their own
 // tests, `session.ts` had no way to send a ballot, and `GameClient` never read a vote
-// message. The server opened a session every level at the collapse window, nobody could
+// message. (`LobbyPoll` was deleted in T-153: its pre-match poll had no protocol message
+// and no server handler, so it promised a feature that did not exist.) The server opened a session every level at the collapse window, nobody could
 // answer it, and `VoteSession::resolve` fell through to its random pick -- so the pedestal
 // mechanic ran invisibly and picked for the players.
 //

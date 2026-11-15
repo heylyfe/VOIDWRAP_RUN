@@ -16,6 +16,9 @@ dispatch-keys*
 
 # local artefacts
 shots/
+# Capture output from tools/silhouette.mjs. Evidence is regenerated, not committed: the
+# repo ships no binary assets.
+shots*/
 web/test-results/
 web/playwright-report/
 *.log
