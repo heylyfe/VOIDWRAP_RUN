@@ -449,7 +449,7 @@ Release: `v0.14.0-alpha.1`.
 
 ---
 
-## Cycle 5 — baseline only (session ended before dispatch)
+## Cycle 5 — pattern footprint normalization
 
 ### Audit baseline (re-run at cycle start)
 
@@ -463,24 +463,69 @@ Release: `v0.14.0-alpha.1`.
 | voting conformance `--real` | 3/3 PASS |
 | playthrough sweep (8 clients, 90 s) | 7/11 passed, 3 skipped, 1 failed |
 
-### Why no ticket was dispatched
+### What was picked and why
 
-The top candidate is the pattern library expansion (T-E): 50+ new patterns against the
-frozen format, the only lever left for `4.near-duplicates` (17.63%), `5.heights`
-(12.69%) and `5.reference-scale` (25.05%). It is a multi-hour authoring job with a
-strict validator behind it (`validate-content`, `5.ramps`, `0.input`). Starting it and
-leaving it half-authored would put unvalidated geometry in the catalog, which is worse
-than not starting. Per the discipline rule — bounded sessions, stop and summarize
-rather than grind — the cycle stops at the baseline.
+`5.reference-scale` was the largest measured deviation (25.05% against a 10% band) and
+the one with a clear, bounded fix. The Cycle 3 note parked it as needing per-pattern
+redesign; this cycle did that work in two parts.
 
-The other two candidates are blocked on decisions rather than effort:
+The key measurement that unlocked it: **expansion does not fix this metric.** Adding
+50 in-band patterns would only dilute 26,306 violations across ~192,000 placements,
+landing near 13.7% — still failing. The 22 out-of-band patterns had to be fixed
+directly.
 
-- **Class-selection window** — needs a decision on when a run starts. Logged for the
-  human, not changed autonomously.
-- **Navigation bot for the playthrough sweep** — a pathfinding bot over the level
-  graph. Large, and the sweep already reports honestly without it.
+### T-100 — pattern footprint normalization: PASS
 
-### State at handback
+**Part 1, mechanical (6 patterns).** A piecewise-linear map that compresses only the
+**gaps between platforms**, never their sizes. This is the transform the Cycle 3
+attempt missed: scaling a platform shrinks its ramp run and width, which is what broke
+`5.ramps` with 7,205 violations. Moving platforms and leaving their dimensions alone
+preserves every ramp exactly. Six patterns fit this way (`pa_garden_span`,
+`pb_ember_catwalk`, `pb_void_pillars`, `pb_spire_bridge`, `pb_ember_bounce`,
+`pb_frost_gauntlet`). The other 16 have platforms whose own length exceeds the band and
+cannot be fixed by moving them.
 
-`just verify` green. Latest release `v0.14.0-alpha.1`. Nothing is half-merged; the
-tree is clean.
+**Part 2, dispatched (10 patterns).** T-100 went to Inkling with the ten remaining
+`patterns-a.json` / `patterns-b.json` patterns inlined, the ramp and slot rules spelled
+out, and a `=== PATTERN: <id> ===` output contract. All ten came back inside the band
+on the first attempt, no parks. The orchestrator spliced them with a validator that
+re-checks extent, ramp run/width/rise, and that every socket, slot and beacon still
+sits on a platform top — all ten passed.
+
+Two validator bugs were found and fixed while splicing, both in the checker rather than
+the data: gift slots float 0.3 above a platform top (not flush), and `elevated: true`
+slots float up to 0.8. The first version rejected all ten blocks on that basis.
+
+The six `chunks.json` patterns are **not** touched: `design/PATTERN_FORMAT.md` marks
+that file frozen as the legacy record.
+
+| metric | before | after |
+|---|---|---|
+| `5.reference-scale` | 25.05% FAIL | **6.98% PASS** |
+| `5.ramps` | 0 PASS | **0 PASS** |
+| `0.input` | PASS | **PASS** |
+| `5.heights` | 12.69% | 12.57% |
+| `4.near-duplicates` | 17.63% | 17.63% |
+| pattern audit total | 10/13 | **11/13** |
+
+The residual 6.98% is exactly the six frozen `chunks.json` patterns. Bringing them in
+would mean editing a file the format spec calls frozen — a human decision, logged.
+
+### Merges and release
+
+`just verify` fully green: 127 server / 234 sim / 279 vitest, clippy `-D warnings`,
+protocol-gen --check, check-names (580 files), validate-content (20 enemies, 10
+upgrades, 19 curses, 4 classes, 34 shop items, 3 events, 15 milestones, 4 altars, 10
+achievements, 85 patterns).
+
+Release: `v0.15.0-alpha.1`.
+
+### Top 3 candidates for Cycle 6
+
+1. **`5.heights`** (12.57% against 2%) — the last pattern-geometry metric. Adjacent
+   surface deltas outside [1, 6]u. Same shape of work as T-100: measure which patterns
+   contribute, then redesign them.
+2. **`4.near-duplicates`** (17.63% against 0.2%) — needs a larger pattern pool. The
+   level-1 starvation is fixed; the rest is pool size.
+3. **`8.hazard_entities`** (economy audit, parked twice) — needs a hazard placement
+   pass that respects the graph-edge invariant.

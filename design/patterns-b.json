@@ -7,24 +7,116 @@
       "role": "path",
       "min_level": 1,
       "difficulty": 1,
-      "tags": ["theme:ember", "mech:span", "catwalk"],
+      "tags": [
+        "theme:ember",
+        "mech:span",
+        "catwalk"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-2.0, 0.0, 0.0], "max": [2.0, 0.5, 6.0] },
-        { "kind": "NORMAL", "min": [-2.0, 0.0, 8.0], "max": [2.0, 0.5, 14.0] },
-        { "kind": "NORMAL", "min": [-2.0, 0.0, 17.0], "max": [2.0, 0.5, 23.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            0,
+            0
+          ],
+          "max": [
+            2,
+            0.5,
+            6
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            0,
+            6.8
+          ],
+          "max": [
+            2,
+            0.5,
+            12.8
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            0,
+            14
+          ],
+          "max": [
+            2,
+            0.5,
+            20
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 0.5, 0.0], "facing": "S", "width": 4 },
-        { "id": "b", "pos": [0.0, 0.5, 23.0], "facing": "N", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            0.5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            0.5,
+            20
+          ],
+          "facing": "N",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [-1.2, 0.8, 2.0], "elevated": false },
-        { "pos": [1.2, 0.8, 4.0], "elevated": false },
-        { "pos": [0.0, 0.8, 10.0], "elevated": false },
-        { "pos": [0.0, 0.8, 19.0], "elevated": false }
+        {
+          "pos": [
+            -1.2,
+            0.8,
+            2
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            1.2,
+            0.8,
+            4
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            0.8,
+            8.8
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            0.8,
+            16
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
-      "altar_slots": [[0.0, 0.5, 21.0]],
+      "altar_slots": [
+        [
+          0,
+          0.5,
+          21
+        ]
+      ],
       "beacon": null
     },
     {
@@ -33,24 +125,126 @@
       "role": "path",
       "min_level": 4,
       "difficulty": 2,
-      "tags": ["theme:frost", "mech:climb", "switchback"],
+      "tags": [
+        "theme:frost",
+        "mech:climb",
+        "switchback"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-4.0, 0.0, 0.0], "max": [0.0, 0.5, 6.0] },
-        { "kind": "RAMP_PZ", "min": [-4.0, 0.5, 6.0], "max": [0.0, 3.0, 11.0] },
-        { "kind": "NORMAL", "min": [-4.0, 3.0, 11.0], "max": [0.0, 3.5, 13.0] },
-        { "kind": "RAMP_NZ", "min": [0.0, 3.5, 5.0], "max": [4.0, 6.0, 10.0] },
-        { "kind": "NORMAL", "min": [0.0, 6.0, 0.0], "max": [4.0, 6.5, 5.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -4,
+            0,
+            0
+          ],
+          "max": [
+            0,
+            0.5,
+            6
+          ]
+        },
+        {
+          "kind": "RAMP_PZ",
+          "min": [
+            -4,
+            0.5,
+            6
+          ],
+          "max": [
+            0,
+            3,
+            11
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -4,
+            3,
+            11
+          ],
+          "max": [
+            0,
+            3.5,
+            13
+          ]
+        },
+        {
+          "kind": "RAMP_NZ",
+          "min": [
+            0,
+            3.5,
+            5
+          ],
+          "max": [
+            4,
+            6,
+            10
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            0,
+            6,
+            0
+          ],
+          "max": [
+            4,
+            6.5,
+            5
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [-2.0, 0.5, 0.0], "facing": "S", "width": 4 },
-        { "id": "b", "pos": [2.0, 6.5, 0.0], "facing": "S", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            -2,
+            0.5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            2,
+            6.5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [-3.0, 0.8, 2.0], "elevated": false },
-        { "pos": [1.0, 6.8, 2.0], "elevated": false }
+        {
+          "pos": [
+            -3,
+            0.8,
+            2
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            1,
+            6.8,
+            2
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
-      "altar_slots": [[-1.5, 0.5, 4.5]],
+      "altar_slots": [
+        [
+          -1.5,
+          0.5,
+          4.5
+        ]
+      ],
       "beacon": null
     },
     {
@@ -59,25 +253,134 @@
       "role": "path",
       "min_level": 1,
       "difficulty": 1,
-      "tags": ["theme:garden", "mech:climb", "terrace"],
+      "tags": [
+        "theme:garden",
+        "mech:climb",
+        "terrace"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-3.0, 0.0, 0.0], "max": [3.0, 0.5, 5.0] },
-        { "kind": "RAMP_PZ", "min": [-3.0, 0.5, 5.0], "max": [3.0, 2.0, 8.0] },
-        { "kind": "NORMAL", "min": [-3.0, 2.0, 8.0], "max": [3.0, 2.5, 13.0] },
-        { "kind": "RAMP_PZ", "min": [-3.0, 2.5, 13.0], "max": [3.0, 3.5, 16.0] },
-        { "kind": "NORMAL", "min": [-3.0, 3.5, 16.0], "max": [3.0, 4.0, 21.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            0,
+            0
+          ],
+          "max": [
+            3,
+            0.5,
+            5
+          ]
+        },
+        {
+          "kind": "RAMP_PZ",
+          "min": [
+            -3,
+            0.5,
+            5
+          ],
+          "max": [
+            3,
+            2,
+            8
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            2,
+            8
+          ],
+          "max": [
+            3,
+            2.5,
+            13
+          ]
+        },
+        {
+          "kind": "RAMP_PZ",
+          "min": [
+            -3,
+            2.5,
+            13
+          ],
+          "max": [
+            3,
+            3.5,
+            16
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            3.5,
+            16
+          ],
+          "max": [
+            3,
+            4,
+            20
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 0.5, 0.0], "facing": "S", "width": 4 },
-        { "id": "b", "pos": [0.0, 4.0, 21.0], "facing": "N", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            0.5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            4,
+            20
+          ],
+          "facing": "N",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [-1.5, 0.8, 2.0], "elevated": false },
-        { "pos": [1.5, 2.8, 10.5], "elevated": false },
-        { "pos": [0.0, 4.3, 18.5], "elevated": false }
+        {
+          "pos": [
+            -1.5,
+            0.8,
+            2
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            1.5,
+            2.8,
+            10.5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            4.3,
+            18.5
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
-      "altar_slots": [[0.0, 4.0, 19.0]],
+      "altar_slots": [
+        [
+          0,
+          4,
+          19
+        ]
+      ],
       "beacon": null
     },
     {
@@ -86,21 +389,113 @@
       "role": "path",
       "min_level": 5,
       "difficulty": 2,
-      "tags": ["theme:void", "theme:spire", "mech:span", "pillars"],
+      "tags": [
+        "theme:void",
+        "theme:spire",
+        "mech:span",
+        "pillars"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-2.0, 0.5, 0.0], "max": [2.0, 1.0, 4.0] },
-        { "kind": "NORMAL", "min": [-1.5, 0.5, 7.0], "max": [1.5, 1.0, 10.0] },
-        { "kind": "NORMAL", "min": [-1.5, 1.0, 13.0], "max": [1.5, 1.5, 16.0] },
-        { "kind": "NORMAL", "min": [-2.0, 1.0, 19.0], "max": [2.0, 1.5, 24.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            0.5,
+            0
+          ],
+          "max": [
+            2,
+            1,
+            4
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -1.5,
+            0.5,
+            5.667
+          ],
+          "max": [
+            1.5,
+            1,
+            8.667
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -1.5,
+            1,
+            10.333
+          ],
+          "max": [
+            1.5,
+            1.5,
+            13.333
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            1,
+            15
+          ],
+          "max": [
+            2,
+            1.5,
+            20
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 1.0, 0.0], "facing": "S", "width": 4 },
-        { "id": "b", "pos": [0.0, 1.5, 24.0], "facing": "N", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            1,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            1.5,
+            20
+          ],
+          "facing": "N",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [-1.0, 1.3, 2.0], "elevated": false },
-        { "pos": [0.0, 1.8, 14.5], "elevated": false },
-        { "pos": [0.0, 1.8, 21.5], "elevated": false }
+        {
+          "pos": [
+            -1,
+            1.3,
+            2
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            1.8,
+            11.833
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            1.8,
+            17.5
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
       "altar_slots": [],
@@ -112,25 +507,141 @@
       "role": "path",
       "min_level": 6,
       "difficulty": 3,
-      "tags": ["theme:machine", "mech:gauntlet", "mech:span", "hazard:crumble", "pistons"],
+      "tags": [
+        "theme:machine",
+        "mech:gauntlet",
+        "mech:span",
+        "hazard:crumble",
+        "pistons"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-2.0, 0.0, 0.0], "max": [2.0, 0.5, 4.0] },
-        { "kind": "CRUMBLE", "min": [-1.5, 0.0, 6.0], "max": [1.5, 0.5, 12.0] },
-        { "kind": "NORMAL", "min": [-2.0, 0.0, 14.0], "max": [2.0, 0.5, 18.0] },
-        { "kind": "NORMAL", "min": [3.0, 0.0, 6.0], "max": [5.0, 4.5, 8.0] },
-        { "kind": "NORMAL", "min": [3.0, 0.0, 10.0], "max": [5.0, 5.5, 12.0] },
-        { "kind": "NORMAL", "min": [-5.0, 0.0, 6.0], "max": [-3.0, 4.5, 8.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            0,
+            0
+          ],
+          "max": [
+            2,
+            0.5,
+            4
+          ]
+        },
+        {
+          "kind": "CRUMBLE",
+          "min": [
+            -1.5,
+            0,
+            6
+          ],
+          "max": [
+            1.5,
+            0.5,
+            12
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            0,
+            14
+          ],
+          "max": [
+            2,
+            0.5,
+            18
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            3,
+            0,
+            6
+          ],
+          "max": [
+            5,
+            4.5,
+            8
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            3,
+            0,
+            10
+          ],
+          "max": [
+            5,
+            5.5,
+            12
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -5,
+            0,
+            6
+          ],
+          "max": [
+            -3,
+            4.5,
+            8
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 0.5, 0.0], "facing": "S", "width": 4 },
-        { "id": "b", "pos": [0.0, 0.5, 18.0], "facing": "N", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            0.5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            0.5,
+            18
+          ],
+          "facing": "N",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [-1.2, 0.8, 2.0], "elevated": false },
-        { "pos": [0.0, 0.8, 16.5], "elevated": false }
+        {
+          "pos": [
+            -1.2,
+            0.8,
+            2
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            0.8,
+            16.5
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
-      "altar_slots": [[-1.0, 0.5, 15.5]],
+      "altar_slots": [
+        [
+          -1,
+          0.5,
+          15.5
+        ]
+      ],
       "beacon": null
     },
     {
@@ -139,20 +650,99 @@
       "role": "path",
       "min_level": 3,
       "difficulty": 2,
-      "tags": ["theme:ruin", "mech:crawl", "corridor"],
+      "tags": [
+        "theme:ruin",
+        "mech:crawl",
+        "corridor"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [0.0, 0.0, 0.0], "max": [3.0, 0.5, 14.0] },
-        { "kind": "NORMAL", "min": [-4.0, 0.0, 2.0], "max": [0.0, 5.5, 12.0] },
-        { "kind": "NORMAL", "min": [3.0, 0.0, 2.0], "max": [7.0, 5.5, 12.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            0,
+            0,
+            0
+          ],
+          "max": [
+            3,
+            0.5,
+            14
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -4,
+            0,
+            2
+          ],
+          "max": [
+            0,
+            5.5,
+            12
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            3,
+            0,
+            2
+          ],
+          "max": [
+            7,
+            5.5,
+            12
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [1.5, 0.5, 0.0], "facing": "S", "width": 3 },
-        { "id": "b", "pos": [1.5, 0.5, 14.0], "facing": "N", "width": 3 }
+        {
+          "id": "a",
+          "pos": [
+            1.5,
+            0.5,
+            0
+          ],
+          "facing": "S",
+          "width": 3
+        },
+        {
+          "id": "b",
+          "pos": [
+            1.5,
+            0.5,
+            14
+          ],
+          "facing": "N",
+          "width": 3
+        }
       ],
       "gift_slots": [
-        { "pos": [1.5, 0.8, 4.0], "elevated": false },
-        { "pos": [1.5, 0.8, 7.0], "elevated": false },
-        { "pos": [1.5, 0.8, 10.0], "elevated": false }
+        {
+          "pos": [
+            1.5,
+            0.8,
+            4
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            1.5,
+            0.8,
+            7
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            1.5,
+            0.8,
+            10
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
       "altar_slots": [],
@@ -164,25 +754,135 @@
       "role": "path",
       "min_level": 5,
       "difficulty": 2,
-      "tags": ["theme:spire", "theme:ruin", "mech:climb", "spiral"],
+      "tags": [
+        "theme:spire",
+        "theme:ruin",
+        "mech:climb",
+        "spiral"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [0.0, 0.0, 0.0], "max": [4.0, 0.5, 4.0] },
-        { "kind": "RAMP_PZ", "min": [0.0, 0.5, 4.0], "max": [4.0, 2.0, 7.0] },
-        { "kind": "NORMAL", "min": [0.0, 2.0, 7.0], "max": [4.0, 2.5, 11.0] },
-        { "kind": "RAMP_PX", "min": [4.0, 2.5, 7.0], "max": [7.0, 4.0, 11.0] },
-        { "kind": "NORMAL", "min": [7.0, 4.0, 7.0], "max": [11.0, 4.5, 11.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            0,
+            0,
+            0
+          ],
+          "max": [
+            4,
+            0.5,
+            4
+          ]
+        },
+        {
+          "kind": "RAMP_PZ",
+          "min": [
+            0,
+            0.5,
+            4
+          ],
+          "max": [
+            4,
+            2,
+            7
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            0,
+            2,
+            7
+          ],
+          "max": [
+            4,
+            2.5,
+            11
+          ]
+        },
+        {
+          "kind": "RAMP_PX",
+          "min": [
+            4,
+            2.5,
+            7
+          ],
+          "max": [
+            7,
+            4,
+            11
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            7,
+            4,
+            7
+          ],
+          "max": [
+            11,
+            4.5,
+            11
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [2.0, 0.5, 0.0], "facing": "S", "width": 4 },
-        { "id": "b", "pos": [11.0, 4.5, 9.0], "facing": "E", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            2,
+            0.5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            11,
+            4.5,
+            9
+          ],
+          "facing": "E",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [1.0, 0.8, 1.0], "elevated": false },
-        { "pos": [2.0, 2.8, 9.0], "elevated": false },
-        { "pos": [9.0, 4.8, 9.0], "elevated": false }
+        {
+          "pos": [
+            1,
+            0.8,
+            1
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            2,
+            2.8,
+            9
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            9,
+            4.8,
+            9
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
-      "altar_slots": [[9.0, 4.5, 9.0]],
+      "altar_slots": [
+        [
+          9,
+          4.5,
+          9
+        ]
+      ],
       "beacon": null
     },
     {
@@ -191,19 +891,90 @@
       "role": "path",
       "min_level": 1,
       "difficulty": 1,
-      "tags": ["theme:hollow", "mech:drop"],
+      "tags": [
+        "theme:hollow",
+        "mech:drop"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-3.0, 3.5, 0.0], "max": [3.0, 4.0, 4.0] },
-        { "kind": "RAMP_NZ", "min": [-3.0, 0.5, 4.0], "max": [3.0, 4.0, 12.0] },
-        { "kind": "NORMAL", "min": [-3.0, 0.0, 12.0], "max": [3.0, 0.5, 18.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            3.5,
+            0
+          ],
+          "max": [
+            3,
+            4,
+            4
+          ]
+        },
+        {
+          "kind": "RAMP_NZ",
+          "min": [
+            -3,
+            0.5,
+            4
+          ],
+          "max": [
+            3,
+            4,
+            12
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            0,
+            12
+          ],
+          "max": [
+            3,
+            0.5,
+            18
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 4.0, 0.0], "facing": "S", "width": 4 },
-        { "id": "b", "pos": [0.0, 0.5, 18.0], "facing": "N", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            4,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            0.5,
+            18
+          ],
+          "facing": "N",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [-1.5, 3.8, 2.0], "elevated": false },
-        { "pos": [0.0, 0.8, 15.0], "elevated": false }
+        {
+          "pos": [
+            -1.5,
+            3.8,
+            2
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            0.8,
+            15
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
       "altar_slots": [],
@@ -215,23 +986,102 @@
       "role": "junction",
       "min_level": 3,
       "difficulty": 2,
-      "tags": ["theme:ember", "mech:fork", "crossroads"],
+      "tags": [
+        "theme:ember",
+        "mech:fork",
+        "crossroads"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-6.0, 0.0, -6.0], "max": [6.0, 0.5, 6.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -6,
+            0,
+            -6
+          ],
+          "max": [
+            6,
+            0.5,
+            6
+          ]
+        }
       ],
       "sockets": [
-        { "id": "n", "pos": [0.0, 0.5, 6.0], "facing": "N", "width": 6 },
-        { "id": "e", "pos": [6.0, 0.5, 0.0], "facing": "E", "width": 6 },
-        { "id": "s", "pos": [0.0, 0.5, -6.0], "facing": "S", "width": 6 },
-        { "id": "w", "pos": [-6.0, 0.5, 0.0], "facing": "W", "width": 6 }
+        {
+          "id": "n",
+          "pos": [
+            0,
+            0.5,
+            6
+          ],
+          "facing": "N",
+          "width": 6
+        },
+        {
+          "id": "e",
+          "pos": [
+            6,
+            0.5,
+            0
+          ],
+          "facing": "E",
+          "width": 6
+        },
+        {
+          "id": "s",
+          "pos": [
+            0,
+            0.5,
+            -6
+          ],
+          "facing": "S",
+          "width": 6
+        },
+        {
+          "id": "w",
+          "pos": [
+            -6,
+            0.5,
+            0
+          ],
+          "facing": "W",
+          "width": 6
+        }
       ],
       "gift_slots": [
-        { "pos": [-4.5, 0.8, -4.0], "elevated": false },
-        { "pos": [4.5, 0.8, 4.0], "elevated": false },
-        { "pos": [0.0, 0.8, 0.0], "elevated": false }
+        {
+          "pos": [
+            -4.5,
+            0.8,
+            -4
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            4.5,
+            0.8,
+            4
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            0.8,
+            0
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
-      "altar_slots": [[0.0, 0.5, 3.0]],
+      "altar_slots": [
+        [
+          0,
+          0.5,
+          3
+        ]
+      ],
       "beacon": null
     },
     {
@@ -240,18 +1090,81 @@
       "role": "dead_end",
       "min_level": 1,
       "difficulty": 1,
-      "tags": ["theme:frost", "mech:rest", "alcove"],
+      "tags": [
+        "theme:frost",
+        "mech:rest",
+        "alcove"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-3.0, 0.5, 0.0], "max": [3.0, 1.0, 4.0] },
-        { "kind": "NORMAL", "min": [-3.0, 0.0, 4.0], "max": [3.0, 0.5, 7.0] },
-        { "kind": "NORMAL", "min": [-3.0, 0.5, 7.0], "max": [3.0, 1.0, 10.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            0.5,
+            0
+          ],
+          "max": [
+            3,
+            1,
+            4
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            0,
+            4
+          ],
+          "max": [
+            3,
+            0.5,
+            7
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            0.5,
+            7
+          ],
+          "max": [
+            3,
+            1,
+            10
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 1.0, 0.0], "facing": "S", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            1,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [-1.5, 1.3, 2.0], "elevated": false },
-        { "pos": [1.5, 1.3, 2.0], "elevated": false }
+        {
+          "pos": [
+            -1.5,
+            1.3,
+            2
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            1.5,
+            1.3,
+            2
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
       "altar_slots": [],
@@ -263,24 +1176,114 @@
       "role": "dead_end",
       "min_level": 1,
       "difficulty": 1,
-      "tags": ["theme:garden", "mech:loot", "loft"],
+      "tags": [
+        "theme:garden",
+        "mech:loot",
+        "loft"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-3.0, 0.0, 0.0], "max": [3.0, 0.5, 6.0] },
-        { "kind": "RAMP_PZ", "min": [-3.0, 0.5, 6.0], "max": [3.0, 2.5, 10.0] },
-        { "kind": "NORMAL", "min": [-3.0, 2.5, 10.0], "max": [3.0, 3.0, 16.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            0,
+            0
+          ],
+          "max": [
+            3,
+            0.5,
+            6
+          ]
+        },
+        {
+          "kind": "RAMP_PZ",
+          "min": [
+            -3,
+            0.5,
+            6
+          ],
+          "max": [
+            3,
+            2.5,
+            10
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            2.5,
+            10
+          ],
+          "max": [
+            3,
+            3,
+            16
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 0.5, 0.0], "facing": "S", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            0.5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [-1.5, 0.8, 2.0], "elevated": false },
-        { "pos": [1.5, 0.8, 3.5], "elevated": false },
-        { "pos": [-1.5, 3.3, 11.0], "elevated": true },
-        { "pos": [0.0, 3.3, 13.0], "elevated": true },
-        { "pos": [1.5, 3.3, 15.0], "elevated": true }
+        {
+          "pos": [
+            -1.5,
+            0.8,
+            2
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            1.5,
+            0.8,
+            3.5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            -1.5,
+            3.3,
+            11
+          ],
+          "elevated": true
+        },
+        {
+          "pos": [
+            0,
+            3.3,
+            13
+          ],
+          "elevated": true
+        },
+        {
+          "pos": [
+            1.5,
+            3.3,
+            15
+          ],
+          "elevated": true
+        }
       ],
       "enemy_slots": [],
-      "altar_slots": [[0.0, 3.0, 12.5]],
+      "altar_slots": [
+        [
+          0,
+          3,
+          12.5
+        ]
+      ],
       "beacon": null
     },
     {
@@ -289,19 +1292,89 @@
       "role": "dead_end",
       "min_level": 4,
       "difficulty": 2,
-      "tags": ["theme:void", "mech:loot", "cache"],
+      "tags": [
+        "theme:void",
+        "mech:loot",
+        "cache"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-2.0, 0.0, 0.0], "max": [2.0, 0.5, 5.0] },
-        { "kind": "NORMAL", "min": [-1.5, 0.0, 7.5], "max": [1.5, 0.5, 10.5] },
-        { "kind": "NORMAL", "min": [-2.0, 1.5, 13.0], "max": [2.0, 2.0, 18.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            0,
+            0
+          ],
+          "max": [
+            2,
+            0.5,
+            5
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -1.5,
+            0,
+            7.5
+          ],
+          "max": [
+            1.5,
+            0.5,
+            10.5
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            1.5,
+            13
+          ],
+          "max": [
+            2,
+            2,
+            18
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 0.5, 0.0], "facing": "S", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            0.5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [-1.2, 2.3, 14.0], "elevated": true },
-        { "pos": [1.2, 2.3, 15.2], "elevated": true },
-        { "pos": [0.0, 2.3, 17.2], "elevated": true }
+        {
+          "pos": [
+            -1.2,
+            2.3,
+            14
+          ],
+          "elevated": true
+        },
+        {
+          "pos": [
+            1.2,
+            2.3,
+            15.2
+          ],
+          "elevated": true
+        },
+        {
+          "pos": [
+            0,
+            2.3,
+            17.2
+          ],
+          "elevated": true
+        }
       ],
       "enemy_slots": [],
       "altar_slots": [],
@@ -313,20 +1386,99 @@
       "role": "path",
       "min_level": 3,
       "difficulty": 2,
-      "tags": ["theme:ruin", "theme:ember", "mech:bounce"],
+      "tags": [
+        "theme:ruin",
+        "theme:ember",
+        "mech:bounce"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-3.0, 0.0, 0.0], "max": [3.0, 0.5, 6.0] },
-        { "kind": "JUMP_PAD", "min": [-1.5, 0.5, 7.0], "max": [1.5, 0.8, 10.0] },
-        { "kind": "NORMAL", "min": [-3.0, 3.8, 10.0], "max": [3.0, 4.2, 16.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            0,
+            0
+          ],
+          "max": [
+            3,
+            0.5,
+            6
+          ]
+        },
+        {
+          "kind": "JUMP_PAD",
+          "min": [
+            -1.5,
+            0.5,
+            7
+          ],
+          "max": [
+            1.5,
+            0.8,
+            10
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            3.8,
+            10
+          ],
+          "max": [
+            3,
+            4.2,
+            16
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 0.5, 0.0], "facing": "S", "width": 4 },
-        { "id": "b", "pos": [0.0, 4.2, 16.0], "facing": "N", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            0.5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            4.2,
+            16
+          ],
+          "facing": "N",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [0.0, 0.8, 3.0], "elevated": false },
-        { "pos": [-2.0, 4.5, 12.0], "elevated": true },
-        { "pos": [2.0, 4.5, 14.5], "elevated": true }
+        {
+          "pos": [
+            0,
+            0.8,
+            3
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            -2,
+            4.5,
+            12
+          ],
+          "elevated": true
+        },
+        {
+          "pos": [
+            2,
+            4.5,
+            14.5
+          ],
+          "elevated": true
+        }
       ],
       "enemy_slots": [],
       "altar_slots": [],
@@ -338,23 +1490,139 @@
       "role": "path",
       "min_level": 6,
       "difficulty": 2,
-      "tags": ["theme:machine", "mech:climb", "mezzanine", "gallery"],
+      "tags": [
+        "theme:machine",
+        "mech:climb",
+        "mezzanine",
+        "gallery"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-6.0, 0.0, -2.0], "max": [-2.0, 0.5, 2.0] },
-        { "kind": "RAMP_PX", "min": [-2.0, 0.5, -2.0], "max": [1.0, 2.0, 2.0] },
-        { "kind": "NORMAL", "min": [1.0, 2.0, -2.0], "max": [4.0, 2.5, 2.0] },
-        { "kind": "RAMP_PX", "min": [4.0, 2.5, -2.0], "max": [7.0, 4.0, 2.0] },
-        { "kind": "NORMAL", "min": [7.0, 4.0, -2.0], "max": [11.0, 4.5, 2.0] },
-        { "kind": "NORMAL", "min": [-6.0, 4.5, -1.0], "max": [-2.0, 5.0, 1.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -6,
+            0,
+            -2
+          ],
+          "max": [
+            -2,
+            0.5,
+            2
+          ]
+        },
+        {
+          "kind": "RAMP_PX",
+          "min": [
+            -2,
+            0.5,
+            -2
+          ],
+          "max": [
+            1,
+            2,
+            2
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            1,
+            2,
+            -2
+          ],
+          "max": [
+            4,
+            2.5,
+            2
+          ]
+        },
+        {
+          "kind": "RAMP_PX",
+          "min": [
+            4,
+            2.5,
+            -2
+          ],
+          "max": [
+            7,
+            4,
+            2
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            7,
+            4,
+            -2
+          ],
+          "max": [
+            11,
+            4.5,
+            2
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -6,
+            4.5,
+            -1
+          ],
+          "max": [
+            -2,
+            5,
+            1
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [-6.0, 0.5, 0.0], "facing": "W", "width": 4 },
-        { "id": "b", "pos": [11.0, 4.5, 0.0], "facing": "E", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            -6,
+            0.5,
+            0
+          ],
+          "facing": "W",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            11,
+            4.5,
+            0
+          ],
+          "facing": "E",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [-4.5, 0.8, 0.0], "elevated": false },
-        { "pos": [2.5, 2.8, 0.0], "elevated": false },
-        { "pos": [9.0, 4.8, 0.0], "elevated": false }
+        {
+          "pos": [
+            -4.5,
+            0.8,
+            0
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            2.5,
+            2.8,
+            0
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            9,
+            4.8,
+            0
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
       "altar_slots": [],
@@ -366,19 +1634,93 @@
       "role": "path",
       "min_level": 4,
       "difficulty": 2,
-      "tags": ["theme:spire", "theme:void", "mech:span", "hazard:crumble", "bridge"],
+      "tags": [
+        "theme:spire",
+        "theme:void",
+        "mech:span",
+        "hazard:crumble",
+        "bridge"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-3.0, 2.0, 0.0], "max": [3.0, 2.5, 4.0] },
-        { "kind": "CRUMBLE", "min": [-1.5, 2.0, 8.0], "max": [1.5, 2.5, 14.0] },
-        { "kind": "NORMAL", "min": [-3.0, 2.0, 16.0], "max": [3.0, 2.5, 22.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            2,
+            0
+          ],
+          "max": [
+            3,
+            2.5,
+            4
+          ]
+        },
+        {
+          "kind": "CRUMBLE",
+          "min": [
+            -1.5,
+            2,
+            6.667
+          ],
+          "max": [
+            1.5,
+            2.5,
+            12.667
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            2,
+            14
+          ],
+          "max": [
+            3,
+            2.5,
+            20
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 2.5, 0.0], "facing": "S", "width": 4 },
-        { "id": "b", "pos": [0.0, 2.5, 22.0], "facing": "N", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            2.5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            2.5,
+            20
+          ],
+          "facing": "N",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [-1.5, 2.8, 2.0], "elevated": false },
-        { "pos": [1.5, 2.8, 19.0], "elevated": false }
+        {
+          "pos": [
+            -1.5,
+            2.8,
+            2
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            1.5,
+            2.8,
+            17
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
       "altar_slots": [],
@@ -390,24 +1732,126 @@
       "role": "path",
       "min_level": 7,
       "difficulty": 3,
-      "tags": ["theme:hollow", "mech:gauntlet", "hazard:crumble"],
+      "tags": [
+        "theme:hollow",
+        "mech:gauntlet",
+        "hazard:crumble"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-3.0, 4.5, 0.0], "max": [3.0, 5.0, 4.0] },
-        { "kind": "CRUMBLE", "min": [-1.5, 4.5, 6.0], "max": [1.5, 5.0, 10.0] },
-        { "kind": "NORMAL", "min": [-1.5, 4.5, 12.0], "max": [1.5, 5.0, 16.0] },
-        { "kind": "NORMAL", "min": [-3.0, 4.5, 18.0], "max": [3.0, 5.0, 24.0] },
-        { "kind": "NORMAL", "min": [-10.0, 0.0, 5.0], "max": [10.0, 0.5, 17.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            4.5,
+            0
+          ],
+          "max": [
+            3,
+            5,
+            4
+          ]
+        },
+        {
+          "kind": "CRUMBLE",
+          "min": [
+            -1.5,
+            4.5,
+            6
+          ],
+          "max": [
+            1.5,
+            5,
+            10
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -1.5,
+            4.5,
+            12
+          ],
+          "max": [
+            1.5,
+            5,
+            16
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            4.5,
+            18
+          ],
+          "max": [
+            3,
+            5,
+            20
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -10,
+            0,
+            5
+          ],
+          "max": [
+            10,
+            0.5,
+            17
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 5.0, 0.0], "facing": "S", "width": 4 },
-        { "id": "b", "pos": [0.0, 5.0, 24.0], "facing": "N", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            5,
+            20
+          ],
+          "facing": "N",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [-1.5, 5.3, 2.0], "elevated": false },
-        { "pos": [0.0, 5.3, 21.5], "elevated": false }
+        {
+          "pos": [
+            -1.5,
+            5.3,
+            2
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            5.3,
+            19
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
-      "altar_slots": [[0.0, 5.0, 21.0]],
+      "altar_slots": [
+        [
+          0,
+          5,
+          18.5
+        ]
+      ],
       "beacon": null
     },
     {
@@ -416,19 +1860,92 @@
       "role": "path",
       "min_level": 1,
       "difficulty": 1,
-      "tags": ["theme:ember", "theme:ruin", "mech:drop", "shaft"],
+      "tags": [
+        "theme:ember",
+        "theme:ruin",
+        "mech:drop",
+        "shaft"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-3.0, 4.0, 0.0], "max": [3.0, 4.5, 4.0] },
-        { "kind": "RAMP_NZ", "min": [-3.0, 0.5, 4.0], "max": [3.0, 4.5, 12.0] },
-        { "kind": "NORMAL", "min": [-3.0, 0.0, 12.0], "max": [3.0, 0.5, 17.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            4,
+            0
+          ],
+          "max": [
+            3,
+            4.5,
+            4
+          ]
+        },
+        {
+          "kind": "RAMP_NZ",
+          "min": [
+            -3,
+            0.5,
+            4
+          ],
+          "max": [
+            3,
+            4.5,
+            12
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            0,
+            12
+          ],
+          "max": [
+            3,
+            0.5,
+            17
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 4.5, 0.0], "facing": "S", "width": 4 },
-        { "id": "b", "pos": [0.0, 0.5, 17.0], "facing": "N", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            4.5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            0.5,
+            17
+          ],
+          "facing": "N",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [-1.5, 4.8, 2.0], "elevated": false },
-        { "pos": [0.0, 0.8, 14.5], "elevated": false }
+        {
+          "pos": [
+            -1.5,
+            4.8,
+            2
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            0.8,
+            14.5
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
       "altar_slots": [],
@@ -440,18 +1957,77 @@
       "role": "path",
       "min_level": 1,
       "difficulty": 1,
-      "tags": ["theme:frost", "mech:span"],
+      "tags": [
+        "theme:frost",
+        "mech:span"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-3.0, 0.0, 0.0], "max": [3.0, 0.5, 6.0] },
-        { "kind": "NORMAL", "min": [-3.0, 0.0, 10.0], "max": [3.0, 0.5, 16.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            0,
+            0
+          ],
+          "max": [
+            3,
+            0.5,
+            6
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            0,
+            10
+          ],
+          "max": [
+            3,
+            0.5,
+            16
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 0.5, 0.0], "facing": "S", "width": 4 },
-        { "id": "b", "pos": [0.0, 0.5, 16.0], "facing": "N", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            0.5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            0.5,
+            16
+          ],
+          "facing": "N",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [-1.5, 0.8, 3.0], "elevated": false },
-        { "pos": [1.5, 0.8, 13.0], "elevated": false }
+        {
+          "pos": [
+            -1.5,
+            0.8,
+            3
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            1.5,
+            0.8,
+            13
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
       "altar_slots": [],
@@ -463,22 +2039,92 @@
       "role": "junction",
       "min_level": 1,
       "difficulty": 1,
-      "tags": ["theme:garden", "theme:ruin", "mech:fork"],
+      "tags": [
+        "theme:garden",
+        "theme:ruin",
+        "mech:fork"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-5.0, 0.0, -5.0], "max": [5.0, 0.5, 5.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -5,
+            0,
+            -5
+          ],
+          "max": [
+            5,
+            0.5,
+            5
+          ]
+        }
       ],
       "sockets": [
-        { "id": "n", "pos": [0.0, 0.5, 5.0], "facing": "N", "width": 6 },
-        { "id": "e", "pos": [5.0, 0.5, 0.0], "facing": "E", "width": 6 },
-        { "id": "s", "pos": [0.0, 0.5, -5.0], "facing": "S", "width": 6 }
+        {
+          "id": "n",
+          "pos": [
+            0,
+            0.5,
+            5
+          ],
+          "facing": "N",
+          "width": 6
+        },
+        {
+          "id": "e",
+          "pos": [
+            5,
+            0.5,
+            0
+          ],
+          "facing": "E",
+          "width": 6
+        },
+        {
+          "id": "s",
+          "pos": [
+            0,
+            0.5,
+            -5
+          ],
+          "facing": "S",
+          "width": 6
+        }
       ],
       "gift_slots": [
-        { "pos": [-3.5, 0.8, -3.5], "elevated": false },
-        { "pos": [3.5, 0.8, -3.5], "elevated": false },
-        { "pos": [0.0, 0.8, 3.0], "elevated": false }
+        {
+          "pos": [
+            -3.5,
+            0.8,
+            -3.5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            3.5,
+            0.8,
+            -3.5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            0.8,
+            3
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
-      "altar_slots": [[0.0, 0.5, 0.0]],
+      "altar_slots": [
+        [
+          0,
+          0.5,
+          0
+        ]
+      ],
       "beacon": null
     },
     {
@@ -487,22 +2133,99 @@
       "role": "dead_end",
       "min_level": 8,
       "difficulty": 2,
-      "tags": ["theme:void", "theme:spire", "mech:dead_end", "mech:loot"],
+      "tags": [
+        "theme:void",
+        "theme:spire",
+        "mech:dead_end",
+        "mech:loot"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-2.0, 0.0, 0.0], "max": [2.0, 0.5, 5.0] },
-        { "kind": "JUMP_PAD", "min": [-1.0, 0.5, 5.0], "max": [1.0, 0.8, 7.0] },
-        { "kind": "NORMAL", "min": [-2.0, 4.0, 10.0], "max": [2.0, 4.3, 15.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            0,
+            0
+          ],
+          "max": [
+            2,
+            0.5,
+            5
+          ]
+        },
+        {
+          "kind": "JUMP_PAD",
+          "min": [
+            -1,
+            0.5,
+            5
+          ],
+          "max": [
+            1,
+            0.8,
+            7
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            4,
+            10
+          ],
+          "max": [
+            2,
+            4.3,
+            15
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 0.5, 0.0], "facing": "S", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            0.5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [0.0, 0.8, 2.5], "elevated": false },
-        { "pos": [-1.0, 4.6, 11.0], "elevated": true },
-        { "pos": [1.0, 4.6, 13.0], "elevated": true }
+        {
+          "pos": [
+            0,
+            0.8,
+            2.5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            -1,
+            4.6,
+            11
+          ],
+          "elevated": true
+        },
+        {
+          "pos": [
+            1,
+            4.6,
+            13
+          ],
+          "elevated": true
+        }
       ],
       "enemy_slots": [],
-      "altar_slots": [[0.0, 4.3, 14.0]],
+      "altar_slots": [
+        [
+          0,
+          4.3,
+          14
+        ]
+      ],
       "beacon": null
     },
     {
@@ -511,20 +2234,100 @@
       "role": "path",
       "min_level": 5,
       "difficulty": 2,
-      "tags": ["theme:machine", "theme:hollow", "mech:crawl", "trench"],
+      "tags": [
+        "theme:machine",
+        "theme:hollow",
+        "mech:crawl",
+        "trench"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-1.5, 0.0, 0.0], "max": [1.5, 0.5, 16.0] },
-        { "kind": "NORMAL", "min": [-5.0, 0.0, 2.0], "max": [-1.5, 4.0, 14.0] },
-        { "kind": "NORMAL", "min": [1.5, 0.0, 2.0], "max": [5.0, 4.0, 14.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -1.5,
+            0,
+            0
+          ],
+          "max": [
+            1.5,
+            0.5,
+            16
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -5,
+            0,
+            2
+          ],
+          "max": [
+            -1.5,
+            4,
+            14
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            1.5,
+            0,
+            2
+          ],
+          "max": [
+            5,
+            4,
+            14
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 0.5, 0.0], "facing": "S", "width": 3 },
-        { "id": "b", "pos": [0.0, 0.5, 16.0], "facing": "N", "width": 3 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            0.5,
+            0
+          ],
+          "facing": "S",
+          "width": 3
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            0.5,
+            16
+          ],
+          "facing": "N",
+          "width": 3
+        }
       ],
       "gift_slots": [
-        { "pos": [0.0, 0.8, 4.0], "elevated": false },
-        { "pos": [0.0, 0.8, 8.0], "elevated": false },
-        { "pos": [0.0, 0.8, 12.0], "elevated": false }
+        {
+          "pos": [
+            0,
+            0.8,
+            4
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            0.8,
+            8
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            0.8,
+            12
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
       "altar_slots": [],
@@ -536,23 +2339,139 @@
       "role": "path",
       "min_level": 1,
       "difficulty": 1,
-      "tags": ["theme:ruin", "mech:rest", "plaza", "columns"],
+      "tags": [
+        "theme:ruin",
+        "mech:rest",
+        "plaza",
+        "columns"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-3.0, 0.0, 0.0], "max": [3.0, 0.5, 5.0] },
-        { "kind": "NORMAL", "min": [-4.0, 0.0, 5.0], "max": [4.0, 0.5, 10.0] },
-        { "kind": "NORMAL", "min": [-3.0, 0.0, 10.0], "max": [3.0, 0.5, 15.0] },
-        { "kind": "NORMAL", "min": [-5.0, 0.0, 6.0], "max": [-4.0, 1.5, 7.0] },
-        { "kind": "NORMAL", "min": [4.0, 0.0, 7.0], "max": [5.0, 1.5, 8.0] },
-        { "kind": "NORMAL", "min": [-5.0, 0.0, 9.0], "max": [-4.0, 1.0, 10.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            0,
+            0
+          ],
+          "max": [
+            3,
+            0.5,
+            5
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -4,
+            0,
+            5
+          ],
+          "max": [
+            4,
+            0.5,
+            10
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            0,
+            10
+          ],
+          "max": [
+            3,
+            0.5,
+            15
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -5,
+            0,
+            6
+          ],
+          "max": [
+            -4,
+            1.5,
+            7
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            4,
+            0,
+            7
+          ],
+          "max": [
+            5,
+            1.5,
+            8
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -5,
+            0,
+            9
+          ],
+          "max": [
+            -4,
+            1,
+            10
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 0.5, 0.0], "facing": "S", "width": 4 },
-        { "id": "b", "pos": [0.0, 0.5, 15.0], "facing": "N", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            0.5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            0.5,
+            15
+          ],
+          "facing": "N",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [-2.5, 0.8, 2.5], "elevated": false },
-        { "pos": [0.0, 0.8, 7.5], "elevated": false },
-        { "pos": [2.5, 0.8, 12.5], "elevated": false }
+        {
+          "pos": [
+            -2.5,
+            0.8,
+            2.5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            0.8,
+            7.5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            2.5,
+            0.8,
+            12.5
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
       "altar_slots": [],
@@ -564,25 +2483,135 @@
       "role": "path",
       "min_level": 8,
       "difficulty": 3,
-      "tags": ["theme:spire", "mech:climb", "hazard:fog", "tower"],
+      "tags": [
+        "theme:spire",
+        "mech:climb",
+        "hazard:fog",
+        "tower"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-2.0, 0.0, 0.0], "max": [2.0, 0.5, 5.0] },
-        { "kind": "RAMP_PZ", "min": [-2.0, 0.5, 5.0], "max": [2.0, 3.5, 11.0] },
-        { "kind": "NORMAL", "min": [-2.0, 3.5, 11.0], "max": [2.0, 4.0, 14.0] },
-        { "kind": "RAMP_PZ", "min": [-2.0, 4.0, 14.0], "max": [2.0, 6.5, 20.0] },
-        { "kind": "NORMAL", "min": [-2.0, 6.5, 20.0], "max": [2.0, 7.0, 26.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            0,
+            0
+          ],
+          "max": [
+            2,
+            0.5,
+            3
+          ]
+        },
+        {
+          "kind": "RAMP_PZ",
+          "min": [
+            -2,
+            0.5,
+            3
+          ],
+          "max": [
+            2,
+            3.5,
+            9
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            3.5,
+            9
+          ],
+          "max": [
+            2,
+            4,
+            12
+          ]
+        },
+        {
+          "kind": "RAMP_PZ",
+          "min": [
+            -2,
+            4,
+            12
+          ],
+          "max": [
+            2,
+            6.5,
+            18
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            6.5,
+            18
+          ],
+          "max": [
+            2,
+            7,
+            20
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 0.5, 0.0], "facing": "S", "width": 4 },
-        { "id": "b", "pos": [0.0, 7.0, 26.0], "facing": "N", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            0.5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            7,
+            20
+          ],
+          "facing": "N",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [-1.5, 0.8, 2.5], "elevated": false },
-        { "pos": [1.5, 4.3, 12.5], "elevated": false },
-        { "pos": [0.0, 7.3, 21.5], "elevated": false }
+        {
+          "pos": [
+            -1.5,
+            0.8,
+            2.5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            1.5,
+            4.3,
+            10.5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            7.3,
+            19
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
-      "altar_slots": [[0.0, 7.0, 24.0]],
+      "altar_slots": [
+        [
+          0,
+          7,
+          18.5
+        ]
+      ],
       "beacon": null
     },
     {
@@ -591,21 +2620,86 @@
       "role": "dead_end",
       "min_level": 3,
       "difficulty": 2,
-      "tags": ["theme:hollow", "theme:ruin", "mech:dead_end", "cache"],
+      "tags": [
+        "theme:hollow",
+        "theme:ruin",
+        "mech:dead_end",
+        "cache"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-2.0, 0.0, 0.0], "max": [2.0, 0.5, 6.0] },
-        { "kind": "NORMAL", "min": [-2.5, 0.0, 9.0], "max": [2.5, 0.5, 14.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            0,
+            0
+          ],
+          "max": [
+            2,
+            0.5,
+            6
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2.5,
+            0,
+            9
+          ],
+          "max": [
+            2.5,
+            0.5,
+            14
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 0.5, 0.0], "facing": "S", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            0.5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [-1.5, 0.8, 10.0], "elevated": false },
-        { "pos": [1.5, 0.8, 11.5], "elevated": false },
-        { "pos": [0.0, 0.8, 13.0], "elevated": false }
+        {
+          "pos": [
+            -1.5,
+            0.8,
+            10
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            1.5,
+            0.8,
+            11.5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            0.8,
+            13
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
-      "altar_slots": [[0.0, 0.5, 10.5]],
+      "altar_slots": [
+        [
+          0,
+          0.5,
+          10.5
+        ]
+      ],
       "beacon": null
     },
     {
@@ -614,23 +2708,134 @@
       "role": "path",
       "min_level": 4,
       "difficulty": 2,
-      "tags": ["theme:ember", "mech:bounce", "mech:climb", "stack"],
+      "tags": [
+        "theme:ember",
+        "mech:bounce",
+        "mech:climb",
+        "stack"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-3.0, 0.0, 0.0], "max": [3.0, 0.5, 4.0] },
-        { "kind": "JUMP_PAD", "min": [-1.0, 0.5, 5.0], "max": [1.0, 0.8, 7.0] },
-        { "kind": "NORMAL", "min": [-3.0, 4.0, 10.0], "max": [3.0, 4.3, 14.0] },
-        { "kind": "JUMP_PAD", "min": [-1.0, 4.3, 15.0], "max": [1.0, 4.6, 17.0] },
-        { "kind": "NORMAL", "min": [-3.0, 7.8, 20.0], "max": [3.0, 8.1, 24.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            0,
+            0
+          ],
+          "max": [
+            3,
+            0.5,
+            4
+          ]
+        },
+        {
+          "kind": "JUMP_PAD",
+          "min": [
+            -1,
+            0.5,
+            4.5
+          ],
+          "max": [
+            1,
+            0.8,
+            6.5
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            4,
+            8
+          ],
+          "max": [
+            3,
+            4.3,
+            12
+          ]
+        },
+        {
+          "kind": "JUMP_PAD",
+          "min": [
+            -1,
+            4.3,
+            12.5
+          ],
+          "max": [
+            1,
+            4.6,
+            14.5
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            7.8,
+            16
+          ],
+          "max": [
+            3,
+            8.1,
+            20
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 0.5, 0.0], "facing": "S", "width": 4 },
-        { "id": "b", "pos": [0.0, 8.1, 24.0], "facing": "N", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            0.5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            8.1,
+            20
+          ],
+          "facing": "N",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [0.0, 0.8, 2.0], "elevated": false },
-        { "pos": [-1.5, 4.6, 12.0], "elevated": true },
-        { "pos": [1.5, 4.6, 12.0], "elevated": true },
-        { "pos": [0.0, 8.4, 22.0], "elevated": true }
+        {
+          "pos": [
+            0,
+            0.8,
+            2
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            -1.5,
+            4.6,
+            10
+          ],
+          "elevated": true
+        },
+        {
+          "pos": [
+            1.5,
+            4.6,
+            10
+          ],
+          "elevated": true
+        },
+        {
+          "pos": [
+            0,
+            8.4,
+            18
+          ],
+          "elevated": true
+        }
       ],
       "enemy_slots": [],
       "altar_slots": [],
@@ -642,19 +2847,91 @@
       "role": "path",
       "min_level": 1,
       "difficulty": 1,
-      "tags": ["theme:garden", "mech:drop", "roots"],
+      "tags": [
+        "theme:garden",
+        "mech:drop",
+        "roots"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-3.0, 3.5, 0.0], "max": [3.0, 4.0, 4.0] },
-        { "kind": "RAMP_NZ", "min": [-3.0, 1.0, 4.0], "max": [3.0, 4.0, 12.0] },
-        { "kind": "NORMAL", "min": [-3.0, 0.5, 12.0], "max": [3.0, 1.0, 17.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            3.5,
+            0
+          ],
+          "max": [
+            3,
+            4,
+            4
+          ]
+        },
+        {
+          "kind": "RAMP_NZ",
+          "min": [
+            -3,
+            1,
+            4
+          ],
+          "max": [
+            3,
+            4,
+            12
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            0.5,
+            12
+          ],
+          "max": [
+            3,
+            1,
+            17
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 4.0, 0.0], "facing": "S", "width": 4 },
-        { "id": "b", "pos": [0.0, 1.0, 17.0], "facing": "N", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            4,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            1,
+            17
+          ],
+          "facing": "N",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [1.5, 4.3, 2.0], "elevated": false },
-        { "pos": [-1.5, 1.3, 14.5], "elevated": false }
+        {
+          "pos": [
+            1.5,
+            4.3,
+            2
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            -1.5,
+            1.3,
+            14.5
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
       "altar_slots": [],
@@ -666,24 +2943,123 @@
       "role": "path",
       "min_level": 12,
       "difficulty": 3,
-      "tags": ["theme:frost", "theme:void", "mech:gauntlet", "hazard:fog", "hazard:crumble"],
+      "tags": [
+        "theme:frost",
+        "theme:void",
+        "mech:gauntlet",
+        "hazard:fog",
+        "hazard:crumble"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-3.0, 4.5, 0.0], "max": [3.0, 5.0, 4.0] },
-        { "kind": "CRUMBLE", "min": [-1.5, 4.5, 7.0], "max": [1.5, 5.0, 11.0] },
-        { "kind": "NORMAL", "min": [-1.5, 3.0, 14.0], "max": [1.5, 3.5, 18.0] },
-        { "kind": "NORMAL", "min": [-3.0, 3.0, 21.0], "max": [3.0, 3.5, 26.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            4.5,
+            0
+          ],
+          "max": [
+            3,
+            5,
+            4
+          ]
+        },
+        {
+          "kind": "CRUMBLE",
+          "min": [
+            -1.5,
+            4.5,
+            5
+          ],
+          "max": [
+            1.5,
+            5,
+            9
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -1.5,
+            3,
+            10
+          ],
+          "max": [
+            1.5,
+            3.5,
+            14
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            3,
+            15
+          ],
+          "max": [
+            3,
+            3.5,
+            20
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 5.0, 0.0], "facing": "S", "width": 4 },
-        { "id": "b", "pos": [0.0, 3.5, 26.0], "facing": "N", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            3.5,
+            20
+          ],
+          "facing": "N",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [-1.5, 5.3, 2.0], "elevated": false },
-        { "pos": [0.0, 3.8, 16.0], "elevated": false },
-        { "pos": [1.5, 3.8, 23.5], "elevated": false }
+        {
+          "pos": [
+            -1.5,
+            5.3,
+            2
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            0,
+            3.8,
+            12
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            1.5,
+            3.8,
+            17.5
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
-      "altar_slots": [[0.0, 3.5, 24.0]],
+      "altar_slots": [
+        [
+          0,
+          3.5,
+          24
+        ]
+      ],
       "beacon": null
     },
     {
@@ -692,23 +3068,114 @@
       "role": "path",
       "min_level": 9,
       "difficulty": 2,
-      "tags": ["theme:machine", "mech:span", "hazard:crumble", "bridge"],
+      "tags": [
+        "theme:machine",
+        "mech:span",
+        "hazard:crumble",
+        "bridge"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-3.0, 0.0, 0.0], "max": [3.0, 0.5, 4.0] },
-        { "kind": "RAMP_PZ", "min": [-3.0, 0.5, 4.0], "max": [3.0, 2.5, 8.0] },
-        { "kind": "CRUMBLE", "min": [-1.5, 2.5, 10.0], "max": [1.5, 3.0, 18.0] },
-        { "kind": "NORMAL", "min": [-3.0, 3.0, 20.0], "max": [3.0, 3.5, 25.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            0,
+            0
+          ],
+          "max": [
+            3,
+            0.5,
+            4
+          ]
+        },
+        {
+          "kind": "RAMP_PZ",
+          "min": [
+            -3,
+            0.5,
+            4
+          ],
+          "max": [
+            3,
+            2.5,
+            8
+          ]
+        },
+        {
+          "kind": "CRUMBLE",
+          "min": [
+            -1.5,
+            2.5,
+            9
+          ],
+          "max": [
+            1.5,
+            3,
+            15
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            3,
+            16
+          ],
+          "max": [
+            3,
+            3.5,
+            20
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 0.5, 0.0], "facing": "S", "width": 4 },
-        { "id": "b", "pos": [0.0, 3.5, 25.0], "facing": "N", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            0.5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            3.5,
+            20
+          ],
+          "facing": "N",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [0.0, 0.8, 2.0], "elevated": false },
-        { "pos": [-1.5, 3.8, 22.5], "elevated": false }
+        {
+          "pos": [
+            0,
+            0.8,
+            2
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            -1.5,
+            3.8,
+            18
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
-      "altar_slots": [[0.0, 3.5, 23.0]],
+      "altar_slots": [
+        [
+          0,
+          3.5,
+          17
+        ]
+      ],
       "beacon": null
     },
     {
@@ -717,25 +3184,136 @@
       "role": "path",
       "min_level": 10,
       "difficulty": 3,
-      "tags": ["theme:void", "theme:hollow", "mech:climb", "mech:span", "pillars"],
+      "tags": [
+        "theme:void",
+        "theme:hollow",
+        "mech:climb",
+        "mech:span",
+        "pillars"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-4.0, 0.0, 0.0], "max": [0.0, 0.5, 3.0] },
-        { "kind": "NORMAL", "min": [1.0, 1.0, 0.0], "max": [4.0, 1.5, 3.0] },
-        { "kind": "NORMAL", "min": [1.0, 2.5, 6.0], "max": [4.0, 3.0, 9.0] },
-        { "kind": "NORMAL", "min": [-3.0, 3.5, 6.0], "max": [0.0, 4.0, 9.0] },
-        { "kind": "NORMAL", "min": [-2.0, 5.0, 12.0], "max": [2.0, 5.5, 15.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -4,
+            0,
+            0
+          ],
+          "max": [
+            0,
+            0.5,
+            3
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            1,
+            1,
+            0
+          ],
+          "max": [
+            4,
+            1.5,
+            3
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            1,
+            2.5,
+            6
+          ],
+          "max": [
+            4,
+            3,
+            9
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            3.5,
+            6
+          ],
+          "max": [
+            0,
+            4,
+            9
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -2,
+            5,
+            12
+          ],
+          "max": [
+            2,
+            5.5,
+            15
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [-2.0, 0.5, 0.0], "facing": "S", "width": 4 },
-        { "id": "b", "pos": [0.0, 5.5, 15.0], "facing": "N", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            -2,
+            0.5,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            5.5,
+            15
+          ],
+          "facing": "N",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [-3.0, 0.8, 1.5], "elevated": false },
-        { "pos": [2.5, 3.3, 7.5], "elevated": false },
-        { "pos": [-1.0, 5.8, 13.5], "elevated": false }
+        {
+          "pos": [
+            -3,
+            0.8,
+            1.5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            2.5,
+            3.3,
+            7.5
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            -1,
+            5.8,
+            13.5
+          ],
+          "elevated": false
+        }
       ],
       "enemy_slots": [],
-      "altar_slots": [[1.0, 5.5, 13.5]],
+      "altar_slots": [
+        [
+          1,
+          5.5,
+          13.5
+        ]
+      ],
       "beacon": null
     },
     {
@@ -744,20 +3322,99 @@
       "role": "path",
       "min_level": 11,
       "difficulty": 2,
-      "tags": ["theme:hollow", "theme:void", "mech:bounce"],
+      "tags": [
+        "theme:hollow",
+        "theme:void",
+        "mech:bounce"
+      ],
       "platforms": [
-        { "kind": "NORMAL", "min": [-3.0, 1.5, 0.0], "max": [3.0, 2.0, 4.0] },
-        { "kind": "JUMP_PAD", "min": [-1.0, 2.0, 5.0], "max": [1.0, 2.3, 7.0] },
-        { "kind": "NORMAL", "min": [-3.0, 5.5, 10.0], "max": [3.0, 5.8, 15.0] }
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            1.5,
+            0
+          ],
+          "max": [
+            3,
+            2,
+            4
+          ]
+        },
+        {
+          "kind": "JUMP_PAD",
+          "min": [
+            -1,
+            2,
+            5
+          ],
+          "max": [
+            1,
+            2.3,
+            7
+          ]
+        },
+        {
+          "kind": "NORMAL",
+          "min": [
+            -3,
+            5.5,
+            10
+          ],
+          "max": [
+            3,
+            5.8,
+            15
+          ]
+        }
       ],
       "sockets": [
-        { "id": "a", "pos": [0.0, 2.0, 0.0], "facing": "S", "width": 4 },
-        { "id": "b", "pos": [0.0, 5.8, 15.0], "facing": "N", "width": 4 }
+        {
+          "id": "a",
+          "pos": [
+            0,
+            2,
+            0
+          ],
+          "facing": "S",
+          "width": 4
+        },
+        {
+          "id": "b",
+          "pos": [
+            0,
+            5.8,
+            15
+          ],
+          "facing": "N",
+          "width": 4
+        }
       ],
       "gift_slots": [
-        { "pos": [0.0, 2.3, 2.0], "elevated": false },
-        { "pos": [-1.5, 6.1, 12.0], "elevated": true },
-        { "pos": [1.5, 6.1, 13.5], "elevated": true }
+        {
+          "pos": [
+            0,
+            2.3,
+            2
+          ],
+          "elevated": false
+        },
+        {
+          "pos": [
+            -1.5,
+            6.1,
+            12
+          ],
+          "elevated": true
+        },
+        {
+          "pos": [
+            1.5,
+            6.1,
+            13.5
+          ],
+          "elevated": true
+        }
       ],
       "enemy_slots": [],
       "altar_slots": [],

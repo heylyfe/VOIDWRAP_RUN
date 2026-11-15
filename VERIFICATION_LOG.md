@@ -635,3 +635,23 @@ achievements, 85 patterns).
 protocol-gen --check, check-names (578 files), validate-content (20 enemies, 10
 upgrades, 19 curses, 4 classes, 34 shop items, 3 events, 15 milestones, 4 altars, 10
 achievements, 85 patterns).
+
+## v0.15.0-alpha.1 — Refinement Cycle 5
+
+- T-100 ACCEPTED: `5.reference-scale` 25.05% -> **6.98% PASS**, with `5.ramps` still at
+  0 violations and `0.input` clean. Pattern audit 10/13 -> **11/13**.
+  Six patterns were normalized mechanically by compressing only the **gaps** between
+  platforms, never their sizes — the transform the Cycle 3 attempt missed, since
+  scaling a platform shrinks its ramp run and width. The other ten were dispatched to
+  Inkling with the pattern JSON inlined and a `=== PATTERN: <id> ===` contract; all ten
+  came back in band first try and passed the orchestrator's splice validator (extent,
+  ramp run/width/rise, every socket/slot/beacon still on a platform top).
+  The residual 6.98% is exactly the six `chunks.json` patterns, which
+  `design/PATTERN_FORMAT.md` marks frozen — left for a human decision.
+- Two validator bugs were fixed in the checker, not the data: gift slots float 0.3
+  above a platform top, and `elevated: true` slots float up to 0.8.
+
+`just verify` green: 127 server / 234 sim / 279 vitest, clippy `-D warnings`,
+protocol-gen --check, check-names (580 files), validate-content (20 enemies, 10
+upgrades, 19 curses, 4 classes, 34 shop items, 3 events, 15 milestones, 4 altars, 10
+achievements, 85 patterns).
