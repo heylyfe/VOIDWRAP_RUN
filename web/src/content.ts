@@ -104,6 +104,12 @@ export interface Altar {
   effect: string;
 }
 
+export interface Achievement {
+  id: string;
+  name: string;
+  description: string;
+}
+
 export interface ScreenGrade {
   tint: string;
   tint_strength: number;
@@ -125,6 +131,7 @@ export const SHOP: readonly ShopItem[] = content.shop as ShopItem[];
 export const EVENTS: readonly LevelEvent[] = content.events as LevelEvent[];
 export const MILESTONES: readonly Milestone[] = content.milestones as Milestone[];
 export const ALTARS: readonly Altar[] = content.altars as Altar[];
+export const ACHIEVEMENTS: readonly Achievement[] = content.achievements as Achievement[];
 const GRADES: Record<string, ScreenGrade> = content.grades;
 
 /** Card kinds as used on the wire (protocol DraftCard.kind). */

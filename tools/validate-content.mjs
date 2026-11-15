@@ -275,6 +275,22 @@ for (const [i, a] of (c.altars ?? []).entries()) {
   checkText(w, "effect", a.effect, 140);
 }
 
+// --- achievements ----------------------------------------------------------------------------------------------
+// T-088: the ids are the contract with `sim::achievements::ACHIEVEMENTS`; the server unlocks by id and the
+// client renders the name/description from here. Order is display order.
+const ACHIEVEMENT_IDS = ["first_lure_escape", "chorus_freeze", "landslide_vote", "level_20", "clean_level",
+  "wreath_removed", "first_trampoline", "first_disarm", "every_gift", "extreme_finish"];
+if (!Array.isArray(c.achievements) || c.achievements.length !== ACHIEVEMENT_IDS.length) {
+  err(`achievements: need exactly ${ACHIEVEMENT_IDS.length} (have ${Array.isArray(c.achievements) ? c.achievements.length : 0})`);
+}
+for (const [i, a] of (c.achievements ?? []).entries()) {
+  const w = `achievements[${i}]`;
+  checkId(w, a.id);
+  if (a.id !== ACHIEVEMENT_IDS[i]) err(`${w}.id=${JSON.stringify(a.id)} must be ${ACHIEVEMENT_IDS[i]}`);
+  checkText(w, "name", a.name, 28);
+  checkText(w, "description", a.description, 70);
+}
+
 // --- screen grades ---------------------------------------------------------------------------------------------
 for (const t of THEMES) {
   const g = c.grades?.[t];
@@ -337,4 +353,4 @@ if (errors.length) {
   console.error(`validate-content: ${path}: ${errors.length} problem(s)\n  ${errors.join("\n  ")}`);
   process.exit(1);
 }
-console.log(`validate-content: ${path} ok (${c.enemies.length} enemies, ${c.upgrades.length} upgrades, ${c.curses.length} curses, ${c.classes.length} classes, ${c.shop.length} shop items, ${c.events.length} events, ${(c.milestones ?? []).length} milestones, ${c.altars.length} altars, ${patternCount} patterns; fastest enemy worst case ${(fastest * worstMul).toFixed(1)} u/s vs player ${PLAYER_SPEED})`);
+console.log(`validate-content: ${path} ok (${c.enemies.length} enemies, ${c.upgrades.length} upgrades, ${c.curses.length} curses, ${c.classes.length} classes, ${c.shop.length} shop items, ${c.events.length} events, ${(c.milestones ?? []).length} milestones, ${c.altars.length} altars, ${(c.achievements ?? []).length} achievements, ${patternCount} patterns; fastest enemy worst case ${(fastest * worstMul).toFixed(1)} u/s vs player ${PLAYER_SPEED})`);

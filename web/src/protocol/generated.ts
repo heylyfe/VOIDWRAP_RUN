@@ -514,12 +514,14 @@ export interface RunSummary {
   giftsCollected: number;
   cause: number;
   code: string;
+  achievements: string[];
 }
 export function writeRunSummary(w: Writer, v: RunSummary): void {
   w.u32(v.levelReached);
   w.u32(v.giftsCollected);
   w.u8(v.cause);
   w.string(v.code);
+  w.vec(v.achievements, (x) => w.string(x));
 }
 export function readRunSummary(r: Reader): RunSummary {
   return {
@@ -527,6 +529,7 @@ export function readRunSummary(r: Reader): RunSummary {
     giftsCollected: r.u32(),
     cause: r.u8(),
     code: r.string(),
+    achievements: r.vec(() => r.string()),
   };
 }
 export function encodeRunSummary(v: RunSummary): Uint8Array<ArrayBuffer> {

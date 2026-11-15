@@ -190,6 +190,7 @@ pub struct RunSummary {
     pub gifts_collected: u32,
     pub cause: u8,
     pub code: String,
+    pub achievements: Vec<String>,
 }
 
 /// Movement multipliers from upgrades/curses. Applied identically by the server and the WASM predictor. friction_mul scales ground acceleration/braking (EVENT_ICE lowers it).

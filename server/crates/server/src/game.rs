@@ -1027,6 +1027,7 @@ impl Game {
             let Some(cause) = cause else {
                 continue;
             };
+            self.run.note_death();
             if self.run.lives > 0 {
                 self.run.lives -= 1;
                 p.state = player_spawn_state(at, p.class);
@@ -1086,6 +1087,7 @@ impl Game {
     fn end_run(&mut self) {
         self.run.end();
         tracing::info!(level = self.run.level_num, "run over");
+        self.run.finish_achievements();
         let summaries: Vec<(ConnId, u8)> = self
             .conns
             .iter()
@@ -1097,6 +1099,13 @@ impl Game {
                 gifts_collected: self.run.gifts_collected,
                 cause,
                 code: self.run.death_code(cause),
+                achievements: self
+                    .run
+                    .achievements
+                    .unlocked()
+                    .iter()
+                    .map(|id| (*id).to_string())
+                    .collect(),
             };
             self.send(id, &ServerMsg::RunOver { summary });
         }

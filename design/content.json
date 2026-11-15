@@ -1068,6 +1068,58 @@
       "effect": "Benefit: gain 30 currency now. Cost: the next two levels' golden-gift income repays the debt; any remainder is taken from your purse."
     }
   ],
+  "achievements": [
+    {
+      "id": "first_lure_escape",
+      "name": "Out of the Fog",
+      "description": "Break out of a Lure's pursuit."
+    },
+    {
+      "id": "chorus_freeze",
+      "name": "Conductor",
+      "description": "Survive a Chorus freeze."
+    },
+    {
+      "id": "landslide_vote",
+      "name": "Landslide",
+      "description": "Win a pedestal vote 5-1 or better."
+    },
+    {
+      "id": "level_20",
+      "name": "Deep Run",
+      "description": "Reach level 20."
+    },
+    {
+      "id": "clean_level",
+      "name": "Untouched",
+      "description": "Clear a level without anyone dying."
+    },
+    {
+      "id": "wreath_removed",
+      "name": "Uncrowned",
+      "description": "Remove a Wreath."
+    },
+    {
+      "id": "first_trampoline",
+      "name": "Springboard",
+      "description": "Launch off a trampoline."
+    },
+    {
+      "id": "first_disarm",
+      "name": "Sapper",
+      "description": "Disarm a tripmine."
+    },
+    {
+      "id": "every_gift",
+      "name": "Completionist",
+      "description": "Collect every gift on a level."
+    },
+    {
+      "id": "extreme_finish",
+      "name": "Extremist",
+      "description": "Finish a run in EXTREME mode."
+    }
+  ],
   "grades": {
     "ashfall": {
       "tint": "#b9b6cf",

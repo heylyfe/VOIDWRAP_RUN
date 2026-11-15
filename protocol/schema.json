@@ -583,6 +583,13 @@
         [
           "code",
           "string"
+        ],
+        [
+          "achievements",
+          [
+            "vec",
+            "string"
+          ]
         ]
       ]
     },
@@ -1218,7 +1225,11 @@
             "level_reached": 12,
             "gifts_collected": 57,
             "cause": 1,
-            "code": "VW-ALPHA-0001"
+            "code": "VW-ALPHA-0001",
+            "achievements": [
+              "clean_level",
+              "first_trampoline"
+            ]
           }
         }
       }

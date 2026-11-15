@@ -6,6 +6,7 @@
 //! explicit seed, no transcendental float functions (`sin`, `cos`, `powf`, ...)
 //! inside the step path — only `+ - * / sqrt`, which IEEE-754 makes bit-exact.
 
+pub mod achievements;
 pub mod controller;
 pub mod greater;
 pub mod hazards;

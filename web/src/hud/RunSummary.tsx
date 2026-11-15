@@ -5,6 +5,7 @@ import { useEffect } from "react";
 
 import type { JSX } from "react";
 
+import { ACHIEVEMENTS } from "../content";
 import { causeText } from "./format";
 import type { DeathCause } from "./format";
 
@@ -12,11 +13,18 @@ type RunSummaryProps = {
   levelReached: number;
   giftsCollected: number;
   cause: DeathCause;
+  /** Cosmetic death-screen code (T-088); empty when the server did not send one. */
+  code?: string;
+  /** Ids of the achievements unlocked this run (T-088), in unlock order. */
+  achievements?: readonly string[];
   onRestart: () => void;
 };
 
 export function RunSummary(props: RunSummaryProps): JSX.Element {
-  const { levelReached, giftsCollected, cause, onRestart } = props;
+  const { levelReached, giftsCollected, cause, code, achievements, onRestart } = props;
+  const badges = (achievements ?? [])
+    .map((id) => ACHIEVEMENTS.find((a) => a.id === id))
+    .filter((a): a is (typeof ACHIEVEMENTS)[number] => a !== undefined);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent): void => {
@@ -65,6 +73,35 @@ export function RunSummary(props: RunSummaryProps): JSX.Element {
             </dd>
           </div>
         </dl>
+        {badges.length > 0 ? (
+          <ul
+            data-testid="achievement-badges"
+            className="mt-5 flex flex-wrap justify-center gap-2"
+          >
+            {badges.map((badge) => (
+              <li
+                key={badge.id}
+                title={badge.description}
+                className="rounded-full border border-[#ffd23d]/40 bg-[#ffd23d]/10 px-3 py-1 text-xs font-bold text-[#ffd23d]"
+              >
+                {badge.name}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {code ? (
+          <div className="mt-5 rounded border border-[#38e8ff]/30 bg-[#38e8ff]/5 px-3 py-2 text-center">
+            <div className="text-[0.65rem] uppercase tracking-[0.2em] text-white/50">
+              Death code
+            </div>
+            <div
+              data-testid="death-code"
+              className="mt-1 select-all text-lg font-bold tracking-[0.15em] text-[#38e8ff]"
+            >
+              {code}
+            </div>
+          </div>
+        ) : null}
         <button
           type="button"
           data-testid="run-again"

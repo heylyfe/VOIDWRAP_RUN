@@ -486,6 +486,8 @@ export default function GameClient() {
           levelReached={runOver.levelReached}
           giftsCollected={runOver.giftsCollected}
           cause={causeOf(runOver.cause)}
+          code={runOver.code}
+          achievements={runOver.achievements}
           onRestart={restart}
         />
       )}

@@ -884,6 +884,10 @@ pub struct Run {
     pub mode: sim::mode::DifficultyMode,
     /// Radar modules bought in the shop (T-086): what this run is allowed to see.
     pub radar: sim::radar::RadarState,
+    /// Achievements unlocked this run (T-088), in unlock order.
+    pub achievements: sim::achievements::AchievementTracker,
+    /// Players who died on the level currently being played; reset by `finish_level`.
+    deaths_this_level: u32,
     pub upgrades: Vec<String>,
     pub curses: Vec<String>,
     /// Ids of shop `mods`/`perk`/`counter` items bought this run, so a curse purge can rebuild the
@@ -922,27 +926,22 @@ impl Run {
     /// A cosmetic death-screen code (T-088): deterministic from the run seed, the level reached
     /// and the cause of death, so the same death always shows the same code. Not a secret and
     /// not redeemable for gameplay — it is a flourish the player can share.
-    pub fn death_code(&self, cause: u8) -> String {
-        const ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        for b in (self.seed as u64)
-            .to_le_bytes()
-            .iter()
-            .chain((self.level_num as u64).to_le_bytes().iter())
-            .chain([cause].iter())
-        {
-            h ^= u64::from(*b);
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    pub fn death_code(&self, _cause: u8) -> String {
+        self.achievements.code(self.seed)
+    }
+
+    /// Record that a player died on the level being played. `clean_level` needs this to tell a
+    /// flawless level from a costly one.
+    pub fn note_death(&mut self) {
+        self.deaths_this_level = self.deaths_this_level.saturating_add(1);
+    }
+
+    /// Close the run's achievement book: EXTREME runs unlock `extreme_finish` when they end.
+    pub fn finish_achievements(&mut self) {
+        if self.mode == sim::mode::DifficultyMode::Extreme {
+            self.achievements
+                .observe(sim::achievements::AchievementEvent::ExtremeRunFinished);
         }
-        let mut out = String::from("VW-");
-        for i in 0..8 {
-            if i == 4 {
-                out.push('-');
-            }
-            let idx = ((h >> (i * 5)) % ALPHABET.len() as u64) as usize;
-            out.push(ALPHABET[idx] as char);
-        }
-        out
     }
 
     /// A new run, waiting in the lobby for the start-of-run draft.
@@ -966,6 +965,8 @@ impl Run {
             seed,
             mode: sim::mode::DifficultyMode::Standard,
             radar: sim::radar::RadarState::default(),
+            achievements: sim::achievements::AchievementTracker::new(),
+            deaths_this_level: 0,
             upgrades: Vec::new(),
             curses: Vec::new(),
             purchased_mods: Vec::new(),
@@ -1123,6 +1124,18 @@ impl Run {
         let session = self.vote_session.take()?;
         let outcome = session.resolve()?;
         self.apply_vote_outcome(content, &outcome);
+        let for_votes = outcome.counts.get(usize::from(outcome.winner)).copied().unwrap_or(0);
+        let against: u32 = outcome
+            .counts
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != usize::from(outcome.winner))
+            .map(|(_, c)| *c)
+            .sum();
+        self.achievements.observe(sim::achievements::AchievementEvent::VoteWin {
+            for_votes: u8::try_from(for_votes).unwrap_or(u8::MAX),
+            against: u8::try_from(against).unwrap_or(u8::MAX),
+        });
         Some(outcome)
     }
 
@@ -1606,7 +1619,14 @@ impl Run {
     /// The beacon was reached: back to the lobby to draft for the next level.
     pub fn finish_level(&mut self, content: &Content) {
         let shortcut = std::mem::take(&mut self.altar_ledger.shortcut_pending);
+        if self.deaths_this_level == 0 {
+            self.achievements
+                .observe(sim::achievements::AchievementEvent::LevelClearedNoDeath);
+        }
+        self.deaths_this_level = 0;
         self.level_num = self.level_num.saturating_add(1);
+        self.achievements
+            .observe(sim::achievements::AchievementEvent::LevelReached(self.level_num));
         self.level = levelgen::hub();
         self.world = World::from_level(&self.level);
         self.gifts_taken.clear();
@@ -1928,6 +1948,10 @@ impl Run {
             }
             // The last gift (including the vacuous zero-gift case) starts phase 2.
             if self.normal_left() == 0 {
+                if !self.level.gifts.is_empty() && self.gifts_taken.len() == self.level.gifts.len() {
+                    self.achievements
+                        .observe(sim::achievements::AchievementEvent::AllGiftsCollected);
+                }
                 self.enter_collapse_pending();
             }
             return picked;
@@ -2139,6 +2163,61 @@ mod tests {
             pos: run.level.spawn,
         }];
         run.altars_used.clear();
+    }
+
+    #[test]
+    fn finishing_a_level_unlocks_clean_level_and_level_reached() {
+        let c = content();
+        let mut run = Run::new(&c, 7, 1);
+        run.resolve(&c, &[vec![]]);
+        run.finish_level(&c);
+        assert!(run.achievements.has("clean_level"), "no deaths on the level");
+        assert!(!run.achievements.has("level_20"), "level 2 is not level 20");
+        assert_eq!(
+            run.achievements.unlocked(),
+            ["clean_level"],
+            "level 2 unlocks nothing else"
+        );
+    }
+
+    #[test]
+    fn a_death_on_the_level_blocks_clean_level() {
+        let c = content();
+        let mut run = Run::new(&c, 7, 1);
+        run.resolve(&c, &[vec![]]);
+        run.note_death();
+        run.finish_level(&c);
+        assert!(!run.achievements.has("clean_level"), "a death spoils the level");
+        run.note_death();
+        run.finish_level(&c);
+        assert!(!run.achievements.has("clean_level"), "still spoiled");
+    }
+
+    #[test]
+    fn reaching_level_twenty_unlocks_deep_run() {
+        let c = content();
+        let mut run = Run::new(&c, 7, 19);
+        run.resolve(&c, &[vec![]]);
+        assert!(!run.achievements.has("level_20"));
+        run.finish_level(&c);
+        assert_eq!(run.level_num, 20);
+        assert!(run.achievements.has("level_20"));
+    }
+
+    #[test]
+    fn death_code_is_stable_and_well_formed() {
+        let c = content();
+        let run = Run::new(&c, 1234, 3);
+        let code = run.death_code(protocol::DEATH_VOID);
+        assert_eq!(code, run.death_code(protocol::DEATH_VOID), "same run, same code");
+        assert_eq!(code.len(), 12);
+        assert!(code.starts_with("VW-"));
+        let other = Run::new(&c, 4321, 3);
+        assert_ne!(
+            code,
+            other.death_code(protocol::DEATH_VOID),
+            "different seed, different code"
+        );
     }
 
     #[test]
