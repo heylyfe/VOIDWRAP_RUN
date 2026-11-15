@@ -160,9 +160,26 @@ function auditPedestalPool() {
     if (p10 <= p1) allOk = false; // the pool must widen with level
     if (p20 < 10) allOk = false; // a deep run needs real choice
     if (capacity <= p1) allOk = false; // overflow must not start before the pool is used
+    // T-134: every enemy in the registry must be reachable by the pool. An enemy with
+    // a `min_level` above the deepest level a run reaches is a definition nobody can
+    // ever vote for -- the same "exists but never appears" defect T-132 closed for
+    // patterns. Level 20 is the depth the audit uses elsewhere for "a deep run".
+    const unreachable = content.enemies
+      .filter((e) => Math.max(1, e.min_level + mode.minLevelShift) > 20)
+      .map((e) => `${e.id}@${e.min_level}`);
+    if (unreachable.length) {
+      allOk = false;
+      lines.push(`${modeId}: enemies unreachable by level 20: ${unreachable.join(', ')}`);
+    }
+    const noCap = content.enemies.filter((e) => !(e.selection_cap >= 1)).map((e) => e.id);
+    if (noCap.length) {
+      allOk = false;
+      lines.push(`${modeId}: enemies with selection_cap < 1 (can never be permanent): ${noCap.join(', ')}`);
+    }
   }
   lines.push(`enemies in the registry: ${content.enemies.length}`);
-  lines.push('thresholds: pool@1 >= 3, pool@10 > pool@1, pool@20 >= 10, capacity > pool@1');
+  lines.push('thresholds: pool@1 >= 3, pool@10 > pool@1, pool@20 >= 10, capacity > pool@1, '
+    + 'every enemy reachable by level 20, every enemy selection_cap >= 1');
   metric(allOk, '3.pedestal_pool', lines);
 }
 

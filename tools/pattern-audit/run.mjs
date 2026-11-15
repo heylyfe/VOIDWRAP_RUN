@@ -702,6 +702,14 @@ function report(A, ctx, log) {
     log(s);
     if (!pass) fails.push(name);
   };
+  // T-134: a metric that cannot be measured must say so. Reporting PASS for an
+  // unmeasurable check is worse than reporting nothing, because it looks like
+  // coverage. SKIP is neither a pass nor a failure and never enters `fails`.
+  const skip = (name, detail) => {
+    const s = `SKIP - ${name} (${detail})`;
+    lines.push(s);
+    log(s);
+  };
   const tables = [];
   const tlog = (s) => { tables.push(s); log(s); };
 
@@ -851,12 +859,22 @@ function report(A, ctx, log) {
     + `levels with a measured near-miss: ${geo.nearMissLevels}`);
 
   // --- 6 enemy spawn frequencies -------------------------------------------------
+  // T-134: this used to report PASS when the roster was absent, which made it a
+  // check that could never fail. The dump carries generic `spawn` markers, not enemy
+  // types -- the type is chosen at runtime from the registry -- so this metric is
+  // structurally unmeasurable from a dump. It now says SKIP and points at the check
+  // that can measure it: `3.pedestal_pool` in the economy audit, which reads the
+  // registry directly and asserts every enemy is reachable by level 20 in every mode.
   const neverList = ctx.enemyRoster ? ctx.enemyRoster.filter((t) => !A.enemyPlacements.has(t)) : null;
-  line('6.enemy-frequencies.never-offered',
-    neverList ? neverList.length === 0 : true,
-    neverList
-      ? `roster types with zero placements across the whole run: ${neverList.length ? neverList.join(', ') : 'none'}; threshold: 0`
-      : `roster not provided (set PATTERN_AUDIT_ENEMY_TYPES); only observed diversity below, placed placements per type: ${[...A.enemyPlacements.entries()].map(([t, c]) => `${t}:${c}`).join(' ') || 'none'}`);
+  if (neverList) {
+    line('6.enemy-frequencies.never-offered',
+      neverList.length === 0,
+      `roster types with zero placements across the whole run: ${neverList.length ? neverList.join(', ') : 'none'}; threshold: 0`);
+  } else {
+    skip('6.enemy-frequencies.never-offered',
+      'the dump carries generic spawn markers, not enemy types, so per-enemy placement is not measurable here; '
+      + 'registry coverage is asserted by economy-audit 3.pedestal_pool');
+  }
 
   const alwaysCells = [];
   for (const [cellKey, cell] of A.enemyCells) {
