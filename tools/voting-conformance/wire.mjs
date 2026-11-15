@@ -32,6 +32,15 @@ import { pathToFileURL } from 'node:url';
 const DASH = '\u2014';
 
 // ClientMsg variant indices (encode only).
+// Wire sizes of the two Snapshot arrays nothing decodes, from the generated
+// structs in server/crates/protocol/src/generated.rs. A mismatch here shows up
+// as a decode failure on every Snapshot, which is loud rather than silent.
+//   PlayerView: id u32, pos Vec3, vel Vec3, mode u8, class u8
+//   EnemyView:  id u32, kind u8, pos Vec3, radius f32, state u8, target Vec3,
+//               prog u8, flags u8
+const PLAYER_VIEW_BYTES = 4 + 12 + 12 + 1 + 1;
+const ENEMY_VIEW_BYTES = 4 + 1 + 12 + 4 + 1 + 12 + 1 + 1;
+
 const CLIENT_VARIANTS = Object.freeze({
   Hello: 0,
   Inputs: 1,
@@ -318,6 +327,14 @@ class Reader {
     return b === 1;
   }
 
+  // Advance past `n` bytes without decoding them. Used for the two large
+  // Snapshot arrays nothing reads; the byte counts are asserted against the
+  // generated structs in `PLAYER_VIEW_BYTES` / `ENEMY_VIEW_BYTES`.
+  skip(n, field) {
+    this.need(n, field);
+    this.pos += n;
+  }
+
   // u64 length prefix, validated against the bytes actually left in the buffer
   // *before* anything is allocated. Every element of every Vec/string we decode
   // occupies at least one byte, so a prefix larger than the remaining byte
@@ -514,14 +531,22 @@ export function decodeServerMsg(buf) {
     case 'Level':
       return { variant: variantName, data: readStruct(r, 'LevelData', 'data') };
 
-    case 'Snapshot':
-      return {
-        variant: variantName,
-        tick: r.u32('tick'),
-        level: r.u32('level'),
-        last_input_seq: r.u32('last_input_seq'),
-        you: readStruct(r, 'ControllerState', 'you'),
-      };
+    case 'Snapshot': {
+      const tick = r.u32('tick');
+      const level = r.u32('level');
+      const last_input_seq = r.u32('last_input_seq');
+      const you = readStruct(r, 'ControllerState', 'you');
+      // `players` and `enemies` are large and no kit reads them, so they are
+      // skipped by size rather than decoded. `gifts_taken` is the one field past
+      // them that matters: without it a bot cannot tell a gift it has already
+      // picked up from one it has not, so it walks back to the same gift
+      // forever. That is exactly what the playthrough sweep did.
+      r.skip(r.count('players') * PLAYER_VIEW_BYTES, 'players');
+      r.skip(r.count('enemies') * ENEMY_VIEW_BYTES, 'enemies');
+      const gifts_taken = [];
+      for (let i = 0, n = r.count('gifts_taken'); i < n; i += 1) gifts_taken.push(r.u16('gifts_taken'));
+      return { variant: variantName, tick, level, last_input_seq, you, gifts_taken };
+    }
 
     // RunOver carries a RunSummary the conformance kit never inspects. Decoding
     // it would be wasted work, so we stop right after the variant index and flag

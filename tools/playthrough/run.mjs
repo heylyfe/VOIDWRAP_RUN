@@ -25,6 +25,7 @@ const argValue = (flag, fallback) => {
   const i = argv.indexOf(flag);
   return i >= 0 && i + 1 < argv.length ? argv[i + 1] : fallback;
 };
+const flag = (name) => argv.includes(name);
 
 const URL_ = argValue('--url', process.env.PLAYTHROUGH_URL || '');
 const CLIENTS = Number(argValue('--clients', process.env.PLAYTHROUGH_CLIENTS || '8'));
@@ -78,8 +79,16 @@ class Client {
     this.closed = false;
     this.ws = null;
     this.level = null;
+    this.you = null;
     this.pos = null;
     this.collected = new Set();
+    // Gifts this bot has given up on for a few seconds, and the frame counter
+    // that decides when to give up. See `steer`.
+    this.blacklist = new Map();
+    this.stuckFrames = 0;
+    this.lastPos = null;
+    this.target = null;
+    this.index = 0;
   }
 
   connect(url) {
@@ -113,8 +122,29 @@ class Client {
         if (msg.variant === 'Level') {
           this.level = msg.data;
           this.collected = new Set();
+          this.blacklist.clear();
+          this.stuckFrames = 0;
+          this.lastPos = null;
+          this.target = null;
         } else if (msg.variant === 'Snapshot') {
-          this.pos = msg.you && msg.you.pos ? msg.you.pos : null;
+          // Keep the whole controller state, not just the position: `grounded`
+          // lives on ControllerState, and reading it off the position vector
+          // made it `undefined`, so the bot never pressed jump.
+          this.you = msg.you || null;
+          this.pos = this.you && this.you.pos ? this.you.pos : null;
+          // Stuck detection belongs here, not in `steer`: `steer` runs at the
+          // input rate and snapshots arrive at the tick rate, so comparing
+          // against the previous `steer` call counted "no new snapshot yet" as
+          // "did not move" and the bot jumped every frame.
+          if (this.pos && this.lastPos) {
+            const moved = Math.hypot(this.pos.x - this.lastPos.x, this.pos.z - this.lastPos.z);
+            this.stuckFrames = moved < 0.02 ? this.stuckFrames + 1 : 0;
+          }
+          if (this.pos) this.lastPos = { x: this.pos.x, z: this.pos.z };
+          // The server is the authority on what has been picked up. Without
+          // this the bot keeps steering at the gift it just took, because the
+          // nearest gift is usually the one behind it.
+          for (const id of msg.gifts_taken || []) this.collected.add(id);
         }
         this.react(msg);
       };
@@ -131,38 +161,122 @@ class Client {
   }
 
   /**
-   * Steer toward the nearest uncollected gift.
+   * Is there a surface under `(x, z)` that a player standing at height `y`
+   * could stand on?
    *
-   * Returns `null` when there is nothing to steer to (no `Level` yet, no `Snapshot`
-   * yet, or every gift taken), which keeps the random walk as the fallback.
+   * Ramps are walkable along their whole incline, so their footprint counts at
+   * any height inside the box. Every other platform only counts when its top
+   * face is at or just below the player's feet -- `upTol` widens that for
+   * landing probes, where a step up is allowed.
+   */
+  groundAt(x, z, y, upTol = 0.6) {
+    const platforms = this.level && this.level.platforms;
+    if (!Array.isArray(platforms)) return true;
+    for (const p of platforms) {
+      const b = p.bounds;
+      if (x < b.min.x - 0.25 || x > b.max.x + 0.25) continue;
+      if (z < b.min.z - 0.25 || z > b.max.z + 0.25) continue;
+      const ramp = p.kind >= 3 && p.kind <= 6;
+      if (ramp) {
+        if (y >= b.min.y - 0.8 && y <= b.max.y + 0.8) return true;
+      } else if (b.max.y <= y + upTol && b.max.y >= y - 3.0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Steer toward an uncollected gift, without walking off the level.
+   *
+   * Returns `null` only when there is nothing to steer with yet (no `Level`, no
+   * `Snapshot`), which keeps the random walk as the fallback. When there is
+   * geometry but no reachable gift it returns a hold-still aim: a random walk
+   * over a level with edges is a bot that dies in the void.
    */
   steer() {
     const level = this.level;
-    const pos = this.pos;
-    if (!level || !pos || !Array.isArray(level.gifts)) return null;
-    let best = null;
-    let bestD = Infinity;
+    const you = this.you;
+    if (!level || !you || !Array.isArray(level.gifts)) return null;
+    const pos = you.pos;
+    const now = Date.now();
+    const hold = { x: 0, z: 0, jump: false };
+
+    // Stuck detection. A straight-line steer has no notion of an obstacle, so a
+    // bot pressed against the side of a platform pushes forever. `stuckFrames`
+    // is maintained by the snapshot handler; past the threshold, drop the
+    // current target for a few seconds so the next-nearest gift gets a turn.
+    if (this.stuckFrames > 20 && this.target !== null) {
+      this.blacklist.set(this.target, now + 3000);
+      this.target = null;
+    }
+
+    const candidates = [];
     for (const gift of level.gifts) {
       if (this.collected.has(gift.id)) continue;
+      if ((this.blacklist.get(gift.id) || 0) > now) continue;
       const dx = gift.pos.x - pos.x;
       const dz = gift.pos.z - pos.z;
-      const d = dx * dx + dz * dz;
-      if (d < bestD) {
-        bestD = d;
-        best = gift;
-      }
+      candidates.push({ gift, d: dx * dx + dz * dz });
     }
-    if (!best) return null;
-    if (bestD < 2.25) this.collected.add(best.id);
+    if (!candidates.length) return hold;
+    candidates.sort((a, b) => a.d - b.d);
+    // Hysteresis. Greedy nearest-target selection oscillates: two gifts on
+    // opposite sides of the bot swap places as "nearest" every frame, the bot
+    // reverses direction instead of walking anywhere, and the velocity trace
+    // flips sign every second. Keep the current target until it is collected,
+    // blacklisted, or something is more than twice as close.
+    let best = null;
+    if (this.target !== null) {
+      const held = candidates.find((c) => c.gift.id === this.target);
+      if (held && held.d <= candidates[0].d * 4) best = held.gift;
+    }
+    if (!best) {
+      // Spread the herd. Eight bots all steering at the single nearest gift
+      // collect one gift per pass; each bot takes a different one of the
+      // nearest `CLIENTS` candidates instead, which keeps them apart with no
+      // coordination.
+      best = candidates[Math.min(this.index, candidates.length - 1)].gift;
+    }
+    this.target = best.id;
+    this.lastTarget = best.pos;
+
     const dx = best.pos.x - pos.x;
     const dz = best.pos.z - pos.z;
     const len = Math.hypot(dx, dz) || 1;
+    const dirX = dx / len;
+    const dirZ = dz / len;
     const rise = best.pos.y - pos.y;
-    return {
-      x: dx / len,
-      z: dz / len,
-      jump: Boolean(pos.grounded) && (rise > 0.3 || len > 2.0),
-    };
+    // `grounded` is on ControllerState, not on the position vector. Reading it
+    // off the position made this `undefined` and the bot never jumped.
+    // Jump only when there is a reason to. The first version jumped whenever the
+    // gift was more than 2 u away -- which is always -- and a bot that jumps
+    // every frame never builds horizontal speed, so it bounced around the spawn
+    // and collected nothing.
+    let jump = Boolean(you.grounded) && (rise > 0.3 || this.stuckFrames > 4);
+
+    // Edge awareness. The first version of this bot steered in a straight line
+    // and walked off the platform: the server logged "player out; spectating
+    // cause=0" (DEATH_VOID) for every client. Probe one step ahead; if there is
+    // no surface, look for one inside jump range and jump at it, otherwise give
+    // up on this gift rather than die for it.
+    if (you.grounded && !this.groundAt(pos.x + dirX * 0.9, pos.z + dirZ * 0.9, pos.y)) {
+      let landing = null;
+      for (let d = 1.5; d <= 5.5; d += 0.5) {
+        if (this.groundAt(pos.x + dirX * d, pos.z + dirZ * d, pos.y, 2.0)) {
+          landing = d;
+          break;
+        }
+      }
+      if (landing === null) {
+        this.blacklist.set(best.id, now + 3000);
+        this.target = null;
+        return hold;
+      }
+      jump = true;
+    }
+
+    return { x: dirX, z: dirZ, jump };
   }
 
   /**
@@ -174,6 +288,7 @@ class Client {
     this.walkTimer = setInterval(() => {
       if (this.closed) return;
       const aim = this.steer();
+      this.lastAim = aim;
       const frames = [];
       for (let i = 0; i < 4; i += 1) {
         this.seq += 1;
@@ -229,7 +344,13 @@ function report(name, ok, detail) {
 
 async function main() {
   const clients = [];
-  for (let i = 0; i < CLIENTS; i += 1) clients.push(new Client('pt-' + i));
+  for (let i = 0; i < CLIENTS; i += 1) {
+    const client = new Client('pt-' + i);
+    // Each bot takes a different one of the nearest gifts, so eight of them do
+    // not converge on the same one. See `steer`.
+    client.index = i;
+    clients.push(client);
+  }
 
   const results = [];
   const push = (name, ok, detail) => results.push({ name, ok, detail });
@@ -256,6 +377,28 @@ async function main() {
 
   // --- let the run play out
   for (const client of clients) if (!client.closed) client.startWalking();
+  // `--verbose` prints one line per second per client: position, grounded, and
+  // gift progress. A stalled level is either a bot that is dying or a bot that
+  // is not finding gifts, and the level counter cannot tell those apart.
+  if (flag('--verbose')) {
+    const probe = setInterval(() => {
+      for (const client of clients) {
+        if (client.closed || !client.you) continue;
+        const p = client.you.pos;
+        console.log(
+          '  ' + client.name + ' pos ' + p.x.toFixed(1) + ',' + p.y.toFixed(1) + ',' + p.z.toFixed(1) +
+          ' grounded ' + client.you.grounded +
+          ' vel ' + client.you.vel.x.toFixed(1) + ',' + client.you.vel.y.toFixed(1) + ',' + client.you.vel.z.toFixed(1) +
+          ' stuck ' + client.stuckFrames +
+          ' gifts ' + client.collected.size + '/' + (client.level ? client.level.gifts.length : 0) +
+          ' target ' + client.target +
+          ' aim ' + (client.lastAim ? client.lastAim.x.toFixed(2) + ',' + client.lastAim.z.toFixed(2) : 'none') +
+          ' tgt ' + (client.lastTarget ? client.lastTarget.x.toFixed(1) + ',' + client.lastTarget.y.toFixed(1) + ',' + client.lastTarget.z.toFixed(1) : 'none'),
+        );
+      }
+    }, 1000);
+    probe.unref();
+  }
   const deadline = Date.now() + SECONDS * 1000;
   while (Date.now() < deadline) {
     await sleep(250);
@@ -277,8 +420,21 @@ async function main() {
   // signal stays about the protocol and the lobby flow.
   const completed = maxLevel >= 2;
   const gate = (name, ok, detail) => push(name, completed ? ok : null, detail);
-  push('level-progression', completed, 'highest level reached: ' + maxLevel);
-  gate('draft', variants.has('Draft'), 'Draft frames: ' + all.filter((m) => m.variant === 'Draft').length);
+  // Gift progress is the number that explains a stalled level: a bot that
+  // reaches level 1 and stops is either dying or not finding the gifts, and
+  // the two look identical from the level counter alone.
+  const totalGifts = clients.reduce(
+    (n, c) => (c.level && Array.isArray(c.level.gifts) ? Math.max(n, c.level.gifts.length) : n),
+    0,
+  );
+  const best = { taken: clients.reduce((n, c) => Math.max(n, c.collected.size), 0), total: totalGifts };
+  push('level-progression', completed,
+    'highest level reached: ' + maxLevel + ' (best client collected ' + best.taken + '/' + best.total + ' gifts)');
+  // `draft` does not need a completed level: the first draft fires before level 1
+  // starts, so it is a live check even when the bot never finishes a level.
+  const drafts = all.filter((m) => m.variant === 'Draft').length;
+  const draftAnswers = clients.reduce((n, c) => n + (c.drafts || 0), 0);
+  push('draft', drafts > 0 && draftAnswers > 0, 'Draft frames: ' + drafts + ', answered: ' + draftAnswers);
   gate('vote', variants.has('VoteOpen'), 'VoteOpen frames: ' + all.filter((m) => m.variant === 'VoteOpen').length);
   gate('shop', variants.has('Shop'), 'Shop frames: ' + all.filter((m) => m.variant === 'Shop').length);
   push('phase-coverage', phases.size >= 2, 'distinct phases: ' + phases.size + ' [' + [...phases].join(',') + ']');
