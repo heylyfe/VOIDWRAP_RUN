@@ -1218,11 +1218,16 @@ pub async fn run(mut rx: mpsc::Receiver<GameEvent>, mut game: Game, game_state: 
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
     let mut window_start = Instant::now();
     let mut window_ticks = 0u32;
+    // T-113: the tick budget is the number that matters for "is it laggy", so the
+    // periodic line reports the mean cost of one tick alongside the achieved rate.
+    let mut window_tick_time = Duration::ZERO;
     loop {
         tokio::select! {
             biased;
             _ = interval.tick() => {
+                let tick_start = Instant::now();
                 game.tick();
+                window_tick_time += tick_start.elapsed();
                 game_state.publish(
                     game.player_count() as u32,
                     game.run.level_num,
@@ -1237,9 +1242,15 @@ pub async fn run(mut rx: mpsc::Receiver<GameEvent>, mut game: Game, game_state: 
                 let elapsed = window_start.elapsed();
                 if elapsed >= Duration::from_secs(1) {
                     let hz = f64::from(window_ticks) / elapsed.as_secs_f64();
-                    tracing::info!("tick {} | {hz:.1} Hz | players {}", game.tick_count(), game.player_count());
+                    let mean_ms = window_tick_time.as_secs_f64() * 1000.0 / f64::from(window_ticks.max(1));
+                    tracing::info!(
+                        "tick {} | {hz:.1} Hz | players {} | {mean_ms:.2} ms/tick",
+                        game.tick_count(),
+                        game.player_count()
+                    );
                     window_start = Instant::now();
                     window_ticks = 0;
+                    window_tick_time = Duration::ZERO;
                 }
             }
             ev = rx.recv() => match ev {
