@@ -11,6 +11,7 @@ pub mod greater;
 pub mod hazards;
 pub mod levelgen;
 pub mod levels;
+pub mod mode;
 pub mod pattern;
 pub mod rules;
 pub mod tuning;

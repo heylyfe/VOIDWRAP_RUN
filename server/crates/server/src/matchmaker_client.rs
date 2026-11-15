@@ -122,12 +122,27 @@ impl Default for GameSnapshot {
 /// Lock-free live game state shared between the game task and the heartbeat task.
 ///
 /// The game task calls [`GameStateHandle::publish`] once per tick; the heartbeat calls
+/// The `phase` string published to the matchmaker: the opaque phase plus the mode suffix (T-085).
+///
+/// The matchmaker contract is frozen, so the difficulty mode rides inside `phase` as a suffix
+/// (`""` for STANDARD, `":extreme"`, `":chaos"`, `":random"`). The stored `u8` is mapped back
+/// through [`sim::mode::DifficultyMode::all`] by index; an out-of-range index means STANDARD,
+/// so an unknown mode never changes the published string.
+fn phase_with_mode(phase: &str, mode: u8) -> String {
+    let suffix = sim::mode::DifficultyMode::all()
+        .get(mode as usize)
+        .map_or("", |m| m.phase_suffix());
+    format!("{phase}{suffix}")
+}
+
 /// [`GameStateHandle::snapshot`]. No lock is ever held across an await.
 #[derive(Debug)]
 pub struct GameStateHandle {
     players: std::sync::atomic::AtomicU32,
     level: std::sync::atomic::AtomicU32,
     phase: std::sync::atomic::AtomicU8,
+    /// Difficulty mode index (T-085); 0 is STANDARD. Rides inside the opaque `phase` string.
+    mode: std::sync::atomic::AtomicU8,
 }
 
 impl Default for GameStateHandle {
@@ -143,15 +158,17 @@ impl GameStateHandle {
             players: std::sync::atomic::AtomicU32::new(0),
             level: std::sync::atomic::AtomicU32::new(1),
             phase: std::sync::atomic::AtomicU8::new(0),
+            mode: std::sync::atomic::AtomicU8::new(0),
         }
     }
 
     /// Publish the current game state (called by the game task every tick).
-    pub fn publish(&self, players: u32, level: u32, phase: u8) {
+    pub fn publish(&self, players: u32, level: u32, phase: u8, mode: u8) {
         use std::sync::atomic::Ordering::Relaxed;
         self.players.store(players, Relaxed);
         self.level.store(level, Relaxed);
         self.phase.store(phase, Relaxed);
+        self.mode.store(mode, Relaxed);
     }
 
     /// Read the latest published state.
@@ -167,7 +184,7 @@ impl GameStateHandle {
         GameSnapshot {
             players: self.players.load(Relaxed),
             level: self.level.load(Relaxed),
-            phase: phase.to_string(),
+            phase: phase_with_mode(phase, self.mode.load(Relaxed)),
         }
     }
 }

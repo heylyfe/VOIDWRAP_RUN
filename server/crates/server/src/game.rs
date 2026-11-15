@@ -1133,6 +1133,10 @@ pub async fn run(mut rx: mpsc::Receiver<GameEvent>, mut game: Game, game_state: 
                     game.player_count() as u32,
                     game.run.level_num,
                     game.run.phase,
+                    sim::mode::DifficultyMode::all()
+                        .iter()
+                        .position(|m| *m == game.run.mode)
+                        .unwrap_or(0) as u8,
                 );
                 window_ticks += 1;
                 tracing::trace!(tick = game.tick_count(), "tick");

@@ -279,19 +279,37 @@ fn class_excluded(entry: &PoolEntry, classes: &[&str]) -> bool {
     })
 }
 
-/// The filtered, deterministically ordered enemy pool (registry §9): `min_level` gate, `selection_cap`
-/// against the run's permanents, `requires` hooks, class composition. Ordered by `min_level` ascending,
-/// ties broken by content order. No RNG.
+/// The pedestal pool for `level` under the default difficulty.
+///
+/// Thin wrapper over [`vote_pool_with`] with [`sim::mode::DifficultyMode::Standard`], kept
+/// so every existing call site and test compiles unchanged (T-085).
+#[allow(dead_code)]
 pub fn vote_pool(entries: &[PoolEntry], level: u32, classes: &[&str], permanents: &[String]) -> Vec<PoolEntry> {
+    vote_pool_with(entries, level, classes, permanents, sim::mode::DifficultyMode::Standard)
+}
+
+/// The pedestal pool for `level`, shaped by `mode` (T-085).
+///
+/// Identical to [`vote_pool`] except for two mode-driven changes: every entry's `min_level`
+/// is shifted by `mode.min_level_shift()` (clamped so it never drops below 1), and the
+/// permanent-copy cap is raised by `mode.cap_bonus()`. The chorus gate, the `requires`
+/// hooks, the class filter and the sort order are untouched.
+pub fn vote_pool_with(
+    entries: &[PoolEntry],
+    level: u32,
+    classes: &[&str],
+    permanents: &[String],
+    mode: sim::mode::DifficultyMode,
+) -> Vec<PoolEntry> {
     let tag_counts = permanent_tag_counts(entries, permanents);
     let small = tag_counts.get("small").copied().unwrap_or(0);
     let mut pool: Vec<PoolEntry> = entries
         .iter()
-        .filter(|e| e.min_level <= level)
+        .filter(|e| (e.min_level as i32 + mode.min_level_shift()).max(1) <= level as i32)
         .filter(|e| e.id != "chorus" || chorus_candidate_allowed(small, level))
         .filter(|e| {
             let held = permanents.iter().filter(|id| id.as_str() == e.id).count();
-            held < e.selection_cap as usize
+            held < (e.selection_cap + mode.cap_bonus()) as usize
         })
         .filter(|e| requires_satisfied(e, &tag_counts))
         .filter(|e| !class_excluded(e, classes))
@@ -305,15 +323,32 @@ pub fn vote_pool(entries: &[PoolEntry], level: u32, classes: &[&str], permanents
     pool
 }
 
-/// Registry §9 overflow: every entry is at its cap, so the vote offers TEMPORARY summons for the next
-/// level. Candidates ignore `selection_cap` (temporaries never count) but still respect `min_level`, the
-/// `requires` hooks and class composition; ordered by `min_level` descending, ties broken by content order.
+/// The overflow pool for `level` under the default difficulty.
+///
+/// Thin wrapper over [`overflow_pool_with`] with [`sim::mode::DifficultyMode::Standard`], kept
+/// so every existing call site and test compiles unchanged (T-085).
+#[allow(dead_code)]
 pub fn overflow_pool(entries: &[PoolEntry], level: u32, classes: &[&str], permanents: &[String]) -> Vec<PoolEntry> {
+    overflow_pool_with(entries, level, classes, permanents, sim::mode::DifficultyMode::Standard)
+}
+
+/// The overflow pool for `level`, shaped by `mode` (T-085).
+///
+/// Same two mode-driven changes as [`vote_pool_with`] - the shifted `min_level` gate and the
+/// raised permanent cap - but this pool still ignores caps when it is used for the temporary
+/// overflow draft, and it still truncates to [`VOTE_POOL_OFFER`].
+pub fn overflow_pool_with(
+    entries: &[PoolEntry],
+    level: u32,
+    classes: &[&str],
+    permanents: &[String],
+    mode: sim::mode::DifficultyMode,
+) -> Vec<PoolEntry> {
     let tag_counts = permanent_tag_counts(entries, permanents);
     let small = tag_counts.get("small").copied().unwrap_or(0);
     let mut pool: Vec<PoolEntry> = entries
         .iter()
-        .filter(|e| e.min_level <= level)
+        .filter(|e| (e.min_level as i32 + mode.min_level_shift()).max(1) <= level as i32)
         .filter(|e| e.id != "chorus" || chorus_candidate_allowed(small, level))
         .filter(|e| requires_satisfied(e, &tag_counts))
         .filter(|e| !class_excluded(e, classes))
@@ -845,6 +880,8 @@ pub struct Run {
     pub vote_session: Option<VoteSession>,
     /// The seed the run was created with (vote draws and tie-breaks are deterministic).
     pub seed: u32,
+    /// The difficulty mode chosen in the lobby (T-085). `Standard` changes nothing.
+    pub mode: sim::mode::DifficultyMode,
     pub upgrades: Vec<String>,
     pub curses: Vec<String>,
     /// Ids of shop `mods`/`perk`/`counter` items bought this run, so a curse purge can rebuild the
@@ -899,6 +936,7 @@ impl Run {
             pending_temporary: Vec::new(),
             vote_session: None,
             seed,
+            mode: sim::mode::DifficultyMode::Standard,
             upgrades: Vec::new(),
             curses: Vec::new(),
             purchased_mods: Vec::new(),
@@ -963,7 +1001,7 @@ impl Run {
         let entries = Self::pool_entries(content);
         let permanents = self.all_permanents();
         let level = self.level_num;
-        let pool = vote_pool(&entries, level, classes, &permanents);
+        let pool = vote_pool_with(&entries, level, classes, &permanents, self.mode);
         let mut options: Vec<SessionOption> = pool
             .iter()
             .take(VOTE_POOL_OFFER)
@@ -976,7 +1014,7 @@ impl Run {
             })
             .collect();
         if options.is_empty() {
-            options = overflow_pool(&entries, level, classes, &permanents)
+            options = overflow_pool_with(&entries, level, classes, &permanents, self.mode)
                 .into_iter()
                 .map(|e| SessionOption {
                     index: 0,
@@ -1016,6 +1054,30 @@ impl Run {
     /// Returns false when a session is already open or no option can be offered at all.
     pub fn open_vote(&mut self, content: &Content, classes: &[&str], host: Option<u32>) -> bool {
         if self.vote_session.is_some() {
+            return false;
+        }
+        // RANDOM (T-085): no vote at all - the run picks one option itself, deterministically from
+        // its own RNG, and applies it through the same path a closed vote would take.
+        if self.mode.forces_random_pick() {
+            let options = self.build_vote_options(content, classes);
+            if options.is_empty() {
+                return false;
+            }
+            let pick = self.rng.sample(options.len(), 1);
+            let Some(&index) = pick.first() else {
+                return false;
+            };
+            let option = &options[index];
+            let outcome = VoteOutcome {
+                winner: option.index,
+                id: option.id.clone(),
+                name: option.name.clone(),
+                kind: option.kind,
+                permanent: !option.temporary,
+                temporary: option.temporary,
+                counts: vec![0; options.len()],
+            };
+            self.apply_vote_outcome(content, &outcome);
             return false;
         }
         let options = self.build_vote_options(content, classes);
@@ -1137,7 +1199,8 @@ impl Run {
     /// - one copy of every counter whose enemy is a permanent of this run (`counter_<enemy id>`),
     /// - one `purge::<curse id>` per distinct curse held, stock = stacks held.
     fn make_shop(&mut self, content: &Content) -> Option<Vec<ShopOffer>> {
-        if self.level_num == 1 {
+        // CHAOS opens the shop every level, including level 1 (T-085).
+        if self.level_num == 1 && !self.mode.shop_every_level() {
             return None;
         }
         let statics: Vec<usize> = content
@@ -1942,7 +2005,7 @@ impl Run {
             fog_density_mul: if self.altar_ledger.fog_cleared {
                 0.0
             } else {
-                self.mods.fog_density_mul * escalation_fog_mul(self.level_num)
+                self.mods.fog_density_mul * escalation_fog_mul(self.level_num) * self.mode.fog_mul()
             },
             enemies: self.all_permanents(),
             upgrades: self.upgrades.clone(),
@@ -3139,5 +3202,70 @@ mod vote_tests {
         assert_eq!(s.counts(), vec![0, 0, 1]);
         assert!(s.has_voted(7));
         assert_eq!(s.voted_ids(), vec![7]);
+    }
+    // --- T-085: difficulty modes -------------------------------------------------------------
+
+    #[test]
+    fn extreme_offers_an_enemy_a_level_earlier_and_allows_an_extra_copy() {
+        use sim::mode::DifficultyMode;
+        let entries = vec![entry("late", 5, 1, &[], 0)];
+        // STANDARD: min_level 5 is not offered at level 4.
+        assert!(vote_pool_with(&entries, 4, &[], &[], DifficultyMode::Standard).is_empty());
+        // EXTREME shifts min_level by -1, so it is offered at level 4.
+        assert_eq!(
+            vote_pool_with(&entries, 4, &[], &[], DifficultyMode::Extreme).len(),
+            1,
+            "EXTREME offers a min_level-5 enemy at level 4"
+        );
+        // EXTREME raises the cap by one: a cap-1 entry with one permanent stays in the pool.
+        let held = vec!["late".to_string()];
+        assert!(vote_pool_with(&entries, 5, &[], &held, DifficultyMode::Standard).is_empty());
+        assert_eq!(
+            vote_pool_with(&entries, 5, &[], &held, DifficultyMode::Extreme).len(),
+            1,
+            "EXTREME allows a second copy"
+        );
+    }
+
+    #[test]
+    fn chaos_opens_the_shop_at_level_one() {
+        use sim::mode::DifficultyMode;
+        let content = Content::load().unwrap();
+        let mut run = Run::new(&content, 42, 1);
+        assert!(run.make_shop(&content).is_none(), "STANDARD has no level-1 shop");
+        run.mode = DifficultyMode::Chaos;
+        assert!(run.make_shop(&content).is_some(), "CHAOS opens the shop at level 1");
+    }
+
+    #[test]
+    fn random_never_opens_a_vote_and_still_adds_a_permanent() {
+        use sim::mode::DifficultyMode;
+        let content = Content::load().unwrap();
+        let mut run = Run::new(&content, 42, 1);
+        run.mode = DifficultyMode::Random;
+        assert!(!run.open_vote(&content, &[], None), "RANDOM never opens a vote session");
+        assert!(run.vote_session.is_none(), "no session is left behind");
+        assert!(
+            !run.permanents.is_empty() || !run.curses.is_empty(),
+            "the server pick still lands as a permanent or a curse"
+        );
+        // Deterministic: the same seed picks the same thing.
+        let mut again = Run::new(&content, 42, 1);
+        again.mode = DifficultyMode::Random;
+        again.open_vote(&content, &[], None);
+        assert_eq!(run.permanents, again.permanents, "same seed, same pick");
+        assert_eq!(run.curses, again.curses, "same seed, same pick");
+    }
+
+    #[test]
+    fn the_mode_survives_a_level_transition() {
+        use sim::mode::DifficultyMode;
+        let content = Content::load().unwrap();
+        let mut run = Run::new(&content, 42, 1);
+        run.mode = DifficultyMode::Extreme;
+        run.start_level(&content, 1);
+        assert_eq!(run.mode, DifficultyMode::Extreme, "the mode survives start_level");
+        run.start_level(&content, 1);
+        assert_eq!(run.mode, DifficultyMode::Extreme, "and again on the next level");
     }
 }
