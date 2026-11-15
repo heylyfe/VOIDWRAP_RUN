@@ -376,6 +376,139 @@ impl Game {
         !players.is_empty() && players.iter().all(|id| session.has_voted(*id))
     }
 
+    // ---- pre-match poll (T-159) --------------------------------------------------------
+
+    /// The PollOpen message for the open poll, if any.
+    fn poll_open_msg(&self) -> Option<ServerMsg> {
+        let session = self.run.poll.as_ref()?;
+        Some(ServerMsg::PollOpen {
+            options: session
+                .options()
+                .iter()
+                .map(|o| protocol::PollOption {
+                    id: o.id.clone(),
+                    name: o.name.clone(),
+                    kind: o.kind,
+                })
+                .collect(),
+            countdown_s: u16::try_from(crate::run::POLL_COUNTDOWN_TICKS / TICK_HZ).unwrap_or(20),
+        })
+    }
+
+    /// The PollState message for the open poll, if any.
+    fn poll_state_msg(&self) -> Option<ServerMsg> {
+        let session = self.run.poll.as_ref()?;
+        Some(ServerMsg::PollState {
+            counts: session.counts(),
+            voted: session.voted_ids(),
+            seconds_left: session.seconds_left(),
+        })
+    }
+
+    /// Broadcast the current PollState (counts, who has voted, seconds left).
+    fn broadcast_poll_state(&mut self) {
+        if let Some(msg) = self.poll_state_msg() {
+            self.broadcast(&msg);
+        }
+    }
+
+    /// Open and broadcast the poll the lobby is due for (no-op when none is due).
+    fn open_poll_session(&mut self) {
+        let host = self.joined_player_ids().into_iter().min();
+        if !self.run.open_poll(host) {
+            return;
+        }
+        if let Some(session) = self.run.poll.as_mut() {
+            session.last_sent_second = Some(session.seconds_left());
+        }
+        if let Some(msg) = self.poll_open_msg() {
+            self.broadcast(&msg);
+        }
+        self.broadcast_poll_state();
+        tracing::info!(kind = self.run.poll.as_ref().map(|p| p.kind()), "pre-match poll opened");
+    }
+
+    /// Close the open poll, broadcast the outcome, then either ask the next question or let the
+    /// lobby start. A poll nobody answered changes nothing and is not broadcast as a result.
+    fn finish_poll(&mut self) {
+        let Some(outcome) = self.run.close_poll_if_answered() else {
+            // Nobody answered: the stage still advanced, so the next question (or the start of
+            // the level) has to be considered now.
+            self.after_poll();
+            return;
+        };
+        self.broadcast(&ServerMsg::PollResult {
+            winner: outcome.winner,
+            id: outcome.id.clone(),
+            name: outcome.name.clone(),
+            kind: outcome.kind,
+        });
+        tracing::info!(
+            winner = %outcome.id,
+            kind = outcome.kind,
+            theme_bias = ?self.run.theme_bias,
+            mode = self.run.mode.id(),
+            "pre-match poll resolved"
+        );
+        self.after_poll();
+    }
+
+    /// Ask the next poll question, or let the lobby start once both have been asked.
+    fn after_poll(&mut self) {
+        if self.run.open_poll(self.joined_player_ids().into_iter().min()) {
+            if let Some(session) = self.run.poll.as_mut() {
+                session.last_sent_second = Some(session.seconds_left());
+            }
+            if let Some(msg) = self.poll_open_msg() {
+                self.broadcast(&msg);
+            }
+            self.broadcast_poll_state();
+            return;
+        }
+        // Both questions are answered: a draft that was waiting on the poll can resolve now.
+        self.maybe_resolve_draft();
+    }
+
+    /// True when every joined player holds a ballot in the open poll.
+    fn all_joined_polled(&self) -> bool {
+        let Some(session) = self.run.poll.as_ref() else {
+            return false;
+        };
+        let players = self.joined_player_ids();
+        !players.is_empty() && players.iter().all(|id| session.has_voted(*id))
+    }
+
+    /// Advance the pre-match poll: open it when the lobby is due for one, tick its countdown,
+    /// and close it on zero. Runs in the lobby only; the pedestal vote owns the playing phase.
+    fn tick_lobby_poll(&mut self) {
+        if self.run.phase != PHASE_ENEMY_DRAFT {
+            return;
+        }
+        // The run exists before anyone joins it, so the poll waits for its first player rather
+        // than burning its countdown on an empty lobby.
+        if self.run.poll.is_none() {
+            if self.player_count() > 0 {
+                self.open_poll_session();
+            }
+            return;
+        }
+        let poll_tick = match self.run.poll.as_mut() {
+            Some(session) => {
+                let closed = session.tick();
+                let secs = session.seconds_left();
+                let changed = session.last_sent_second != Some(secs);
+                session.last_sent_second = Some(secs);
+                Some((closed, changed))
+            }
+            None => None,
+        };
+        match poll_tick {
+            Some((true, _)) => self.finish_poll(),
+            Some((false, true)) => self.broadcast_poll_state(),
+            _ => {}
+        }
+    }
+
     /// Everyone back on the spawn platform of the current level (hub or generated), alive, then tell them.
     fn respawn_all_and_broadcast(&mut self) {
         let ids = self.joined_ids();
@@ -427,6 +560,12 @@ impl Game {
     /// (After a shop reroll, stored enemy-only votes are invalid until the player re-votes.)
     fn maybe_resolve_draft(&mut self) {
         if self.run.phase != PHASE_ENEMY_DRAFT || self.run.offer.is_none() {
+            return;
+        }
+        // T-159: the pre-match poll is a gate, not a suggestion. The level cannot be generated
+        // until the theme and difficulty questions are answered, because both are baked into
+        // the level the draft is about to start. The poll's own countdown bounds the wait.
+        if self.run.poll_blocks_start() {
             return;
         }
         let ids = self.joined_ids();
@@ -531,6 +670,13 @@ impl Game {
                     self.send(id, &open);
                 }
                 if let Some(state) = self.vote_state_msg() {
+                    self.send(id, &state);
+                }
+                // Rejoining during an open pre-match poll: same rule, same reason (T-159).
+                if let Some(open) = self.poll_open_msg() {
+                    self.send(id, &open);
+                }
+                if let Some(state) = self.poll_state_msg() {
                     self.send(id, &state);
                 }
             }
@@ -658,6 +804,37 @@ impl Game {
                         // The session closes early once every joined player holds a ballot.
                         if self.all_joined_voted() {
                             self.finish_vote();
+                        }
+                    }
+                    Err(why) => self.send(
+                        id,
+                        &ServerMsg::Error {
+                            code: 422,
+                            message: why.to_owned(),
+                        },
+                    ),
+                }
+            }
+            ClientMsg::Poll { option } => {
+                let player_id = match conn.player.as_ref() {
+                    Some(p) => p.id,
+                    None => return self.reject(id, 400, "hello required first"),
+                };
+                let Some(session) = self.run.poll.as_mut() else {
+                    return self.send(
+                        id,
+                        &ServerMsg::Error {
+                            code: 409,
+                            message: "no poll is open".to_owned(),
+                        },
+                    );
+                };
+                match session.cast(player_id, option) {
+                    Ok(()) => {
+                        self.broadcast_poll_state();
+                        // The poll closes early once every joined player holds a ballot.
+                        if self.all_joined_polled() {
+                            self.finish_poll();
                         }
                     }
                     Err(why) => self.send(
@@ -831,6 +1008,8 @@ impl Game {
         if self.run.phase == PHASE_PLAYING {
             self.tick_playing();
         } else {
+            // T-159: the pre-match poll lives in the lobby, so its countdown advances here.
+            self.tick_lobby_poll();
             // Lobby / over: the hub is a safe space - falling off just puts you back on the spawn.
             let kill_y = self.run.world.kill_y;
             let ids = self.joined_ids();
@@ -1381,7 +1560,30 @@ mod tests {
         g.conns.get_mut(&id).unwrap().player.as_mut().unwrap()
     }
 
+    /// T-159: the pre-match poll gates the level-1 lobby, so a test that wants a started
+    /// level has to answer it first. Ticks once to let the poll open, then ballots option 0
+    /// for every joined player until the lobby is free.
+    fn answer_polls(g: &mut Game) {
+        for _ in 0..8 {
+            if !g.run.poll_blocks_start() {
+                return;
+            }
+            if g.run.poll.is_none() {
+                g.tick();
+                continue;
+            }
+            for id in g.joined_ids() {
+                g.handle(GameEvent::Message {
+                    id,
+                    msg: ClientMsg::Poll { option: 0 },
+                });
+            }
+        }
+        panic!("the pre-match poll never closed");
+    }
+
     fn vote(g: &mut Game, id: ConnId) {
+        answer_polls(g);
         let picks = valid_picks(&g.run);
         g.handle(GameEvent::Message {
             id,
@@ -2576,7 +2778,30 @@ mod m3_tests {
         g.conns.get_mut(&id).unwrap().player.as_mut().unwrap()
     }
 
+    /// T-159: the pre-match poll gates the level-1 lobby, so a test that wants a started
+    /// level has to answer it first. Ticks once to let the poll open, then ballots option 0
+    /// for every joined player until the lobby is free.
+    fn answer_polls(g: &mut Game) {
+        for _ in 0..8 {
+            if !g.run.poll_blocks_start() {
+                return;
+            }
+            if g.run.poll.is_none() {
+                g.tick();
+                continue;
+            }
+            for id in g.joined_ids() {
+                g.handle(GameEvent::Message {
+                    id,
+                    msg: ClientMsg::Poll { option: 0 },
+                });
+            }
+        }
+        panic!("the pre-match poll never closed");
+    }
+
     fn vote(g: &mut Game, id: ConnId) {
+        answer_polls(g);
         let picks = crate::run::valid_picks(&g.run);
         g.handle(GameEvent::Message {
             id,
@@ -2990,7 +3215,30 @@ mod qa {
         g.conns.get_mut(&id).unwrap().player.as_mut().unwrap()
     }
 
+    /// T-159: the pre-match poll gates the level-1 lobby, so a test that wants a started
+    /// level has to answer it first. Ticks once to let the poll open, then ballots option 0
+    /// for every joined player until the lobby is free.
+    fn answer_polls(g: &mut Game) {
+        for _ in 0..8 {
+            if !g.run.poll_blocks_start() {
+                return;
+            }
+            if g.run.poll.is_none() {
+                g.tick();
+                continue;
+            }
+            for id in g.joined_ids() {
+                g.handle(GameEvent::Message {
+                    id,
+                    msg: ClientMsg::Poll { option: 0 },
+                });
+            }
+        }
+        panic!("the pre-match poll never closed");
+    }
+
     fn vote(g: &mut Game, id: ConnId) {
+        answer_polls(g);
         let picks = crate::run::valid_picks(&g.run);
         g.handle(GameEvent::Message {
             id,

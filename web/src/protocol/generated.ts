@@ -63,6 +63,8 @@ export const PLATFORM_RAMP_PZ = 5;
 export const PLATFORM_RAMP_NZ = 6;
 export const PLATFORM_TRAMPOLINE = 7;
 export const PLATFORM_TRIPMINE = 8;
+export const POLL_THEME = 0;
+export const POLL_DIFFICULTY = 1;
 
 export interface Vec3 {
   x: number;
@@ -694,6 +696,36 @@ export function decodeRunInfo(bytes: Uint8Array): RunInfo {
   return v;
 }
 
+/** One option offered by a pre-match poll (T-159). kind is POLL_THEME (0) or POLL_DIFFICULTY (1). A theme option's id is the catalog tag it biases (theme:ruin); a difficulty option's id is a DifficultyMode id (standard, extreme, chaos, random). */
+export interface PollOption {
+  id: string;
+  name: string;
+  kind: number;
+}
+export function writePollOption(w: Writer, v: PollOption): void {
+  w.string(v.id);
+  w.string(v.name);
+  w.u8(v.kind);
+}
+export function readPollOption(r: Reader): PollOption {
+  return {
+    id: r.string(),
+    name: r.string(),
+    kind: r.u8(),
+  };
+}
+export function encodePollOption(v: PollOption): Uint8Array<ArrayBuffer> {
+  const w = new Writer();
+  writePollOption(w, v);
+  return w.finish();
+}
+export function decodePollOption(bytes: Uint8Array): PollOption {
+  const r = new Reader(bytes);
+  const v = readPollOption(r);
+  r.end();
+  return v;
+}
+
 export type ClientMsg =
   | { type: "Hello"; protocolVersion: number; name: string }
   | { type: "Inputs"; frames: InputFrame[] }
@@ -704,6 +736,7 @@ export type ClientMsg =
   | { type: "ChooseClass"; class: number }
   | { type: "Vote"; option: number }
   | { type: "Debug"; code: string; command: string; args: string }
+  | { type: "Poll"; option: number }
 ;
 export function writeClientMsg(w: Writer, v: ClientMsg): void {
   switch (v.type) {
@@ -745,6 +778,10 @@ export function writeClientMsg(w: Writer, v: ClientMsg): void {
       w.string(v.command);
       w.string(v.args);
       return;
+    case "Poll":
+      w.u32(9);
+      w.u8(v.option);
+      return;
   }
 }
 export function readClientMsg(r: Reader): ClientMsg {
@@ -768,6 +805,8 @@ export function readClientMsg(r: Reader): ClientMsg {
       return { type: "Vote", option: r.u8() };
     case 8:
       return { type: "Debug", code: r.string(), command: r.string(), args: r.string() };
+    case 9:
+      return { type: "Poll", option: r.u8() };
     default:
       throw new Error(`ClientMsg: unknown variant tag ${tag}`);
   }
@@ -799,6 +838,9 @@ export type ServerMsg =
   | { type: "VoteState"; counts: number[]; voted: number[]; secondsLeft: number }
   | { type: "VoteResult"; winner: number; id: string; name: string; kind: number; permanent: boolean }
   | { type: "DebugResult"; ok: boolean; message: string }
+  | { type: "PollOpen"; options: PollOption[]; countdownS: number }
+  | { type: "PollState"; counts: number[]; voted: number[]; secondsLeft: number }
+  | { type: "PollResult"; winner: number; id: string; name: string; kind: number }
 ;
 export function writeServerMsg(w: Writer, v: ServerMsg): void {
   switch (v.type) {
@@ -885,6 +927,24 @@ export function writeServerMsg(w: Writer, v: ServerMsg): void {
       w.bool(v.ok);
       w.string(v.message);
       return;
+    case "PollOpen":
+      w.u32(14);
+      w.vec(v.options, (x) => writePollOption(w, x));
+      w.u16(v.countdownS);
+      return;
+    case "PollState":
+      w.u32(15);
+      w.vec(v.counts, (x) => w.u32(x));
+      w.vec(v.voted, (x) => w.u32(x));
+      w.u16(v.secondsLeft);
+      return;
+    case "PollResult":
+      w.u32(16);
+      w.u8(v.winner);
+      w.string(v.id);
+      w.string(v.name);
+      w.u8(v.kind);
+      return;
   }
 }
 export function readServerMsg(r: Reader): ServerMsg {
@@ -918,6 +978,12 @@ export function readServerMsg(r: Reader): ServerMsg {
       return { type: "VoteResult", winner: r.u8(), id: r.string(), name: r.string(), kind: r.u8(), permanent: r.bool() };
     case 13:
       return { type: "DebugResult", ok: r.bool(), message: r.string() };
+    case 14:
+      return { type: "PollOpen", options: r.vec(() => readPollOption(r)), countdownS: r.u16() };
+    case 15:
+      return { type: "PollState", counts: r.vec(() => r.u32()), voted: r.vec(() => r.u32()), secondsLeft: r.u16() };
+    case 16:
+      return { type: "PollResult", winner: r.u8(), id: r.string(), name: r.string(), kind: r.u8() };
     default:
       throw new Error(`ServerMsg: unknown variant tag ${tag}`);
   }
@@ -954,6 +1020,7 @@ export const CODECS = {
   DraftCard: { encode: encodeDraftCard, decode: decodeDraftCard },
   VoteOption: { encode: encodeVoteOption, decode: decodeVoteOption },
   RunInfo: { encode: encodeRunInfo, decode: decodeRunInfo },
+  PollOption: { encode: encodePollOption, decode: decodePollOption },
   ClientMsg: { encode: encodeClientMsg, decode: decodeClientMsg },
   ServerMsg: { encode: encodeServerMsg, decode: decodeServerMsg },
 } as const;

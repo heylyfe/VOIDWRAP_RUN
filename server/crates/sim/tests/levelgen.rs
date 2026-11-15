@@ -9,8 +9,9 @@ use protocol::{
     Aabb, EVENT_CRUMBLE, EVENT_HIGH_RISE, EVENT_ICE, EVENT_NONE, Gift, LevelData, PLATFORM_NORMAL, Platform, Vec3,
 };
 use sim::levelgen::{
-    Catalog, Facing, OpenSocket, event_for, facing_bridge, generate, generate_for, generate_with_catalog, hub,
-    parse_catalog, parse_catalog_lenient, plan_join, platform_pair_ok, validate,
+    Catalog, Facing, OpenSocket, event_for, facing_bridge, generate, generate_for, generate_for_with_bias,
+    generate_for_with_spacing, generate_with_catalog, hub, parse_catalog, parse_catalog_lenient, plan_join,
+    platform_pair_ok, validate,
 };
 
 fn inline_catalog() -> Catalog {
@@ -567,4 +568,86 @@ fn generate_level_20_within_budget() {
     );
     assert!(check.is_ok(), "{check:?}");
     assert!(elapsed.as_millis() < 150, "level 20 took {elapsed:?}");
+}
+
+// ------------------------------------------------- T-159 theme bias ----
+
+/// The share of placed chunks that carry `tag`, over `seeds` at `level`.
+///
+/// `GeneratedLevel::chunks` is the catalog index of every chunk the level was built from,
+/// so this is the level's real tag mix rather than a proxy for it.
+fn theme_share(seeds: &[u32], level: u32, bias: Option<&str>, tag: &str) -> (usize, usize) {
+    let cat = sim::levelgen::catalog().expect("the shared catalog parses");
+    let (mut themed, mut total) = (0usize, 0usize);
+    for &seed in seeds {
+        let built = generate_for_with_bias(seed, level, 1, 1.0, bias);
+        for &ci in &built.chunks {
+            total += 1;
+            if cat.chunks[ci].tags.iter().any(|t| t == tag) {
+                themed += 1;
+            }
+        }
+    }
+    (themed, total)
+}
+
+/// The hard requirement: an unpolled run generates exactly the levels it generated before
+/// the poll existed. `None` must not perturb a single float, so the whole `LevelData` and
+/// every side output has to match field for field.
+#[test]
+fn no_theme_bias_is_byte_identical_to_the_unbiased_generator() {
+    for level in 1..=8u32 {
+        for seed in [0u32, 1, 7, 1234, 99_991, 4_294_967_295] {
+            let plain = generate_for_with_spacing(seed, level, 2, 1.0);
+            let unbiased = generate_for_with_bias(seed, level, 2, 1.0, None);
+            assert_eq!(
+                plain.data, unbiased.data,
+                "seed {seed} level {level}: level data drifted"
+            );
+            assert_eq!(
+                plain.enemy_spawns, unbiased.enemy_spawns,
+                "seed {seed} level {level}: spawns"
+            );
+            assert_eq!(plain.plan, unbiased.plan, "seed {seed} level {level}: plan");
+            assert_eq!(plain.chunks, unbiased.chunks, "seed {seed} level {level}: chunk list");
+        }
+    }
+}
+
+/// A theme bias has to move the tag mix, not just the RNG: the polled theme must be
+/// measurably over-represented in the chunks the generator actually places.
+#[test]
+fn a_theme_bias_shifts_the_tag_mix() {
+    let seeds: Vec<u32> = (0..40u32).collect();
+    for tag in ["theme:ruin", "theme:void", "theme:frost"] {
+        let (plain_hits, plain_total) = theme_share(&seeds, 6, None, tag);
+        let (biased_hits, biased_total) = theme_share(&seeds, 6, Some(tag), tag);
+        let plain = plain_hits as f32 / plain_total as f32;
+        let biased = biased_hits as f32 / biased_total as f32;
+        println!(
+            "{tag}: unbiased {plain:.3} ({plain_hits}/{plain_total}), biased {biased:.3} ({biased_hits}/{biased_total})"
+        );
+        assert!(
+            biased > plain * 1.5,
+            "{tag}: bias moved the share from {plain:.3} to {biased:.3}, expected at least 1.5x"
+        );
+    }
+}
+
+/// A bias for a tag no chunk carries must be inert: the weights are unchanged, so the
+/// level is the unbiased level.
+#[test]
+fn a_bias_no_chunk_carries_changes_nothing() {
+    for seed in [0u32, 3, 77, 4242] {
+        let plain = generate_for_with_spacing(seed, 5, 1, 1.0);
+        let unknown = generate_for_with_bias(seed, 5, 1, 1.0, Some("theme:does-not-exist"));
+        assert_eq!(
+            plain.data, unknown.data,
+            "seed {seed}: an unmatched bias changed the level"
+        );
+        assert_eq!(
+            plain.chunks, unknown.chunks,
+            "seed {seed}: an unmatched bias changed the chunk list"
+        );
+    }
 }
