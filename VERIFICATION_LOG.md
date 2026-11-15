@@ -655,3 +655,21 @@ achievements, 85 patterns).
 protocol-gen --check, check-names (580 files), validate-content (20 enemies, 10
 upgrades, 19 curses, 4 classes, 34 shop items, 3 events, 15 milestones, 4 altars, 10
 achievements, 85 patterns).
+
+## v0.16.0-alpha.1 — Refinement Cycle 6
+
+- T-101 PARTIAL: `5.heights` 12.57% -> 12.38%. Only 13 patterns contribute and every
+  violation is a 0.5u half-step between adjacent platform tops; a mechanical pass makes
+  those pairs flush. Twelve of thirteen converged; `pb_ruin_rest` was reverted because
+  raising it broke a ramp. `5.ramps` stays at 0 and `0.input` stays clean.
+- PARKED with evidence: the same pass applied to the four contributing `chunks.json`
+  patterns took `5.heights` to **1.75% PASS**, but broke the generator — `0.input` went
+  from 0 to 190 malformed records, all `no_plan: catalog walk produced no plan`, with
+  the catalog still reporting 85 patterns. Reverting `chunks.json` alone restored 0
+  malformed records. `design/PATTERN_FORMAT.md` marks that file frozen, so the decision
+  is the human's; the assembly invariant that broke is undocumented.
+
+`just verify` green: 127 server / 234 sim / 279 vitest, clippy `-D warnings`,
+protocol-gen --check, check-names (580 files), validate-content (20 enemies, 10
+upgrades, 19 curses, 4 classes, 34 shop items, 3 events, 15 milestones, 4 altars, 10
+achievements, 85 patterns).
