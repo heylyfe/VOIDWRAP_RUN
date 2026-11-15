@@ -202,7 +202,10 @@ function auditPatternsPerLevel(levels) {
  * one that actually proves the hazard work landed.
  */
 function auditHazardEntities() {
+  // Only platform-backed hazards belong here. `hazard:fog` is an atmospheric
+  // event with no platform kind, so it is deliberately absent.
   const want = [
+    ['hazard:crumble', 'CRUMBLE'],
     ['hazard:trampoline', 'TRAMPOLINE'],
     ['hazard:tripmine', 'TRIPMINE'],
   ];
@@ -215,7 +218,15 @@ function auditHazardEntities() {
       `${tag}: ${tagged.length} patterns tagged, ${withEntity.length} carry a ${kind} platform ` +
         `(${pct(withEntity.length, tagged.length)}%)`,
     );
-    if (tagged.length > 0 && withEntity.length === 0) allOk = false;
+    // Every tagged pattern must carry the entity, not just one of them. The
+    // weaker "at least one" test passed while two of three trampoline patterns
+    // carried a JUMP_PAD instead, which is exactly the defect this metric
+    // exists to catch.
+    if (tagged.length > 0 && withEntity.length !== tagged.length) {
+      allOk = false;
+      const missing = tagged.filter(([, v]) => !(v.kinds ?? []).includes(kind)).map(([id]) => id);
+      lines.push(`  ${tag} without a ${kind} platform: ${missing.join(', ')}`);
+    }
   }
   lines.push('a tag with no entity is a promise the engine does not keep');
   metric(allOk, '8.hazard_entities', lines);
