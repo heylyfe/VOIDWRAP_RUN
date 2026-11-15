@@ -1099,7 +1099,7 @@ fn level_tier(level: u32) -> u32 {
 }
 
 /// A3 gift target: min(400, 46 + 10*(level-1) + 6*(players-1)).
-fn gift_target(level: u32, players: u32) -> u32 {
+pub fn gift_target(level: u32, players: u32) -> u32 {
     let p = players.max(1);
     (GIFT_COUNT_BASE + GIFT_COUNT_PER_LEVEL * level.saturating_sub(1) + GIFT_COUNT_PER_PLAYER * p.saturating_sub(1))
         .min(GIFT_CAP)

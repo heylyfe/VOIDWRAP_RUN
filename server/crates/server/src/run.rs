@@ -43,6 +43,28 @@ const SHOP_UPGRADE_COST: u32 = 300;
 const SHOP_PURGE_COST: u32 = 360;
 /// How many distinct upgrade cards are drawn into the shop per lobby.
 const SHOP_UPGRADE_DRAWS: usize = 2;
+
+/// Shop prices track expected income per level (T-108).
+///
+/// Income is one currency per gift, and the gift target grows with level until it
+/// caps: `min(400, 46 + 10*(level-1) + 6*(players-1))`. A flat price therefore gets
+/// cheaper in real terms every level, and by the late game the shop is free. This
+/// scales every price by the ratio of the current level's gift target to level 1's,
+/// clamped so the early game is never cheaper than authored and the late game never
+/// runs away past the cap.
+fn price_mul(level: u32) -> f32 {
+    let base = sim::levelgen::gift_target(1, 1) as f32;
+    let now = sim::levelgen::gift_target(level, 1) as f32;
+    if base <= 0.0 {
+        return 1.0;
+    }
+    (now / base).clamp(1.0, 8.0)
+}
+
+/// Apply [`price_mul`] to an authored cost, never dropping below 1.
+fn scaled_cost(cost: u32, level: u32) -> u32 {
+    ((cost as f32) * price_mul(level)).round().max(1.0) as u32
+}
 /// Ticks of siren/banner before the collapse proper begins (design §1.4: 3.0 s).
 const COLLAPSE_PENDING_TICKS: u32 = 3 * TICK_HZ;
 /// The countdown of a vote session, in TICK_HZ ticks (20 s at 20 Hz).
@@ -1257,7 +1279,7 @@ impl Run {
             let def = &content.shop[statics[i]];
             offer.push(ShopOffer {
                 id: def.id.clone(),
-                cost: def.cost,
+                cost: scaled_cost(def.cost, self.level_num),
                 stock: def.stock,
             });
         }
@@ -1266,7 +1288,7 @@ impl Run {
         for i in self.rng.sample(content.upgrades.len(), draws) {
             offer.push(ShopOffer {
                 id: format!("upgrade::{}", content.upgrades[i].id),
-                cost: SHOP_UPGRADE_COST,
+                cost: scaled_cost(SHOP_UPGRADE_COST, self.level_num),
                 stock: 1,
             });
         }
@@ -1274,7 +1296,7 @@ impl Run {
         for def in content.shop.iter().filter(|d| d.kind == "perk") {
             offer.push(ShopOffer {
                 id: def.id.clone(),
-                cost: def.cost,
+                cost: scaled_cost(def.cost, self.level_num),
                 stock: 1,
             });
         }
@@ -1288,7 +1310,7 @@ impl Run {
             if permanents.iter().any(|p| p.as_str() == enemy) {
                 offer.push(ShopOffer {
                     id: def.id.clone(),
-                    cost: def.cost,
+                    cost: scaled_cost(def.cost, self.level_num),
                     stock: 1,
                 });
             }
@@ -1301,7 +1323,7 @@ impl Run {
         for (curse_id, stacks) in held {
             offer.push(ShopOffer {
                 id: format!("purge::{}", curse_id),
-                cost: SHOP_PURGE_COST,
+                cost: scaled_cost(SHOP_PURGE_COST, self.level_num),
                 stock: stacks,
             });
         }
@@ -2145,6 +2167,76 @@ mod tests {
     use super::*;
     use protocol::{EVENT_CRUMBLE, EVENT_HIGH_RISE, EVENT_NONE};
 
+    /// T-108: shop prices track income per level. Income is one currency per gift and
+    /// the gift target grows with level, so a flat price gets cheaper in real terms
+    /// every level. These tests pin the curve rather than the numbers.
+    #[test]
+    fn price_mul_is_one_at_level_one_and_grows() {
+        assert!((price_mul(1) - 1.0).abs() < 1e-6, "level 1 must not be discounted");
+        let mut prev = price_mul(1);
+        for level in [2u32, 3, 6, 10, 15, 20] {
+            let now = price_mul(level);
+            assert!(now >= prev, "price_mul must not fall from level {level}");
+            prev = now;
+        }
+        assert!(price_mul(20) > price_mul(1), "late levels must cost more");
+    }
+
+    #[test]
+    fn price_mul_is_clamped() {
+        // The gift target caps at 400, so the ratio caps too; the clamp keeps a
+        // pathological level from producing an absurd price.
+        for level in [1u32, 50, 500, 100_000] {
+            let m = price_mul(level);
+            assert!((1.0..=8.0).contains(&m), "price_mul({level}) = {m} outside [1, 8]");
+        }
+    }
+
+    #[test]
+    fn scaled_cost_never_reaches_zero() {
+        for level in [1u32, 2, 10, 40] {
+            assert!(scaled_cost(1, level) >= 1, "a 1-currency item must stay buyable");
+            assert!(scaled_cost(0, level) >= 1, "a zero cost must not become free");
+        }
+    }
+
+    /// The point of the ticket: the price/income ratio must be *invariant* across
+    /// brackets, so the shop is equally meaningful at level 3 and level 30. Before
+    /// T-108 a flat price meant the ratio fell every level and the late-game shop was
+    /// effectively free.
+    ///
+    /// The absolute value of that ratio is a balancing knob and is deliberately not
+    /// asserted here: the owner deferred balancing, and pinning it would turn a tuning
+    /// decision into a test failure.
+    #[test]
+    fn price_tracks_income_across_brackets() {
+        let cheapest = 200u32;
+        let base_ratio = scaled_cost(cheapest, 1) as f32 / sim::levelgen::gift_target(1, 1) as f32;
+        for level in [1u32, 3, 6, 10, 15, 20, 30] {
+            let income = sim::levelgen::gift_target(level, 1) as f32;
+            let price = scaled_cost(cheapest, level) as f32;
+            let ratio = price / income;
+            // Rounding to whole currency is the only source of drift.
+            assert!(
+                (ratio - base_ratio).abs() <= 0.05 * base_ratio,
+                "level {level}: price/income {ratio} drifted from the level-1 ratio {base_ratio}                  (price {price}, income {income})"
+            );
+        }
+    }
+
+    /// A flat price would have failed the invariance test above; this pins the
+    /// regression directly so the reason is legible.
+    #[test]
+    fn a_flat_price_would_not_track_income() {
+        let cheapest = 200u32;
+        let flat_ratio = cheapest as f32 / sim::levelgen::gift_target(30, 1) as f32;
+        let scaled_ratio = scaled_cost(cheapest, 30) as f32 / sim::levelgen::gift_target(30, 1) as f32;
+        assert!(
+            scaled_ratio > flat_ratio * 2.0,
+            "scaling must raise the late-game price well above the flat one"
+        );
+    }
+
     fn content() -> Content {
         Content::load().unwrap()
     }
@@ -2907,7 +2999,10 @@ mod tests {
         assert_eq!(run.buy_shop_item(&c, "counter_pallbearer"), Ok(ShopPurchase::Mods));
         assert!(run.mods.dash_speed_mul > before_dash);
         assert!(run.purchased_mods.iter().any(|id| id == "counter_pallbearer"));
-        assert_eq!(run.currency, 1_000 - 440);
+        // T-108: shop prices scale with the level bracket, so derive the charge
+        // rather than hardcoding the flat base cost.
+        let charged = 1_000 - run.currency;
+        assert_eq!(charged, scaled_cost(440, run.level_num));
     }
 
     #[test]
