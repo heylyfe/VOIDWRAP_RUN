@@ -1125,3 +1125,82 @@ audit **9/9**. Voting real smoke **3/3**. Playthrough **8 pass / 3 skip /
 3. **`5.reference-scale` at 3.85 %** and **`5.heights` at 4.09 %** are the two
    content metrics closest to their thresholds. Both are style rules; worth a
    look before they drift into a failure.
+
+## Refinement Cycle 12 — `v0.24.0-alpha.1`
+
+Baseline: `v0.23.0-alpha.1`. Pattern audit 16/16, economy 9/9, voting 3/3,
+playthrough 8 pass / 3 skip / 0 fail.
+
+### What was picked and why
+
+1. **Platform-graph BFS for the playthrough bot (T-124).** The last three dark
+   checks (`level-progression`, `vote`, `shop`) all hang off it.
+2. **`hazard:trampoline` thinness (T-125).** 3 patterns tagged, 1 carrying the
+   entity — the same class of defect T-122 found in tripmine.
+3. **`8.hazard_entities` threshold (T-126).** The metric that let T-125's defect
+   through. Audits first, cosmetics last.
+
+### T-124 — PARKED, `c3103ed`
+
+Built the graph: `maxGapForRise` mirrors `design_max_gap`, `buildPlatformGraph`
+links platforms whose edge-to-edge gap fits the envelope, `platformUnder` /
+`nearestOn` / `nextHop` give a BFS route, `nearestLanding` adds air control.
+
+**No measured win.** Five 60-second runs: 39 gifts before the graph, then
+41 / 35 / 33 with it. The spread between runs is larger than the difference
+between builds. The bots still die to the void in every run, and capping the
+jump probe range, capping the drop it will accept, and adding air control all
+left the death count at 6–8 of 8.
+
+Parked rather than pushed further: the deaths are somewhere the probe does not
+cover, and guessing from the outside is the grinding the run discipline forbids.
+The next attempt needs a measurement first — log the position and velocity of
+each `DEATH_VOID` server-side. The graph code stays; it is correct and it is the
+foundation the next attempt needs.
+
+### T-125 — PASS, `ebcbfde`
+
+Two of the three `hazard:trampoline` patterns carried **`JUMP_PAD`**, not
+`TRAMPOLINE`. A jump pad and a trampoline are different hazards with different
+arcs, so every consumer of the tag — pedestal curse options, Extreme/Chaos
+frequency tables, the radar module — was being told the wrong thing.
+
+Both gained a real `TRAMPOLINE` platform in the gap their jump pad already
+launched across. `hazard:trampoline` 1/3 -> **3/3 (100 %)**.
+
+### T-126 — PASS, `12a026d`
+
+`8.hazard_entities` only failed when **no** tagged pattern carried the entity,
+so 3 tagged / 1 carrying passed. It now requires every tagged pattern to carry
+it and names the offenders. `hazard:crumble` was added to the list — it is 42.6 %
+of hazard-tagged placements and had no entity check at all. `hazard:fog` is
+documented as deliberately absent (atmospheric, no platform kind).
+
+All three platform-backed hazards now at 100 %: crumble 7/7, trampoline 3/3,
+tripmine 4/4.
+
+### Gates
+
+`just verify` green: 246 sim tests, 150 server tests, 317 vitest (36 files),
+clippy `-D warnings`, protocol-gen `--check`, check-names (628 files),
+validate-content (20 enemies, 10 upgrades, 19 curses, 4 classes, 34 shop items,
+3 events, 15 milestones, 4 altars, 10 achievements, 135 patterns).
+
+`just verify-live --port 7979` **PASS 5/5**. Pattern audit **16/16**. Economy
+audit **9/9**. Voting real smoke **3/3**. Playthrough **8 pass / 3 skip /
+0 fail**.
+
+### Release
+
+`v0.24.0-alpha.1`.
+
+### Top 3 candidates for Cycle 13
+
+1. **Instrument `DEATH_VOID` server-side** (position + velocity), then retry the
+   playthrough bot. T-124 is blocked on a measurement, not on code.
+2. **Audit the other `metric(...)` thresholds** for the same shape of bug as
+   T-126 — a threshold looser than the metric's stated intent. Two found this
+   cycle; there are 9 economy metrics and 16 pattern metrics.
+3. **Hazard coverage, not correctness.** All three platform-backed hazards are
+   at 100 % entity fidelity but thin in the catalog: crumble 7/135,
+   tripmine 4/135, trampoline 3/135. A 20-level run may never see a trampoline.
