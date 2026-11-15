@@ -793,6 +793,23 @@
               "u8"
             ]
           ]
+        ],
+        [
+          "Debug",
+          [
+            [
+              "code",
+              "string"
+            ],
+            [
+              "command",
+              "string"
+            ],
+            [
+              "args",
+              "string"
+            ]
+          ]
         ]
       ]
     },
@@ -1056,6 +1073,19 @@
             [
               "permanent",
               "bool"
+            ]
+          ]
+        ],
+        [
+          "DebugResult",
+          [
+            [
+              "ok",
+              "bool"
+            ],
+            [
+              "message",
+              "string"
             ]
           ]
         ]
@@ -1349,6 +1379,27 @@
             "twin_feather",
             "swarm_seed"
           ]
+        }
+      }
+    },
+    {
+      "name": "client_debug",
+      "type": "ClientMsg",
+      "value": {
+        "Debug": {
+          "code": "hunter2",
+          "command": "grant_gold",
+          "args": "{\"amount\":500}"
+        }
+      }
+    },
+    {
+      "name": "server_debug_result",
+      "type": "ServerMsg",
+      "value": {
+        "DebugResult": {
+          "ok": true,
+          "message": "granted 500"
         }
       }
     }

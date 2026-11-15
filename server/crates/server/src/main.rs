@@ -10,6 +10,7 @@
 //! unless `--browser`, `--headless` or `PORT` are used; see `desktop.rs`.
 
 mod content;
+mod debug;
 #[cfg(feature = "desktop")]
 mod desktop;
 mod game;

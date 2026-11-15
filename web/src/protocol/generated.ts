@@ -703,6 +703,7 @@ export type ClientMsg =
   | { type: "Buy"; item: string }
   | { type: "ChooseClass"; class: number }
   | { type: "Vote"; option: number }
+  | { type: "Debug"; code: string; command: string; args: string }
 ;
 export function writeClientMsg(w: Writer, v: ClientMsg): void {
   switch (v.type) {
@@ -738,6 +739,12 @@ export function writeClientMsg(w: Writer, v: ClientMsg): void {
       w.u32(7);
       w.u8(v.option);
       return;
+    case "Debug":
+      w.u32(8);
+      w.string(v.code);
+      w.string(v.command);
+      w.string(v.args);
+      return;
   }
 }
 export function readClientMsg(r: Reader): ClientMsg {
@@ -759,6 +766,8 @@ export function readClientMsg(r: Reader): ClientMsg {
       return { type: "ChooseClass", class: r.u8() };
     case 7:
       return { type: "Vote", option: r.u8() };
+    case 8:
+      return { type: "Debug", code: r.string(), command: r.string(), args: r.string() };
     default:
       throw new Error(`ClientMsg: unknown variant tag ${tag}`);
   }
@@ -789,6 +798,7 @@ export type ServerMsg =
   | { type: "VoteOpen"; level: number; options: VoteOption[]; countdownS: number }
   | { type: "VoteState"; counts: number[]; voted: number[]; secondsLeft: number }
   | { type: "VoteResult"; winner: number; id: string; name: string; kind: number; permanent: boolean }
+  | { type: "DebugResult"; ok: boolean; message: string }
 ;
 export function writeServerMsg(w: Writer, v: ServerMsg): void {
   switch (v.type) {
@@ -870,6 +880,11 @@ export function writeServerMsg(w: Writer, v: ServerMsg): void {
       w.u8(v.kind);
       w.bool(v.permanent);
       return;
+    case "DebugResult":
+      w.u32(13);
+      w.bool(v.ok);
+      w.string(v.message);
+      return;
   }
 }
 export function readServerMsg(r: Reader): ServerMsg {
@@ -901,6 +916,8 @@ export function readServerMsg(r: Reader): ServerMsg {
       return { type: "VoteState", counts: r.vec(() => r.u32()), voted: r.vec(() => r.u32()), secondsLeft: r.u16() };
     case 12:
       return { type: "VoteResult", winner: r.u8(), id: r.string(), name: r.string(), kind: r.u8(), permanent: r.bool() };
+    case 13:
+      return { type: "DebugResult", ok: r.bool(), message: r.string() };
     default:
       throw new Error(`ServerMsg: unknown variant tag ${tag}`);
   }

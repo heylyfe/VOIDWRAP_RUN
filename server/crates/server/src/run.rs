@@ -1686,6 +1686,189 @@ impl Run {
         self.shop = None;
     }
 
+    // ---- Debug command support (T-110) -------------------------------------------------
+    // The only entry points the debug command layer uses. They exist so that layer never
+    // reaches into private run state, and so every debug effect goes through the same code
+    // path the real game uses. Nothing here is reachable without the gate in `debug.rs`.
+
+    /// Jump to `level`, regenerating the world. Keeps permanents, curses, upgrades, currency
+    /// and lives: only the level's own state (gifts, altars, enemies, collapse) is reset.
+    pub fn debug_switch_level(&mut self, content: &Content, level: u32, seed: Option<u32>, players: u32) {
+        self.level_num = level.max(1);
+        if let Some(seed) = seed {
+            self.rng = Rng::new(seed);
+        }
+        self.start_level(content, players.max(1));
+    }
+
+    /// Spawn one enemy by content id at `pos`, active immediately. Returns the new enemy's id.
+    pub fn debug_spawn_enemy(&mut self, content: &Content, id: &str, pos: Vec3) -> Result<u32, String> {
+        let Some((content_index, def)) = content.enemy(id) else {
+            return Err(format!("unknown enemy: {id}"));
+        };
+        let mut params = self.mods.enemy_params(&def.params);
+        params.speed_mul *= escalation_speed_mul(self.level_num);
+        let enemy_id = self.altar_ledger.next_enemy_id.max(1);
+        self.altar_ledger.next_enemy_id = enemy_id.saturating_add(1);
+        let mut enemy = rules::spawn_enemy_with(enemy_id, u8::try_from(content_index).unwrap_or(u8::MAX), pos, params);
+        enemy.active_in = Default::default();
+        self.enemies.push(enemy);
+        Ok(enemy_id)
+    }
+
+    /// Remove every live enemy of content id `id`. Returns how many were removed.
+    pub fn debug_despawn_enemy(&mut self, content: &Content, id: &str) -> Result<usize, String> {
+        let Some((index, _)) = content.enemy(id) else {
+            return Err(format!("unknown enemy: {id}"));
+        };
+        let kind = u8::try_from(index).unwrap_or(u8::MAX);
+        let before = self.enemies.len();
+        self.enemies.retain(|e| e.kind != kind);
+        Ok(before - self.enemies.len())
+    }
+
+    /// Mark `count` uncollected gifts as collected, as if the player had picked them up.
+    /// Golden gifts are only grantable once the normal gifts are gone, matching the real rule.
+    pub fn debug_grant_gift(&mut self, count: u8, golden: bool) -> Result<usize, String> {
+        let want = usize::from(count);
+        if golden {
+            if self.normal_left() > 0 {
+                return Err("golden gifts are locked while normal gifts remain".into());
+            }
+            let ids: Vec<u16> = self
+                .level
+                .gifts
+                .iter()
+                .map(|g| g.id)
+                .filter(|id| self.gifts_taken.contains(id) && !self.golden_taken.contains(id))
+                .take(want)
+                .collect();
+            for id in &ids {
+                self.golden_taken.push(*id);
+                self.credit_income(GOLDEN_VALUE);
+            }
+            return Ok(ids.len());
+        }
+        let ids: Vec<u16> = self
+            .level
+            .gifts
+            .iter()
+            .map(|g| g.id)
+            .filter(|id| !self.gifts_taken.contains(id))
+            .take(want)
+            .collect();
+        for id in &ids {
+            self.gifts_taken.push(*id);
+            self.gifts_collected = self.gifts_collected.saturating_add(1);
+        }
+        Ok(ids.len())
+    }
+
+    /// Remove `count` uncollected gifts from the level without awarding currency.
+    pub fn debug_remove_gift(&mut self, count: u8) -> usize {
+        let ids: Vec<u16> = self
+            .level
+            .gifts
+            .iter()
+            .map(|g| g.id)
+            .filter(|id| !self.gifts_taken.contains(id))
+            .take(usize::from(count))
+            .collect();
+        for id in &ids {
+            self.gifts_taken.push(*id);
+        }
+        ids.len()
+    }
+
+    /// Apply an upgrade exactly as a draft pick would, and record it.
+    pub fn debug_give_upgrade(&mut self, content: &Content, id: &str) -> Result<(), String> {
+        let Some(def) = content.upgrade(id) else {
+            return Err(format!("unknown upgrade: {id}"));
+        };
+        let lives_before = self.mods.extra_lives;
+        self.mods.apply(&def.mods);
+        self.lives = self
+            .lives
+            .saturating_add(self.mods.extra_lives.saturating_sub(lives_before));
+        self.upgrades.push(id.to_owned());
+        Ok(())
+    }
+
+    /// Remove one stack of an upgrade and rebuild the accumulated mods from what is left.
+    pub fn debug_take_upgrade(&mut self, content: &Content, id: &str) -> Result<(), String> {
+        let Some(pos) = self.upgrades.iter().position(|u| u == id) else {
+            return Err(format!("upgrade not held: {id}"));
+        };
+        self.upgrades.remove(pos);
+        self.rebuild_mods(content);
+        Ok(())
+    }
+
+    /// Apply a curse exactly as a draft pick would, and record it.
+    pub fn debug_give_curse(&mut self, content: &Content, id: &str) -> Result<(), String> {
+        let Some(def) = content.curse(id) else {
+            return Err(format!("unknown curse: {id}"));
+        };
+        let lives_before = self.mods.extra_lives;
+        self.mods.apply(&def.mods);
+        self.lives = self
+            .lives
+            .saturating_add(self.mods.extra_lives.saturating_sub(lives_before));
+        self.curses.push(id.to_owned());
+        Ok(())
+    }
+
+    /// Remove one stack of a curse and rebuild the accumulated mods from what is left.
+    pub fn debug_take_curse(&mut self, content: &Content, id: &str) -> Result<(), String> {
+        let Some(pos) = self.curses.iter().position(|c| c == id) else {
+            return Err(format!("curse not held: {id}"));
+        };
+        self.curses.remove(pos);
+        self.rebuild_mods(content);
+        Ok(())
+    }
+
+    /// Fire an altar's benefit and cost as if the player had stood on it and pressed interact.
+    pub fn debug_trigger_altar(&mut self, content: &Content, id: u16) -> Result<String, String> {
+        let Some(pos) = self.level.altars.iter().find(|a| a.id == id).map(|a| a.pos) else {
+            return Err(format!("no altar {id} on this level"));
+        };
+        match self.use_altar(content, pos) {
+            Some(outcome) => Ok(format!(
+                "altar {} -> {} / {}",
+                outcome.altar_id, outcome.benefit, outcome.cost
+            )),
+            None => Err(format!(
+                "altar {id} could not be used (already used, or its benefit is active)"
+            )),
+        }
+    }
+
+    /// One-line readout of everything a tester needs to see at a glance.
+    pub fn debug_state(&self, content: &Content) -> String {
+        let enemies: Vec<&str> = self
+            .enemies
+            .iter()
+            .map(|e| content.enemies.get(usize::from(e.kind)).map_or("?", |d| d.id.as_str()))
+            .collect();
+        format!(
+            "level={} phase={} level_phase={} seed={} currency={} lives={} gifts_left={} golden_left={}              permanents=[{}] curses=[{}] upgrades=[{}] enemies=[{}] altars_used={}",
+            self.level_num,
+            self.phase,
+            self.level_phase,
+            self.seed,
+            self.currency,
+            self.lives,
+            self.normal_left(),
+            self.gifts_taken.len().saturating_sub(self.golden_taken.len()),
+            self.permanents.join(","),
+            self.curses.join(","),
+            self.upgrades.join(","),
+            enemies.join(","),
+            self.altars_used.len(),
+        )
+    }
+
     /// The design of the altar with `id` (`id % ALTAR_KINDS`).
     #[allow(dead_code)]
     pub fn altar_kind(id: u16) -> AltarKind {

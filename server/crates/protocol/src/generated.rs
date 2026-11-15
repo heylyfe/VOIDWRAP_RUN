@@ -245,6 +245,7 @@ pub enum ClientMsg {
     Buy { item: String },
     ChooseClass { class: u8 },
     Vote { option: u8 },
+    Debug { code: String, command: String, args: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -262,6 +263,7 @@ pub enum ServerMsg {
     VoteOpen { level: u32, options: Vec<VoteOption>, countdown_s: u16 },
     VoteState { counts: Vec<u32>, voted: Vec<u32>, seconds_left: u16 },
     VoteResult { winner: u8, id: String, name: String, kind: u8, permanent: bool },
+    DebugResult { ok: bool, message: String },
 }
 
 #[cfg(test)]

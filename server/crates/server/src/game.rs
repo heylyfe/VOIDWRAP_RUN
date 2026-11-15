@@ -17,6 +17,7 @@
 //! otherwise the run is over. Solo is the same rule with one player.
 
 use crate::content::Content;
+use crate::debug::{self, Gate};
 use crate::matchmaker_client::GameStateHandle;
 use crate::run::{Run, ShopError, ShopPurchase};
 use protocol::{
@@ -130,6 +131,9 @@ pub struct Game {
     start_level: u32,
     /// Seeds successive runs (draft offers and level layouts).
     seed: u32,
+    /// The tester build's command gate (T-110). Closed unless the server was started with
+    /// `VOIDWRAP_DEV=1` or `VOIDWRAP_DEV_CODE` is set.
+    debug: Gate,
 }
 
 impl Game {
@@ -137,6 +141,10 @@ impl Game {
         let content = Content::load()?;
         let start_level = start_level.max(1);
         let run = Run::new(&content, seed, start_level);
+        let debug = Gate::from_env();
+        if debug.configured() {
+            tracing::info!("debug commands enabled: this is a tester build");
+        }
         Ok(Game {
             tick: 0,
             conns: BTreeMap::new(),
@@ -146,6 +154,7 @@ impl Game {
             next_player_id: 1,
             start_level,
             seed,
+            debug,
         })
     }
 
@@ -205,6 +214,7 @@ impl Game {
                 // Draft votes are connection-scoped and drop with the connection; vote-session
                 // ballots are keyed by player id and survive (T-078).
                 self.votes.remove(&id);
+                self.debug.forget(id);
                 self.maybe_resolve_draft();
             }
             GameEvent::Message { id, msg } => self.on_message(id, msg),
@@ -645,6 +655,69 @@ impl Game {
                         },
                     ),
                 }
+            }
+            ClientMsg::Debug { code, command, args } => {
+                // Gate 1: availability. Checked before the command is parsed, so a closed
+                // route has no effect at all.
+                if let Err(why) = self.debug.authorize(id, &code) {
+                    tracing::warn!(conn = id, cmd = %command, why, "debug command refused");
+                    return self.send(
+                        id,
+                        &ServerMsg::DebugResult {
+                            ok: false,
+                            message: why.to_owned(),
+                        },
+                    );
+                }
+                // Gate 2: singleplayer only. Also before parsing.
+                if self.player_count() > 1 {
+                    tracing::warn!(conn = id, cmd = %command, "debug command refused: multiplayer");
+                    return self.send(
+                        id,
+                        &ServerMsg::DebugResult {
+                            ok: false,
+                            message: debug::SINGLEPLAYER_ONLY.to_owned(),
+                        },
+                    );
+                }
+                let Some(mut feet) = self.conns.get(&id).and_then(|c| c.player.as_ref()).map(|p| p.state.pos) else {
+                    return self.send(
+                        id,
+                        &ServerMsg::DebugResult {
+                            ok: false,
+                            message: "join the game before using debug commands".to_owned(),
+                        },
+                    );
+                };
+                let players = u32::try_from(self.player_count()).unwrap_or(1).max(1);
+                let outcome = debug::execute(
+                    debug::Ctx {
+                        content: &self.content,
+                        run: &mut self.run,
+                        feet: &mut feet,
+                        players,
+                    },
+                    &command,
+                    &args,
+                );
+                // `teleport` writes the feet; every other command leaves them alone.
+                if let Some(player) = self.conns.get_mut(&id).and_then(|c| c.player.as_mut()) {
+                    player.state.pos = feet;
+                }
+                // Audit log: every executed command, and every refusal, leaves a line.
+                match &outcome {
+                    Ok(message) => {
+                        tracing::info!(conn = id, cmd = %command, args = %args, ok = true, result = %message, "debug command")
+                    }
+                    Err(message) => {
+                        tracing::warn!(conn = id, cmd = %command, args = %args, ok = false, why = %message, "debug command")
+                    }
+                }
+                let (ok, message) = match outcome {
+                    Ok(message) => (true, message),
+                    Err(message) => (false, message),
+                };
+                self.send(id, &ServerMsg::DebugResult { ok, message });
             }
             ClientMsg::Restart => {
                 // A new run starts once the run is over (the whole team is down); otherwise ignore.
@@ -1240,6 +1313,156 @@ mod tests {
             id,
             msg: ClientMsg::ChooseClass { class },
         });
+    }
+
+    /// Send one debug command and return its `DebugResult`.
+    fn debug_cmd(
+        g: &mut Game,
+        rx: &mut mpsc::Receiver<Vec<u8>>,
+        id: ConnId,
+        code: &str,
+        command: &str,
+        args: &str,
+    ) -> (bool, String) {
+        g.handle(GameEvent::Message {
+            id,
+            msg: ClientMsg::Debug {
+                code: code.to_owned(),
+                command: command.to_owned(),
+                args: args.to_owned(),
+            },
+        });
+        for msg in drain(rx) {
+            if let ServerMsg::DebugResult { ok, message } = msg {
+                return (ok, message);
+            }
+        }
+        panic!("no DebugResult for {command}");
+    }
+
+    #[test]
+    fn debug_commands_are_refused_when_the_route_is_closed() {
+        let mut g = game();
+        g.debug = Gate::new(false, None);
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        drain(&mut rx);
+        let (ok, message) = debug_cmd(&mut g, &mut rx, 1, "", "grant_gold", r#"{"amount":500}"#);
+        assert!(!ok);
+        assert_eq!(message, crate::debug::NOT_ENABLED);
+        // The command had no effect at all.
+        assert_eq!(g.run.currency, 0);
+    }
+
+    #[test]
+    fn debug_commands_work_with_the_dev_flag() {
+        let mut g = game();
+        g.debug = Gate::new(true, None);
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        drain(&mut rx);
+        let (ok, message) = debug_cmd(&mut g, &mut rx, 1, "", "grant_gold", r#"{"amount":500}"#);
+        assert!(ok, "{message}");
+        assert_eq!(g.run.currency, 500);
+        // And a readout comes back.
+        let (ok, message) = debug_cmd(&mut g, &mut rx, 1, "", "state", "{}");
+        assert!(ok, "{message}");
+        assert!(message.contains("currency=500"), "{message}");
+    }
+
+    #[test]
+    fn debug_commands_work_with_the_dev_code() {
+        let mut g = game();
+        g.debug = Gate::new(false, Some("s3cret"));
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        drain(&mut rx);
+        let (ok, message) = debug_cmd(&mut g, &mut rx, 1, "wrong", "grant_gold", r#"{"amount":500}"#);
+        assert!(!ok);
+        assert_eq!(message, crate::debug::NOT_ENABLED);
+        assert_eq!(g.run.currency, 0);
+        let (ok, message) = debug_cmd(&mut g, &mut rx, 1, "s3cret", "grant_gold", r#"{"amount":500}"#);
+        assert!(ok, "{message}");
+        assert_eq!(g.run.currency, 500);
+    }
+
+    #[test]
+    fn debug_commands_are_singleplayer_only() {
+        let mut g = game();
+        g.debug = Gate::new(true, None);
+        let mut rx1 = connect(&mut g, 1);
+        let mut rx2 = connect(&mut g, 2);
+        hello(&mut g, 1);
+        hello(&mut g, 2);
+        drain(&mut rx1);
+        drain(&mut rx2);
+        assert_eq!(g.player_count(), 2);
+        let (ok, message) = debug_cmd(&mut g, &mut rx1, 1, "", "grant_gold", r#"{"amount":500}"#);
+        assert!(!ok);
+        assert_eq!(message, crate::debug::SINGLEPLAYER_ONLY);
+        assert_eq!(g.run.currency, 0, "a rejected command has no effect");
+        // The second player leaving reopens the route.
+        g.handle(GameEvent::Disconnected { id: 2 });
+        let (ok, message) = debug_cmd(&mut g, &mut rx1, 1, "", "grant_gold", r#"{"amount":500}"#);
+        assert!(ok, "{message}");
+        assert_eq!(g.run.currency, 500);
+    }
+
+    #[test]
+    fn debug_wrong_codes_are_rate_limited() {
+        let mut g = game();
+        g.debug = Gate::new(false, Some("s3cret"));
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        drain(&mut rx);
+        for _ in 0..crate::debug::MAX_BAD_CODES {
+            let (ok, _) = debug_cmd(&mut g, &mut rx, 1, "nope", "grant_gold", r#"{"amount":1}"#);
+            assert!(!ok);
+        }
+        // Locked out for good, even with the right code.
+        let (ok, message) = debug_cmd(&mut g, &mut rx, 1, "s3cret", "grant_gold", r#"{"amount":1}"#);
+        assert!(!ok);
+        assert_eq!(message, crate::debug::TOO_MANY_BAD_CODES);
+        assert_eq!(g.run.currency, 0);
+    }
+
+    #[test]
+    fn debug_spawn_and_despawn_round_trip() {
+        let mut g = game();
+        g.debug = Gate::new(true, None);
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        drain(&mut rx);
+        // Get into a playing level so there is a world to spawn into.
+        vote(&mut g, 1);
+        drain(&mut rx);
+        let before = g.run.enemies.len();
+        let (ok, message) = debug_cmd(&mut g, &mut rx, 1, "", "spawn_enemy", r#"{"id":"lure","count":2}"#);
+        assert!(ok, "{message}");
+        assert_eq!(g.run.enemies.len(), before + 2);
+        let (ok, message) = debug_cmd(&mut g, &mut rx, 1, "", "despawn_enemy", r#"{"id":"lure"}"#);
+        assert!(ok, "{message}");
+        assert!(message.contains("removed 2"), "{message}");
+        assert_eq!(g.run.enemies.len(), before);
+    }
+
+    #[test]
+    fn debug_switch_level_keeps_the_run_and_changes_the_level() {
+        let mut g = game();
+        g.debug = Gate::new(true, None);
+        let mut rx = connect(&mut g, 1);
+        hello(&mut g, 1);
+        drain(&mut rx);
+        vote(&mut g, 1);
+        drain(&mut rx);
+        g.run.currency = 777;
+        g.run.permanents = vec!["pallbearer".to_owned()];
+        let (ok, message) = debug_cmd(&mut g, &mut rx, 1, "", "switch_level", r#"{"level":12,"seed":9}"#);
+        assert!(ok, "{message}");
+        assert_eq!(g.run.level_num, 12);
+        assert_eq!(g.run.currency, 777, "currency survives a level jump");
+        assert_eq!(g.run.permanents, vec!["pallbearer".to_owned()], "permanents survive");
+        assert!(!g.run.level.gifts.is_empty(), "the new level has gifts");
     }
 
     #[test]
