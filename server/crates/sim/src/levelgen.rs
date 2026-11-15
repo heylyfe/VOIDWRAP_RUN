@@ -2300,6 +2300,7 @@ pub fn validate(level: &LevelData) -> Result<(), String> {
             && p.kind != PLATFORM_CRUMBLE
             && p.kind != PLATFORM_JUMP_PAD
             && p.kind != protocol::PLATFORM_TRAMPOLINE
+            && p.kind != protocol::PLATFORM_TRIPMINE
             && !is_ramp(p.kind)
         {
             return Err(format!("platform {} has unknown kind {}", p.id, p.kind));

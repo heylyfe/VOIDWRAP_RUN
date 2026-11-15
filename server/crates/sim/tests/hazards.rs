@@ -1204,3 +1204,136 @@ fn coil_overtunes_and_peal_only_kills_an_overtuned_player() {
     }
     assert!(!killed_clean, "peal must not kill a player who is not Overtuned");
 }
+
+// --- tripmines (T-087) ---------------------------------------------------------------------
+
+/// A level whose only platform is a 4x4 TRIPMINE deck at top 0.5, centred on the origin.
+fn tripmine_level(seed: u32) -> LevelData {
+    test_level(
+        vec![platform(
+            0,
+            protocol::PLATFORM_TRIPMINE,
+            [-2.0, 0.0, -2.0],
+            [2.0, 0.5, 2.0],
+        )],
+        seed,
+    )
+}
+
+#[test]
+fn tripmine_kills_a_player_standing_on_it() {
+    let level = tripmine_level(7);
+    let world = World::from_level(&level);
+    let mut hz = Hazards::new();
+    // The 2.0 s arm window sits entirely inside the 4.0 s level grace window, so by the
+    // time damage is possible the mine is armed. That is intended: the arm telegraph is
+    // what the player sees on the re-arm cycles, not on the first one.
+    warm(&mut hz, &level, &world);
+
+    // Standing on the deck, inside TRIPMINE_RADIUS of its centre.
+    let players = vec![sense(1, 0.0, 0.5, 0.0)];
+    let mut enemies: Vec<Enemy> = Vec::new();
+
+    let mut fired = Vec::new();
+    for _ in 0..3 {
+        let fx = tick(&mut hz, &mut enemies, &level, &world, &players, &[]);
+        if !kills(&fx).is_empty() {
+            fired = fx;
+            break;
+        }
+    }
+    assert_eq!(kills(&fired), vec![1], "an armed mine kills the player standing on it");
+    assert_eq!(kill_causes(&fired), vec![protocol::DEATH_PROJECTILE]);
+}
+
+#[test]
+fn tripmine_rearm_telegraph_is_safe_to_stand_on() {
+    let level = tripmine_level(19);
+    let world = World::from_level(&level);
+    let mut hz = Hazards::new();
+    warm(&mut hz, &level, &world);
+
+    let players = vec![sense(1, 0.0, 0.5, 0.0)];
+    let mut enemies: Vec<Enemy> = Vec::new();
+
+    // Fire it once.
+    let mut fired = false;
+    for _ in 0..4 {
+        let fx = tick(&mut hz, &mut enemies, &level, &world, &players, &[]);
+        if !kills(&fx).is_empty() {
+            fired = true;
+            break;
+        }
+    }
+    assert!(fired, "the mine must fire once");
+
+    // Burn the disarm window, then the re-arm window: the re-arm telegraph is the
+    // visible warning, so standing on the mine through it must still be safe.
+    for _ in 0..sim::tripmine::TRIPMINE_DISARM_TICKS {
+        tick(&mut hz, &mut enemies, &level, &world, &players, &[]);
+    }
+    for _ in 0..sim::tripmine::TRIPMINE_ARM_TICKS - 1 {
+        let fx = tick(&mut hz, &mut enemies, &level, &world, &players, &[]);
+        assert!(kills(&fx).is_empty(), "a re-arming mine must not fire");
+    }
+}
+
+#[test]
+fn tripmine_disarms_after_firing_so_the_route_reopens() {
+    let level = tripmine_level(9);
+    let world = World::from_level(&level);
+    let mut hz = Hazards::new();
+    warm(&mut hz, &level, &world);
+
+    let players = vec![sense(1, 0.0, 0.5, 0.0)];
+    let mut enemies: Vec<Enemy> = Vec::new();
+
+    // Fire it once.
+    let mut fired = false;
+    for _ in 0..sim::tripmine::TRIPMINE_ARM_TICKS + 4 {
+        let fx = tick(&mut hz, &mut enemies, &level, &world, &players, &[]);
+        if !kills(&fx).is_empty() {
+            fired = true;
+            break;
+        }
+    }
+    assert!(fired, "the mine must fire once");
+
+    // Disarmed for TRIPMINE_DISARM_TICKS: the same player standing still is safe.
+    for _ in 0..sim::tripmine::TRIPMINE_DISARM_TICKS - 1 {
+        let fx = tick(&mut hz, &mut enemies, &level, &world, &players, &[]);
+        assert!(kills(&fx).is_empty(), "a disarmed mine must not fire");
+    }
+}
+
+#[test]
+fn tripmine_ignores_a_player_on_a_different_deck() {
+    let level = tripmine_level(13);
+    let world = World::from_level(&level);
+    let mut hz = Hazards::new();
+    warm(&mut hz, &level, &world);
+
+    // Same XZ, but 3 u above the deck: a player on a platform overhead is not on the mine.
+    let players = vec![sense(1, 0.0, 3.5, 0.0)];
+    let mut enemies: Vec<Enemy> = Vec::new();
+    for _ in 0..sim::tripmine::TRIPMINE_ARM_TICKS + 10 {
+        let fx = tick(&mut hz, &mut enemies, &level, &world, &players, &[]);
+        assert!(kills(&fx).is_empty(), "a mine only fires for feet on its own deck");
+    }
+}
+
+#[test]
+fn tripmine_ignores_a_player_outside_its_radius() {
+    let level = tripmine_level(17);
+    let world = World::from_level(&level);
+    let mut hz = Hazards::new();
+    warm(&mut hz, &level, &world);
+
+    // On the deck but 1.9 u out, past TRIPMINE_RADIUS (1.6 u).
+    let players = vec![sense(1, 1.9, 0.5, 0.0)];
+    let mut enemies: Vec<Enemy> = Vec::new();
+    for _ in 0..sim::tripmine::TRIPMINE_ARM_TICKS + 10 {
+        let fx = tick(&mut hz, &mut enemies, &level, &world, &players, &[]);
+        assert!(kills(&fx).is_empty(), "a mine only fires inside its radius");
+    }
+}

@@ -13,8 +13,8 @@
 
 use protocol::{
     DEATH_ENEMY, DEATH_PROJECTILE, ENEMY_ATTACK, ENEMY_DISGUISED, ENEMY_DORMANT, ENEMY_FLAG_HEAVY, ENEMY_HUNTING,
-    ENEMY_RECOVER, ENEMY_TELEGRAPH, LevelData, PLATFORM_CRUMBLE, ProjectileView, TICK_HZ, TILE_FRETTED, TILE_GONE,
-    TILE_WARN, TileState, Vec3,
+    ENEMY_RECOVER, ENEMY_TELEGRAPH, LevelData, PLATFORM_CRUMBLE, PLATFORM_TRIPMINE, ProjectileView, TICK_HZ,
+    TILE_FRETTED, TILE_GONE, TILE_WARN, TileState, Vec3,
 };
 
 use crate::rules::enemies::kite::{KITE_LOCK_TICKS, KITE_RECOVER_TICKS, KitePhase};
@@ -30,6 +30,7 @@ use crate::rules::{
     dir_normalized, distance, flat_direction, horizontal_distance, move_toward, player_centre, segment_intersects_aabb,
     sphere_hits_player_box,
 };
+use crate::tripmine::{TRIPMINE_RADIUS, Tripmine};
 use crate::world::World;
 
 /// Ticks a projectile survives after being fired before it is removed (4 s at 20 Hz).
@@ -320,6 +321,19 @@ pub struct Hazards {
     collapse: bool,
     /// True when `coil` is a permanent in the run; set by the server.
     coil_permanent: bool,
+    /// Tripmines (T-087), one per `PLATFORM_TRIPMINE` platform in the level.
+    tripmines: Vec<TripmineEntry>,
+    /// True once `tripmines` has been built from the level's platforms.
+    tripmines_built: bool,
+}
+
+/// One placed tripmine: where it sits and what it is doing.
+#[derive(Debug, Clone, PartialEq)]
+struct TripmineEntry {
+    /// Centre of the platform top the mine is planted on.
+    pos: Vec3,
+    /// Arm/fire/disarm state machine.
+    mine: Tripmine,
 }
 
 impl Hazards {
@@ -431,6 +445,7 @@ impl Hazards {
             }
         }
         self.step_projectiles(&ctx, &mut fx);
+        self.step_tripmines(level, players, &mut fx);
         self.mark_crumble(level, players, &expired);
 
         if !damage_ok {
@@ -649,6 +664,62 @@ impl Hazards {
             impact_y,
         });
         true
+    }
+
+    /// Build the level's tripmines once, from its `PLATFORM_TRIPMINE` platforms.
+    ///
+    /// A tripmine is a property of the platform it is planted on, so the platform kind
+    /// is the whole wire representation: no extra `LevelData` field is needed, and the
+    /// client already receives the kind. The mine sits at the centre of the platform
+    /// top, which is where a player walking across it will be.
+    fn build_tripmines(&mut self, level: &LevelData) {
+        self.tripmines.clear();
+        for platform in &level.platforms {
+            if platform.kind != PLATFORM_TRIPMINE {
+                continue;
+            }
+            let b = &platform.bounds;
+            self.tripmines.push(TripmineEntry {
+                pos: Vec3::new((b.min.x + b.max.x) * 0.5, b.max.y, (b.min.z + b.max.z) * 0.5),
+                mine: Tripmine::new(),
+            });
+        }
+        self.tripmines_built = true;
+    }
+
+    /// Advance every tripmine and fire the armed ones a player is standing on.
+    ///
+    /// A mine fires once, then disarms for [`crate::tripmine::TRIPMINE_DISARM_TICKS`]
+    /// so the route reopens behind whoever set it off. Firing is a `DEATH_PROJECTILE`
+    /// kill and respects the ward, like every other non-gale hazard.
+    fn step_tripmines(&mut self, level: &LevelData, players: &[PlayerSense], fx: &mut Vec<HazardEffect>) {
+        if !self.tripmines_built {
+            self.build_tripmines(level);
+        }
+        if self.tripmines.is_empty() {
+            return;
+        }
+        for entry in self.tripmines.iter_mut() {
+            entry.mine.tick();
+            if !entry.mine.is_armed() {
+                continue;
+            }
+            for player in players {
+                let dx = player.feet.x - entry.pos.x;
+                let dz = player.feet.z - entry.pos.z;
+                if dx * dx + dz * dz > TRIPMINE_RADIUS * TRIPMINE_RADIUS {
+                    continue;
+                }
+                // Feet must be on the deck the mine is planted on, not a platform above or below it.
+                if (player.feet.y - entry.pos.y).abs() > STAND_HEIGHT_TOLERANCE {
+                    continue;
+                }
+                if entry.mine.trigger() {
+                    push_kill(fx, player, DEATH_PROJECTILE);
+                    break;
+                }
+            }
+        }
     }
 
     fn step_projectiles(&mut self, ctx: &Ctx, fx: &mut Vec<HazardEffect>) {

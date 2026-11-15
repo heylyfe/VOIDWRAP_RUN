@@ -748,3 +748,36 @@ Baseline `v0.18.0-alpha.1` (`65c2674`). Two changes, both verified mechanically.
 `just verify` green: 241 sim, 279 vitest, clippy `-D warnings`, protocol-gen --check,
 check-names, validate-content (20 enemies, 10 upgrades, 19 curses, 4 classes, 34 shop
 items, 3 events, 15 milestones, 4 altars, 10 achievements, 132 patterns).
+
+---
+
+## Refinement Cycle 10 — `v0.20.0-alpha.1`
+
+Baseline `v0.19.0-alpha.1` (`c7b74fc`). Economy audit **8/8 for the first time**.
+
+- `design/chunks.json` `ch24_cinder_switchyard`: added `hazard:trampoline`. It holds
+  the catalog's only TRAMPOLINE platform but had no tag; the two tagged patterns have
+  only JUMP_PADs. Additive, no geometry touched.
+- `sim/src/hazards.rs`: tripmines wired. `TripmineEntry` + `build_tripmines` /
+  `step_tripmines`, one mine per `PLATFORM_TRIPMINE` platform at the centre of its
+  top, firing a `DEATH_PROJECTILE` kill through `push_kill` (ward applies). No
+  `LevelData` change: the platform kind is already on the wire.
+- `sim/src/levelgen.rs`: `PLATFORM_TRIPMINE` added to `validate`'s kind allowlist.
+- `design/patterns-a.json` `pa_ember_fork`: 12x12 deck split into NORMAL `z -6..2`
+  and TRIPMINE `z 2..6`, both top 0.5. Footprint, sockets, gift slots unchanged;
+  touching at equal height so reachability is identical.
+- `web/src/scene/Platforms.tsx`: **pre-existing bug fixed** — `buildGroups` drew only
+  NORMAL/CRUMBLE/JUMP_PAD/ramps, so TRAMPOLINE and TRIPMINE platforms were solid but
+  invisible. Both now drawn; bounce decks use the pad shader.
+- `sim/tests/hazards.rs`: 5 new tripmine tests (kill, disarm reopens, re-arm
+  telegraph safe, other deck ignored, outside radius ignored).
+
+`8.hazard_entities` FAIL -> **PASS** (trampoline 33.3%, tripmine 100%).
+`0.input` PASS, `4.near-duplicates` 0.00%, `5.ramps` 0, `5.stairs` 0,
+`5.heights` 6.02% (unchanged, frozen-chunk-blocked).
+
+`just verify` green: 239 sim, 279 vitest, clippy `-D warnings`, protocol-gen --check,
+check-names (588 files), validate-content (20 enemies, 10 upgrades, 19 curses,
+4 classes, 34 shop items, 3 events, 15 milestones, 4 altars, 10 achievements,
+132 patterns). Matchmaker 8/8, voting selftest green + real 3/3, playthrough
+7/11 + 3 skip + 1 fail (`level-progression`, parked).

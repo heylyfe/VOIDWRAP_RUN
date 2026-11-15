@@ -5194,7 +5194,8 @@
         "jump_pad",
         "switchyard",
         "theme:ember",
-        "mech:bounce"
+        "mech:bounce",
+        "hazard:trampoline"
       ],
       "platforms": [
         {

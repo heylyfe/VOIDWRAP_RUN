@@ -18,6 +18,8 @@ import {
   PLATFORM_CRUMBLE,
   PLATFORM_JUMP_PAD,
   PLATFORM_NORMAL,
+  PLATFORM_TRAMPOLINE,
+  PLATFORM_TRIPMINE,
   TILE_FRETTED,
   TILE_GONE,
   TILE_WARN,
@@ -210,11 +212,21 @@ function buildGroups(platforms: readonly Platform[], theme: Theme, icy: boolean)
   const records: InstanceRecord[] = [];
   const palette = resolveSurfacePalette(theme, icy);
 
-  for (const kind of [PLATFORM_NORMAL, PLATFORM_CRUMBLE, PLATFORM_JUMP_PAD]) {
+  // Every kind that has collision must also be drawn: a TRAMPOLINE or TRIPMINE deck
+  // that is missing here is solid but invisible, which reads as a hole in the floor.
+  for (const kind of [
+    PLATFORM_NORMAL,
+    PLATFORM_CRUMBLE,
+    PLATFORM_JUMP_PAD,
+    PLATFORM_TRAMPOLINE,
+    PLATFORM_TRIPMINE,
+  ]) {
     const list = platforms.filter((p) => p.kind === kind);
     const geometry = new BoxGeometry(1, 1, 1);
+    // Bounce decks share the pad shader so they read as launchable; a tripmine deck
+    // is an ordinary surface with a hazard on it, so it keeps the surface shader.
     const material =
-      kind === PLATFORM_JUMP_PAD
+      kind === PLATFORM_JUMP_PAD || kind === PLATFORM_TRAMPOLINE
         ? createPadMaterial(timeUniform)
         : createSurfaceMaterial(kind, palette, icy, timeUniform);
     const count = Math.max(list.length, 1);

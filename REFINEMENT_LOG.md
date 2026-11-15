@@ -929,3 +929,100 @@ Release: `v0.19.0-alpha.1`.
    rendering. Large but unambiguous.
 3. **`5.heights`** — needs the human's call on `chunks.json`. Nothing further can
    be done without it.
+
+---
+
+## Refinement Cycle 10 — `v0.20.0-alpha.1`
+
+Baseline: `v0.19.0-alpha.1` (`c7b74fc`). Pattern audit 12/13, economy 7/8,
+matchmaker 8/8, voting 10/10 + 6/6 + 3/3, playthrough 7/11 + 3 skip + 1 fail.
+
+### What was picked and why
+
+Cycle 9's log named playthrough pathfinding as the top candidate. Scoping it
+showed it needs a faithful JS port of `edge_rise`, `contact_rise`, `surface_at`,
+`nearest_surface` and `design_max_gap` from `levelgen.rs` — a multi-hour job with
+no partial credit, parked twice already. Cycle 10 therefore took the second
+candidate, `8.hazard_entities`, which Cycle 9 had reduced to a precise root cause.
+
+The investigation turned up something the earlier parks had missed: the metric was
+failing for **two different reasons**, and one of them was a rendering bug.
+
+### Changes
+
+- **`design/chunks.json` — `ch24_cinder_switchyard`.** It carries the catalog's
+  only `TRAMPOLINE` platform but had no `hazard:trampoline` tag, while the two
+  patterns that *did* carry the tag (`pa_garden_bounce`, `pa_machine_bounce`) have
+  only `JUMP_PAD`s. Added the tag where the entity actually is. Additive, which the
+  frozen-contract rule allows; no geometry touched.
+- **`server/crates/sim/src/hazards.rs` — tripmines are now real.** `Tripmine` was a
+  fully tested module that nothing instantiated. Added `TripmineEntry` and
+  `build_tripmines`/`step_tripmines`: one mine per `PLATFORM_TRIPMINE` platform, at
+  the centre of its top, armed/fired/disarmed on the existing state machine. Firing
+  is a `DEATH_PROJECTILE` kill through `push_kill`, so the ward still applies.
+  No `LevelData` change was needed — the platform kind is already on the wire, so
+  the mine is a property of the deck rather than a new entity list.
+- **`server/crates/sim/src/levelgen.rs`.** `validate` rejected `PLATFORM_TRIPMINE`
+  as an unknown kind; added it to the allowlist.
+- **`design/patterns-a.json` — `pa_ember_fork`.** Split the 12x12 junction deck into
+  a `NORMAL` deck (`z -6..2`) and a `TRIPMINE` strip (`z 2..6`), both at top 0.5.
+  Footprint, sockets and gift slots are unchanged; the two halves touch at the same
+  height, so reachability is identical. The north approach to the junction is now
+  mined, which is the point.
+- **`web/src/scene/Platforms.tsx` — a real pre-existing bug.** `buildGroups` only
+  drew `NORMAL`, `CRUMBLE`, `JUMP_PAD` and ramps. `TRAMPOLINE` and `TRIPMINE`
+  platforms have collision but were **never rendered** — solid, invisible geometry
+  that reads as a hole in the floor. `ch24_cinder_switchyard`'s trampoline has been
+  invisible since it shipped. Both kinds are now drawn; bounce decks share the pad
+  shader so they read as launchable, tripmine decks keep the surface shader.
+- **`server/crates/sim/tests/hazards.rs` — 5 new tests.** Kill on an armed mine,
+  disarm window reopens the route, re-arm telegraph is safe to stand on, a player on
+  a different deck is ignored, a player outside the radius is ignored.
+
+### Results
+
+| Metric | Before | After |
+| --- | --- | --- |
+| `8.hazard_entities` | FAIL (0/2 honest) | **PASS** (trampoline 33.3%, tripmine 100%) |
+| Economy audit | 7/8 | **8/8** |
+| `0.input` | PASS | PASS |
+| `4.near-duplicates` | 0.00% | 0.00% |
+| `5.ramps` / `5.stairs` | 0 / 0 | 0 / 0 |
+| `5.heights` | 6.02% | 6.02% |
+| sim tests | 234 | 239 |
+
+### A finding worth recording
+
+The 2.0 s tripmine arm window sits entirely inside the 4.0 s level grace window, so
+a mine is always armed by the time damage is possible. The arm telegraph is
+therefore only ever seen on **re-arm** cycles (after a 6 s disarm), not on the first
+one. That is acceptable — the re-arm telegraph is the one that matters, because it
+is the one a player meets while crossing a route they already triggered — but it is
+a design consequence, not an accident, and it is now asserted by a test.
+
+### PARKED, with the reason measured
+
+- **Playthrough `level-progression`** — needs the JS port of the reachability
+  geometry. Unchanged.
+- **`5.heights` at 6.02%** — 10 of 11 pattern-local violations are in the four
+  frozen `chunks.json` patterns. Human decision.
+- **`pb_machine_gauntlet`'s three unreachable pillars** — unchanged from Cycle 7.
+
+### Merges and release
+
+`just verify` fully green: 239 sim, 279 vitest, clippy `-D warnings`,
+protocol-gen --check, check-names (588 files), validate-content (20 enemies,
+10 upgrades, 19 curses, 4 classes, 34 shop items, 3 events, 15 milestones,
+4 altars, 10 achievements, 132 patterns).
+Matchmaker conformance 8/8, voting selftest green + real 3/3, playthrough
+7/11 + 3 skip + 1 fail.
+
+Release: `v0.20.0-alpha.1`.
+
+### Top 3 candidates for Cycle 11
+
+1. **Playthrough pathfinding** — now the only red line that is pure work. The
+   economy audit is fully green for the first time, so this is the last real gap.
+2. **`5.heights`** — needs the human's call on `chunks.json`.
+3. **Balance first pass (T-B)** — with the economy audit green, the audit numbers
+   are now a stable baseline to tune against.
