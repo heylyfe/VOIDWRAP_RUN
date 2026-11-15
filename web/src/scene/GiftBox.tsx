@@ -26,6 +26,7 @@ import {
 import type { LevelData, Platform, TileState, Vec3 } from "@/protocol/generated";
 import { useGameStore } from "@/game/store";
 import { COMMON } from "./theme";
+import { isStragglerWindow } from "./straggler";
 
 /** Side length of a gift (design: 0.34 u). Golden gifts are identical in size. */
 const GIFT_SIZE = 0.34;
@@ -50,6 +51,16 @@ const GOLD_EMISSIVE_INTENSITY = 1.5;
  */
 const NORMAL_EMISSIVE_INTENSITY = 1.35;
 const SPARKLE_COLOR = "#fff3b0";
+/**
+ * T-112: when at most this fraction of a level's normal gifts is left, every
+ * remaining gift gets a vertical beam so the endgame is not "wander an empty level
+ * looking for one gift". A beam, not a colour change: colour already carries
+ * normal-vs-golden, and LURE's shimmer wears the normal glow (JUDGMENT CALL 2), so
+ * a third colour would collide with both.
+ */
+const BEAM_WIDTH = 0.07;
+const BEAM_HEIGHT = 7;
+const BEAM_COLOR = "#dfe6ff";
 
 interface GiftAssets {
   box: BoxGeometry;
@@ -218,6 +229,13 @@ export function Gifts({
     return out;
   }, [phase2, normalGifts, taken]);
 
+  // T-112: the straggler window. `visibleNormal` already excludes collected gifts,
+  // so this is the live remaining count.
+  const straggler = useMemo(
+    () => isStragglerWindow(normalGifts.length, visibleNormal.length),
+    [normalGifts.length, visibleNormal.length],
+  );
+
   const visibleGolden = useMemo(() => {
     const out: number[] = [];
     if (!phase2) return out;
@@ -236,8 +254,21 @@ export function Gifts({
   const normalRef = useRef<InstancedMesh>(null);
   const goldenRef = useRef<InstancedMesh>(null);
   const sparkleRef = useRef<InstancedMesh>(null);
+  const beamRef = useRef<InstancedMesh>(null);
+  const beamAssets = useMemo(() => {
+    const geometry = new BoxGeometry(BEAM_WIDTH, BEAM_HEIGHT, BEAM_WIDTH);
+    const material = new MeshBasicMaterial({
+      color: BEAM_COLOR,
+      transparent: true,
+      opacity: 0.55,
+      blending: AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    return { geometry, material };
+  }, []);
   useEffect(() => {
-    for (const m of [normalRef.current, goldenRef.current, sparkleRef.current]) {
+    for (const m of [normalRef.current, goldenRef.current, sparkleRef.current, beamRef.current]) {
       if (m) {
         m.instanceMatrix.setUsage(DynamicDrawUsage);
         m.count = 0;
@@ -276,6 +307,30 @@ export function Gifts({
       }
       normalMesh.count = n;
       normalMesh.instanceMatrix.needsUpdate = true;
+    }
+
+    // T-112 straggler beams: one vertical beam per remaining gift once the level is
+    // down to its last 20%. The beam is centred on the gift and rises from its base,
+    // so it reads through fog without changing the gift's own colour.
+    const beamMesh = beamRef.current;
+    if (beamMesh) {
+      let b = 0;
+      if (straggler) {
+        for (const gi of visibleNormal) {
+          const g = normalGifts[gi];
+          if (!g) continue;
+          const phase = (gi * 1.61803398875) % (Math.PI * 2);
+          const pulse = 0.85 + 0.15 * Math.sin(t * 2.4 + phase);
+          s.pos.set(g.pos.x, g.pos.y + BEAM_HEIGHT * 0.5 - 0.3, g.pos.z);
+          s.quat.identity();
+          s.scale.set(pulse, 1, pulse);
+          s.mat.compose(s.pos, s.quat, s.scale);
+          beamMesh.setMatrixAt(b, s.mat);
+          b += 1;
+        }
+      }
+      beamMesh.count = b;
+      beamMesh.instanceMatrix.needsUpdate = true;
     }
 
     const goldenMesh = goldenRef.current;
@@ -332,6 +387,12 @@ export function Gifts({
       <instancedMesh
         ref={sparkleRef}
         args={[assets.sparkle, assets.sparkleMaterial, capacity]}
+        frustumCulled={false}
+        dispose={null}
+      />
+      <instancedMesh
+        ref={beamRef}
+        args={[beamAssets.geometry, beamAssets.material, capacity]}
         frustumCulled={false}
         dispose={null}
       />
