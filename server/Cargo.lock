@@ -1490,7 +1490,7 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "matchmaker"
-version = "0.13.0-alpha.1"
+version = "0.14.0-alpha.1"
 dependencies = [
  "axum",
  "rand 0.9.5",
@@ -2033,7 +2033,7 @@ dependencies = [
 
 [[package]]
 name = "protocol"
-version = "0.13.0-alpha.1"
+version = "0.14.0-alpha.1"
 dependencies = [
  "bincode",
  "serde",
@@ -2452,7 +2452,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.13.0-alpha.1"
+version = "0.14.0-alpha.1"
 dependencies = [
  "axum",
  "futures-util",
@@ -2529,7 +2529,7 @@ dependencies = [
 
 [[package]]
 name = "sim"
-version = "0.13.0-alpha.1"
+version = "0.14.0-alpha.1"
 dependencies = [
  "protocol",
  "serde",
@@ -2538,7 +2538,7 @@ dependencies = [
 
 [[package]]
 name = "sim-wasm"
-version = "0.13.0-alpha.1"
+version = "0.14.0-alpha.1"
 dependencies = [
  "protocol",
  "sim",

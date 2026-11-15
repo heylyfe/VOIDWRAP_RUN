@@ -615,3 +615,23 @@ protocol-gen --check, check-names, validate-content.
 protocol-gen --check, check-names (577 files), validate-content (20 enemies, 10
 upgrades, 19 curses, 4 classes, 34 shop items, 3 events, 15 milestones, 4 altars, 10
 achievements, 85 patterns).
+
+## v0.14.0-alpha.1 — Refinement Cycle 4
+
+- T-099 ACCEPTED: new `tools/playthrough/run.mjs`, the first audit that drives a live
+  session rather than a static dump. 8 clients, real `Inputs` frames, auto-answers the
+  draft, the pedestal vote and the shop. Clean-server baseline 7/11 passed, 3 skipped,
+  1 failed; the failure is the missing navigation bot, not a product bug. Env-gated in
+  `just verify` (`PLAYTHROUGH_URL`), so the gate stays green.
+- FINDING (not changed): the class-selection window closes when the first draft
+  completes. `ChooseClass` is accepted only while `run.phase == PHASE_ENEMY_DRAFT &&
+  run.level_num == 1` (`server/crates/server/src/game.rs:577`), and with 8 auto-picking
+  clients that window is under a second. A 250 ms delay between `Hello` and
+  `ChooseClass` had 8 of 8 classes rejected; back to back succeeds. When a run should
+  start is a design decision, so it is logged for the human rather than changed
+  autonomously.
+
+`just verify` green: 127 server / 234 sim / 279 vitest, clippy `-D warnings`,
+protocol-gen --check, check-names (578 files), validate-content (20 enemies, 10
+upgrades, 19 curses, 4 classes, 34 shop items, 3 events, 15 milestones, 4 altars, 10
+achievements, 85 patterns).

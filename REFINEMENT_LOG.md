@@ -355,3 +355,94 @@ Release: `v0.13.0-alpha.1`.
    placement pass that respects the graph-edge invariant.
 3. **Automated playthrough sweep (T-A)** — the audits are all static. Nothing has
    exercised a real 8-player session end to end since Wave 5.
+
+---
+
+## Cycle 4
+
+### Audit baseline (re-run at cycle start)
+
+| audit | result |
+|---|---|
+| pattern audit (3,000 records / 200 seeds) | 10 of 13 PASS |
+| economy audit | 7 of 8 PASS (`8.hazard_entities`) |
+| voting conformance stub matrix | 10/10 PASS |
+| voting conformance violation selftest | 6/6 PASS |
+| voting conformance `--real` | 3/3 PASS |
+| matchmaker conformance | 8/8 PASS |
+
+### What was picked and why
+
+1. **Automated playthrough sweep (T-A)** — backlog priority 1, and the only audit
+   that exercises a live session. Every other audit is static: the pattern and
+   economy audits read a level dump, the conformance kits read the wire. Nothing had
+   driven a real 8-player run since Wave 5.
+2. **Pattern library expansion (T-E)** — the only remaining lever for the three
+   failing pattern metrics. Deferred to Cycle 5: it is a 50-pattern authoring job and
+   the sweep was the higher-value first step.
+
+### T-099 — automated playthrough sweep: PASS (tool delivered)
+
+New `tools/playthrough/run.mjs`, env-gated in `just verify` like the other kits.
+Connects N clients, sends `Hello` + `ChooseClass` back to back, auto-answers `Draft`,
+`VoteOpen` and `Shop`, random-walks with real `Inputs` frames, and reports PASS / FAIL
+/ SKIP per check.
+
+`wire.mjs` deliberately refuses `ClientMsg::Inputs` (the conformance kit never sends
+it), so the sweep carries its own encoder: `u32` variant, `u64` frame count, then per
+frame `u32 seq, i8 move_x, i8 move_z, u8 buttons`.
+
+Clean-server baseline, 8 clients, 90 s: **7/11 passed, 3 skipped, 1 failed**.
+
+| check | result |
+|---|---|
+| connect | PASS 8/8 |
+| welcome | PASS 8 frames |
+| runstate | PASS 56 frames |
+| level-progression | FAIL highest level 1 |
+| draft | SKIP (level never completed) |
+| vote | SKIP |
+| shop | SKIP |
+| phase-coverage | PASS 2 phases [0,1] |
+| decode | PASS 0 undecodable frames |
+| class-select | PASS 0/8 rejected |
+| error-frames | PASS 0 unexpected |
+
+The one FAIL is a harness limitation, not a product bug: the sweep has no navigation
+bot, so a level only completes if the random walk happens to collect every gift.
+Checks that need a completed level report SKIP rather than FAIL so the sweep's signal
+stays about the protocol and the lobby flow.
+
+### Findings from the sweep
+
+- **The class-selection window is under a second.** `ChooseClass` is accepted only
+  while `run.phase == PHASE_ENEMY_DRAFT && run.level_num == 1`
+  (`server/crates/server/src/game.rs:577`). The draft phase ends as soon as the
+  connected players have picked, which with 8 auto-picking clients is well under a
+  second. A sweep that waited 250 ms between `Hello` and `ChooseClass` had **8 of 8
+  classes rejected**; sending them back to back succeeds. A human player who reads
+  the class list before picking will miss the window. **Not changed** — when the run
+  should start is a design decision, logged as a Cycle 5 candidate.
+- **`RunOver` fires on a solo client that never picks a class.** Observed on a dirty
+  server during diagnosis; not reproduced on a clean one. Logged, not chased.
+- The server is stateful across sweeps: a second sweep against the same process
+  starts mid-run. The sweep is therefore documented as needing a fresh server.
+
+### Merges and release
+
+`just verify` fully green: 127 server / 234 sim / 279 vitest, clippy `-D warnings`,
+protocol-gen --check, check-names (578 files), validate-content (20 enemies, 10
+upgrades, 19 curses, 4 classes, 34 shop items, 3 events, 15 milestones, 4 altars, 10
+achievements, 85 patterns).
+
+Release: `v0.14.0-alpha.1`.
+
+### Top 3 candidates for Cycle 5
+
+1. **Pattern library expansion (T-E)** — 50+ new patterns against the frozen format,
+   two batches on odd/even slots. The only lever left for `4.near-duplicates`
+   (17.63%), `5.heights` (12.69%) and `5.reference-scale` (25.05%).
+2. **Class-selection window** — the finding above. Needs a decision on when a run
+   starts, so it is a candidate for the human rather than an autonomous change.
+3. **Navigation bot for the playthrough sweep** — turns the 3 SKIPs and the
+   `level-progression` FAIL into real coverage of the draft, the vote and the shop.
