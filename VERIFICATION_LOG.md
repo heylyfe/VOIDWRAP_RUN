@@ -1553,3 +1553,46 @@ itself reports as a software-rendering artifact.
 ### Release
 
 `v0.33.0-alpha.1`.
+
+## Cycle 22 — 2026-11-15
+
+### Gate
+
+`just verify` **exit 0** — 246 sim, 151 server, **333 vitest (38 files)**, clippy
+`-D warnings`, protocol-gen `--check`, check-names (671 files), validate-content,
+pattern-audit `--selftest` PASS with 7 expected failures.
+
+`node tools/verify-live.mjs --port 7979` **PASS 9/9** — build wasm, build server, level
+dump, pattern audit, economy audit, playthrough, voting conformance (real), debug
+conformance, **vote integration** (new this cycle).
+
+### Black-box kits
+
+Pattern audit **17 lines / 0 failed / 2 skipped**. Economy 8/8. Voting real 3/3. Debug
+13/13. Playthrough **9 pass / 3 skip / 0 fail**. Vote integration **6/6**.
+
+### Negative tests
+
+- T-150: balloting each slot in turn produces that slot as the winner — `--option 0/1/2` →
+  `pallbearer` / `rewind` / `lantern_leech`. Three different winners from three different
+  ballots proves the ballot decides rather than `VoteSession::resolve`'s RNG fallback.
+- T-151: planting `web/src/scene/orphanProbe.ts` fails the guard with
+  `expected [ 'scene/orphanProbe.ts' ] to deeply equal []`. Removed, 2/2 pass.
+
+### Test count
+
+342 → **333** (39 → 38 files). Eleven tests deleted with two dead modules, two added for
+the module-wiring guard. The count went down and the coverage went up.
+
+### Parked
+
+- Playthrough `level-progression` / `vote` / `shop`: the bot cannot finish a level. The vote
+  is now covered directly by `vote-integration`, so the skip no longer means "untested".
+- `LobbyPoll.tsx`: the last allowlisted orphan; a design decision.
+- Silhouette distinctness: needs a dev-only enemy gallery route plus a rendered capture.
+- The dump's enemy types: needs `vote_pool_with` moved from `server` to `sim`.
+- `EnemyModelProps` carrying the look instead of 20 hardcoded literals: a redesign.
+
+### Release
+
+`v0.34.0-alpha.1`.

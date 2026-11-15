@@ -1972,3 +1972,78 @@ pattern-audit `--selftest` PASS.
 3. **The dump's enemy types.** Move `vote_pool_with` (or a thin equivalent) into `sim` so
    `pattern_dump` can emit the real pedestal pool per `(mode, level)`. That turns two SKIPs
    into measurements and would have caught T-148's units bug years earlier.
+
+## Cycle 22 — proof (T-150, T-151)
+
+### What was picked and why
+
+Cycle 21's log listed three candidates: watch the vote's balance effect, silhouette
+distinctness, and the dump's enemy types. None of them was the right next move, because
+Cycle 21 had just restored a mechanic and **nothing proved it worked**. That became the
+cycle.
+
+1. **T-150 — no test ever opened a real vote session.** `voting-conformance`'s default mode
+   tests a stub; its `--real` mode checks three shallow things; the playthrough's `vote`
+   check is SKIP. The mechanic could have been broken in the wiring between
+   `open_vote_session` and the wire with every gate green.
+2. **T-151 — 615 lines of dead code kept alive by their own tests.** Found by sweeping the
+   client for T-149's defect. `scene/checker.ts` and `shop/shopPanel.ts` were both
+   superseded and both still had passing tests, because a test that imports a module is
+   still an import.
+
+### PASS / FAIL / PARKED
+
+| ticket | verdict | commit |
+|---|---|---|
+| T-150 | **PASS** | `e4460ea` |
+| T-151 | **PASS** | `e4460ea` |
+
+### What the measurement found beyond the tickets
+
+- **The vote's RNG fallback is now provably unreachable in normal play.** Balloting each
+  slot in turn produces that slot as the winner (0/1/2 → `pallbearer`/`rewind`/
+  `lantern_leech`). Before T-149 every session resolved through the RNG because no client
+  could ballot.
+- **A test is not coverage.** Eleven green tests were asserting behaviour of 615 lines that
+  could not run. The suite's count went *down* by 9 this cycle and its coverage went up.
+- **`wire.mjs` decodes snake_case, the client decodes camelCase.** The first run of the new
+  kit failed on `countdownS` vs `countdown_s` — the failure was correct and caught my own
+  assumption, not a server bug. Worth remembering for the next kit.
+
+### Things measured and deliberately not changed
+
+- **`LobbyPoll.tsx`.** The last allowlisted orphan. It is the lobby variant of the vote and
+  the lobby already has `DraftScreen`; mounting both would put two vote surfaces on screen.
+  A design decision, not a wiring fix.
+- **The playthrough bot.** `level-progression` / `vote` / `shop` remain SKIP. T-150 covers
+  the vote directly, so the skip no longer means "untested" — but the bot still cannot
+  finish a level, and that is still parked behind the starting-lives balance decision.
+- **Silhouette distinctness.** Still parked with its prerequisite named (a dev-only enemy
+  gallery route plus a rendered capture).
+
+### Gates
+
+`just verify` **exit 0** — 246 sim, 151 server, **333 vitest (38 files)**, clippy
+`-D warnings`, protocol-gen `--check`, check-names (671 files), validate-content,
+pattern-audit `--selftest` PASS.
+
+`node tools/verify-live.mjs --port 7979` **PASS 9/9** (was 8/8; `vote integration` is new).
+Pattern audit 17 lines / 0 failed / 2 skipped. Economy 8/8. Voting real 3/3. Debug 13/13.
+Playthrough 9 pass / 3 skip / 0 fail.
+
+### Release
+
+`v0.34.0-alpha.1`.
+
+### Top 3 candidates for Cycle 23
+
+1. **The dump's enemy types.** Both `6.enemy-frequencies.*` metrics still SKIP. The blocker
+   is that `vote_pool_with` lives in `server` while `pattern_dump` lives in `sim`. Moving a
+   thin equivalent into `sim` turns two SKIPs into measurements — and the `always-offered`
+   check is now correct, so it would actually fire.
+2. **Silhouette distinctness**, with the prerequisite named: a dev-only `/dev/enemies` route
+   that renders each model in isolation against a flat background, then a capture tool that
+   computes pairwise silhouette IoU. Do not attempt it from source.
+3. **The playthrough bot finishing a level.** It is the last thing keeping three checks
+   dark, and T-150 proved the debug layer can drive a run to the collapse — the same
+   technique could let the bot skip the parts it cannot navigate.
