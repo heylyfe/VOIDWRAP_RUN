@@ -47,6 +47,16 @@ const KNOWN_FAILURES = new Set(
     .filter(Boolean),
 );
 
+// T-139: why each known failure is parked, printed with the SKIP so the line is
+// self-documenting. A bare "known failure" reads like a bug someone gave up on; these
+// are decisions, and the reason is the useful part.
+const KNOWN_FAILURE_REASONS = {
+  'level-progression':
+    'blocked by the starting-lives balance decision (a run starts with 0 spare lives, '
+    + 'so the first fall ends it) and by the bot holding still when every remaining gift '
+    + 'is behind a gap it cannot probe; see tickets/T-139.md',
+};
+
 if (!URL_) {
   console.log('playthrough: skipped (set PLAYTHROUGH_URL or pass --url)');
   process.exit(0);
@@ -605,7 +615,11 @@ async function main() {
     if (r.ok === false && KNOWN_FAILURES.has(r.name)) {
       downgraded.push(r.name);
       r.ok = null;
-      r.detail = (r.detail ? r.detail + ' ' : '') + '(known failure, downgraded to SKIP)';
+      const why = KNOWN_FAILURE_REASONS[r.name];
+      r.detail = (r.detail ? r.detail + ' ' : '')
+        + '(known failure, downgraded to SKIP'
+        + (why ? `: ${why}` : '')
+        + ')';
     }
   }
   reportDeaths();
