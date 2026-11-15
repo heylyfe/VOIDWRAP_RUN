@@ -558,3 +558,30 @@ than from a feature list. Full detail in `REFINEMENT_LOG.md`.
 `just verify` green: wasm build, protocol-gen --check, check-names, validate-content,
 cargo fmt --check, clippy `-D warnings`, cargo test --workspace (127 server / 229 sim),
 tsc, eslint, vitest (279), and the three env-gated audits.
+
+## v0.12.0-alpha.1 — 2026-11-15 — Refinement Cycle 2
+
+- T-095 ACCEPTED: dead-end patterns can now terminate a plan. The walk pool in
+  `server/crates/sim/src/pattern.rs` filtered to `Path | Junction`, so
+  `ChunkRole::DeadEnd` could never enter it and `allowed_after`'s dead-end rule was
+  unreachable. The final slot now offers dead-ends when a seeded roll
+  (`dead_end_roll`, splitmix64 over seed/level/players) falls under
+  `DEAD_END_CHANCE = 0.25`, and the pick is forced so the bag's weights cannot dilute
+  the rate. Five tests. `2.tag-diversity.mechs` now PASSES: 10 of 13 pattern-audit
+  metrics green, up from 9. Sim tests 229 → 234.
+- T-094 PARTIAL: the voting conformance kit now speaks bincode. `--real` passes 3/3
+  against the live server (Welcome at protocol version 8, RunState phase 0 at level 1,
+  a Vote outside a session rejected with code 409) — the first time this kit has
+  proven anything about the real voting core. Four worker errors were fixed on the
+  way: `wire.mjs`'s struct table was invented (the real `RunInfo` carries `phase,
+  level, lives, currency, Tuning, fog_density_mul` and three string vectors, not
+  `seed/hp/max_hp/gold/class`), the kit and codec disagreed on `type` vs `variant`,
+  the stub used compact variant indices instead of the real ones, and the kit
+  JSON-stringified BigInt fields. PARKED: the stub selftest — after the codec fixes
+  the faithful stub reaches 6/10, and the four remaining failures are all stub
+  progression (it never advances past its first session inside the kit's window).
+  Three attempts spent; parked per the discipline rule. The kit is env-gated, so the
+  gate stays green.
+
+`just verify` green: 127 server / 234 sim / 279 vitest, clippy `-D warnings`,
+protocol-gen --check, check-names, validate-content.

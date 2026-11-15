@@ -1,769 +1,1149 @@
 #!/usr/bin/env node
-// Black-box conformance kit for the VOIDWRAP end-of-level vote session
-// (design/ENEMY_REGISTRY.md §9 "Pool rules (the voting system)").
-//
-// The kit never reads the voting core: it opens real WebSocket connections (a minimal RFC 6455
-// client over node:net / node:tls, so it runs on any Node >= 18 with zero dependencies), drives
-// three clients through vote sessions and asserts the behaviour described in T-081. If the
-// implementation disagrees with the ticket, the ticket wins — a FAIL here is a reportable mismatch.
-//
-//   VOTING_URL=ws://127.0.0.1:9001 node tools/voting-conformance/run.mjs
-//   node tools/voting-conformance/run.mjs --url ws://127.0.0.1:9001
-//   node tools/voting-conformance/run.mjs --selftest
-//
-// Without --url / VOTING_URL the kit prints "skipped" and exits 0 — that is how `just verify`
-// includes it without requiring a live voting server.
-// --selftest proves the kit has teeth: the suite must fully pass against the faithful stub
-// (stub/server.mjs, spawned on an ephemeral port), and against that stub with each single
-// deliberate violation, where the violation's paired check must be among the failures.
-//
-// The wire contract the kit speaks (and the server under test must implement) is documented in
-// README.md next to this file.
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import net from "node:net";
-import tls from "node:tls";
-import crypto from "node:crypto";
-import { EventEmitter } from "node:events";
-import { ENEMIES, capOf, isKnownEnemy, minLevelOf } from "./registry.mjs";
+/**
+ * tools/voting-conformance/run.mjs
+ *
+ * Conformance kit for the Voidwrap voting protocol.
+ *
+ * The kit speaks the real wire format: every client message is produced by
+ * `encodeClientMsg` and sent as a binary WebSocket frame, and every incoming
+ * binary frame is decoded with `decodeServerMsg`. A text frame from the server
+ * is a hard transport failure.
+ *
+ * Modes:
+ *   (default)     run the ten stub checks against --url / VOTING_URL
+ *   --selftest    spawn the stub on an ephemeral port, run the matrix, then
+ *                 run it once per violation and assert the paired check fails
+ *   --real        three-check smoke mode for a live server
+ *
+ * With no URL and no mode the kit prints `skipped` and exits 0, so `just
+ * verify` stays green on machines without a server.
+ */
 
-const STUB_PATH = fileURLToPath(new URL("./stub/server.mjs", import.meta.url));
+import { spawn } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
+import { connect as netConnect } from 'node:net';
+import { connect as tlsConnect } from 'node:tls';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
-const CONNECT_TIMEOUT_MS = 10_000;
-const SPAWN_OR_OPEN_TIMEOUT_MS = 45_000; // a real server may need to run the level before collapsing
-const CLOSE_TIMEOUT_MS = 30_000; // the countdown until the session closes itself
-const REJECT_TIMEOUT_MS = 5_000;
+import { encodeClientMsg, decodeServerMsg } from './wire.mjs';
+import {
+  loadPool,
+  PROTOCOL_VERSION,
+  PHASE_ENEMY_DRAFT,
+  PHASE_PLAYING,
+  PHASE_REWARD_DRAFT,
+  PHASE_OVER,
+  OPTIONS_PER_SESSION,
+} from './stub/server.mjs';
 
-// [VOTE_STUB_VIOLATION value in stub/server.mjs, the check that must fail because of it]
-const VIOLATIONS = [
-  ["majority_inverted", "majority-wins"],
-  ["tie_ignored", "tie-rules"],
-  ["cap_ignored", "cap-aware-pool"],
-  ["permanence_dropped", "permanence"],
-  ["rejoin_forgotten", "rejoin-safety"],
-  ["late_vote_accepted", "countdown-late-vote"],
+const HERE = dirname(fileURLToPath(import.meta.url));
+const STUB_PATH = join(HERE, 'stub', 'server.mjs');
+
+const CLIENT_COUNT = 3;
+const SESSION_COUNT = 3;
+
+const CHECK_NAMES = [
+  'session-at-every-level',
+  'options-shape',
+  'majority-wins',
+  'tie-rules',
+  'permanence',
+  'cap-aware-pool',
+  'min-level-gate',
+  'overflow-temporary',
+  'rejoin-safety',
+  'countdown-late-vote',
 ];
 
-const CHECKS = [
-  ["session-at-every-level", checkSessionAtEveryLevel],
-  ["options-shape", checkOptionsShape],
-  ["majority-wins", checkMajorityWins],
-  ["tie-rules", checkTieRules],
-  ["permanence", checkPermanence],
-  ["cap-aware-pool", checkCapAwarePool],
-  ["min-level-gate", checkMinLevelGate],
-  ["overflow-temporary", checkOverflowTemporary],
-  ["rejoin-safety", checkRejoinSafety],
-  ["countdown-late-vote", checkCountdownLateVote],
-];
+const REAL_CHECK_NAMES = ['real-welcome', 'real-runstate', 'real-vote-outside-session'];
 
-function fail(message) {
-  throw new Error(message);
-}
-const sleep = (ms) => new Promise((resolve) => {
-  setTimeout(resolve, ms);
-});
+const KNOWN_PHASES = [PHASE_ENEMY_DRAFT, PHASE_PLAYING, PHASE_REWARD_DRAFT, PHASE_OVER];
 
-// ---------------------------------------------------------------------------
-// Minimal RFC 6455 WebSocket client. Deliberately hand-rolled: the global
-// WebSocket only exists on newer Node versions, and the kit must be dependency
-// free and version independent.
-// ---------------------------------------------------------------------------
-const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
-class WsClient extends EventEmitter {
-  constructor(url) {
-    super();
-    this.url = url instanceof URL ? url : new URL(url);
-    this.messages = []; // every text frame, in arrival order: { t, msg }
-    this.open = false;
-    this.clientId = null;
-    this.token = null;
-    this.welcome = null;
-    this.socket = null;
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+
+/* ------------------------------------------------------------------ *
+ * WebSocket client (RFC 6455, no dependencies)
+ * ------------------------------------------------------------------ */
+
+class WsClient {
+  constructor(socket) {
+    this.socket = socket;
     this.buffer = Buffer.alloc(0);
+    this.closed = false;
+    this.fragments = [];
+    this.fragmentOpcode = 0;
+    this.handlers = { binary: [], text: [], close: [] };
+
+    socket.setNoDelay(true);
+    socket.on('data', (chunk) => this._onData(chunk));
+    socket.on('close', () => this._onClose());
+    socket.on('error', () => this._onClose());
   }
 
-  async connect(timeoutMs = CONNECT_TIMEOUT_MS) {
-    const secure = this.url.protocol === "wss:";
-    const port = Number(this.url.port) || (secure ? 443 : 80);
-    const hostname = this.url.hostname;
-    const path = (this.url.pathname || "/") + this.url.search;
-    const key = crypto.randomBytes(16).toString("base64");
-    const expectedAccept = crypto.createHash("sha1").update(key + WS_GUID).digest("base64");
-    await new Promise((resolve, reject) => {
-      let settled = false;
-      let upgraded = false;
-      let head = Buffer.alloc(0);
-      const socket = secure
-        ? tls.connect({ port, host: hostname, servername: hostname })
-        : net.connect({ port, host: hostname });
-      this.socket = socket;
-      socket.on("connect", () => {
-        const crlf = String.fromCharCode(13, 10);
-        socket.write(
-          [`GET ${path} HTTP/1.1`,
-            `Host: ${hostname}:${port}`,
-            "Upgrade: websocket",
-            "Connection: Upgrade",
-            `Sec-WebSocket-Key: ${key}`,
-            "Sec-WebSocket-Version: 13",
-            "",
-            ""].join(crlf),
-        );
-      });
-      const timer = setTimeout(() => {
-        socket.destroy();
-        settle(new Error(`connect/handshake timed out after ${timeoutMs} ms (${this.url})`));
-      }, timeoutMs);
-      const settle = (error) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        if (error) {
-          socket.destroy();
-          reject(error);
-        } else {
-          resolve();
-        }
-      };
-      socket.on("error", (error) => settle(error instanceof Error ? error : new Error(String(error))));
-      socket.on("close", () => {
-        if (!this.open) settle(new Error(`connection closed during handshake (${this.url})`));
-        else this.handleClose();
-      });
-      socket.on("data", (chunk) => {
-        if (this.open) {
-          this.buffer = Buffer.concat([this.buffer, chunk]);
-          this.pump();
-          return;
-        }
-        if (upgraded) return;
-        head = Buffer.concat([head, chunk]);
-        const idx = head.indexOf("\r\n\r\n");
-        if (idx === -1) return;
-        upgraded = true;
-        const rawHeader = head.subarray(0, idx).toString("latin1");
-        const header = rawHeader.toLowerCase();
-        const accept = /sec-websocket-accept:\s*(\S+)/i.exec(rawHeader);
-        if (!/^http\/1\.1 101 /.test(header) || accept === null || accept[1] !== expectedAccept) {
-          settle(new Error(`bad websocket handshake from ${this.url}`));
-          return;
-        }
-        this.open = true;
-        this.buffer = head.subarray(idx + 4);
-        this.pump();
-        settle();
-      });
-    });
+  on(event, handler) {
+    if (this.handlers[event]) this.handlers[event].push(handler);
+    return this;
   }
 
-  pump() {
-    for (;;) {
-      const buf = this.buffer;
-      if (buf.length < 2) return;
-      const opcode = buf[0] & 0x0f;
-      let len = buf[1] & 0x7f;
-      let pos = 2;
-      if (len === 126) {
-        if (buf.length < 4) return;
-        len = buf.readUInt16BE(2);
-        pos = 4;
-      } else if (len === 127) {
-        if (buf.length < 10) return;
-        const big = buf.readBigUInt64BE(2);
-        if (big > 0x7fffffffn) {
-          this.handleClose();
-          return;
-        }
-        len = Number(big);
-        pos = 10;
-      }
-      if (buf.length - pos < len) return;
-      const payload = buf.subarray(pos, pos + len);
-      this.buffer = buf.subarray(pos + len);
-      if (opcode === 0x1) {
-        let msg;
-        try {
-          msg = JSON.parse(payload.toString("utf8"));
-        } catch {
-          msg = { type: "__raw__", text: payload.toString("utf8") };
-        }
-        const rec = { t: Date.now(), msg };
-        this.messages.push(rec);
-        this.emit("message", rec);
-      } else if (opcode === 0x9) {
-        this.sendFrame(0xA, Buffer.from(payload)); // pong
-      } else if (opcode === 0x8) {
-        this.handleClose();
-        return;
-      }
-    }
+  _emit(event, value) {
+    for (const handler of this.handlers[event] || []) handler(value);
   }
 
-  sendFrame(opcode, payload) {
-    if (!this.socket || this.socket.destroyed) return;
-    const mask = crypto.randomBytes(4);
-    const masked = Buffer.allocUnsafe(payload.length);
-    for (let i = 0; i < payload.length; i++) masked[i] = payload[i] ^ mask[i & 3];
-    let header;
-    if (payload.length < 126) {
-      header = Buffer.from([0x80 | opcode, 0x80 | payload.length]);
-    } else if (payload.length < 65536) {
-      header = Buffer.alloc(4);
-      header[0] = 0x80 | opcode;
-      header[1] = 0x80 | 126;
-      header.writeUInt16BE(payload.length, 2);
-    } else {
-      header = Buffer.alloc(10);
-      header[0] = 0x80 | opcode;
-      header[1] = 0x80 | 127;
-      header.writeBigUInt64BE(BigInt(payload.length), 2);
-    }
-    this.socket.write(Buffer.concat([header, mask, masked]));
+  _onClose() {
+    if (this.closed) return;
+    this.closed = true;
+    this._emit('close', null);
   }
 
-  send(message) {
-    this.sendFrame(0x1, Buffer.from(JSON.stringify(message), "utf8"));
+  sendBinary(bytes) {
+    this._frame(0x2, Buffer.from(bytes));
   }
 
   close() {
-    try {
-      this.sendFrame(0x8, Buffer.alloc(0));
-    } catch {
-      // socket already gone
-    }
-    this.open = false;
-    const socket = this.socket;
-    if (socket && !socket.destroyed) setTimeout(() => socket.destroy(), 50).unref?.();
+    if (this.closed) return;
+    this._frame(0x8, Buffer.alloc(0));
+    this.closed = true;
+    this.socket.destroy();
   }
 
-  handleClose() {
-    if (!this.open) return;
-    this.open = false;
-    this.emit("close");
+  _frame(opcode, payload) {
+    if (this.closed) return;
+    const length = payload.length;
+    let header;
+    if (length < 126) {
+      header = Buffer.alloc(2);
+      header[1] = 0x80 | length;
+    } else if (length < 65536) {
+      header = Buffer.alloc(4);
+      header[1] = 0x80 | 126;
+      header.writeUInt16BE(length, 2);
+    } else {
+      header = Buffer.alloc(10);
+      header[1] = 0x80 | 127;
+      header.writeBigUInt64BE(BigInt(length), 2);
+    }
+    header[0] = 0x80 | opcode;
+    const mask = randomBytes(4);
+    const masked = Buffer.allocUnsafe(length);
+    for (let i = 0; i < length; i += 1) masked[i] = payload[i] ^ mask[i & 3];
+    this.socket.write(Buffer.concat([header, mask, masked]));
+  }
+
+  _onData(chunk) {
+    this.buffer = Buffer.concat([this.buffer, chunk]);
+    for (;;) {
+      const buf = this.buffer;
+      if (buf.length < 2) return;
+      const b0 = buf[0];
+      const b1 = buf[1];
+      const fin = (b0 & 0x80) !== 0;
+      const opcode = b0 & 0x0f;
+      const masked = (b1 & 0x80) !== 0;
+      let length = b1 & 0x7f;
+      let offset = 2;
+      if (length === 126) {
+        if (buf.length < offset + 2) return;
+        length = buf.readUInt16BE(offset);
+        offset += 2;
+      } else if (length === 127) {
+        if (buf.length < offset + 8) return;
+        const big = buf.readBigUInt64BE(offset);
+        if (big > BigInt(Number.MAX_SAFE_INTEGER)) {
+          this.close();
+          return;
+        }
+        length = Number(big);
+        offset += 8;
+      }
+      let mask = null;
+      if (masked) {
+        if (buf.length < offset + 4) return;
+        mask = buf.subarray(offset, offset + 4);
+        offset += 4;
+      }
+      if (buf.length < offset + length) return;
+      let payload = buf.subarray(offset, offset + length);
+      if (mask) {
+        const unmasked = Buffer.allocUnsafe(length);
+        for (let i = 0; i < length; i += 1) unmasked[i] = payload[i] ^ mask[i & 3];
+        payload = unmasked;
+      }
+      this.buffer = buf.subarray(offset + length);
+      this._frameIn(fin, opcode, payload);
+    }
+  }
+
+  _frameIn(fin, opcode, payload) {
+    if (opcode === 0x8) {
+      this._onClose();
+      this.socket.destroy();
+      return;
+    }
+    if (opcode === 0x9) {
+      this._frame(0xa, payload);
+      return;
+    }
+    if (opcode === 0xa) return;
+    if (opcode === 0x0) {
+      this.fragments.push(payload);
+      if (fin) {
+        const full = Buffer.concat(this.fragments);
+        const op = this.fragmentOpcode;
+        this.fragments = [];
+        this.fragmentOpcode = 0;
+        this._deliver(op, full);
+      }
+      return;
+    }
+    if (opcode === 0x1 || opcode === 0x2) {
+      if (!fin) {
+        this.fragmentOpcode = opcode;
+        this.fragments = [payload];
+        return;
+      }
+      this._deliver(opcode, payload);
+    }
+  }
+
+  _deliver(opcode, payload) {
+    if (opcode === 0x2) this._emit('binary', Buffer.from(payload));
+    else this._emit('text', payload.toString('utf8'));
   }
 }
 
-// ---------------------------------------------------------------------------
-// Waiting helpers. Every message ever received stays in ws.messages, so waits
-// also see messages that arrived before the wait started.
-// ---------------------------------------------------------------------------
-function messageMatches(msg, type, match) {
-  if (msg?.type !== type) return false;
-  for (const [k, v] of Object.entries(match ?? {})) {
-    if (msg[k] !== v) return false;
+function wsConnect(url, timeoutMs) {
+  const limit = typeof timeoutMs === 'number' ? timeoutMs : 5000;
+  return new Promise((resolvePromise, rejectPromise) => {
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch (error) {
+      rejectPromise(new Error('invalid websocket url "' + url + '": ' + error.message));
+      return;
+    }
+    if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') {
+      rejectPromise(new Error('unsupported websocket scheme "' + parsed.protocol + '"'));
+      return;
+    }
+    const secure = parsed.protocol === 'wss:';
+    const host = parsed.hostname;
+    const port = Number(parsed.port || (secure ? 443 : 80));
+    const path = (parsed.pathname || '/') + (parsed.search || '');
+    const key = randomBytes(16).toString('base64');
+
+    const socket = secure
+      ? tlsConnect({ host, port, servername: host })
+      : netConnect({ host, port });
+
+    let settled = false;
+    let head = Buffer.alloc(0);
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      rejectPromise(new Error('websocket handshake to ' + url + ' timed out'));
+    }, limit);
+
+    const onData = (chunk) => {
+      head = Buffer.concat([head, chunk]);
+      const split = head.indexOf('\r\n\r\n');
+      if (split < 0) return;
+      socket.removeListener('data', onData);
+      clearTimeout(timer);
+      const text = head.subarray(0, split).toString('latin1');
+      const rest = head.subarray(split + 4);
+      const status = text.split('\r\n')[0] || '';
+      if (!/^HTTP\/1\.[01] 101/.test(status)) {
+        settled = true;
+        socket.destroy();
+        rejectPromise(new Error('websocket upgrade refused: ' + status));
+        return;
+      }
+      const expected = createHash('sha1').update(key + WS_GUID).digest('base64');
+      if (!text.toLowerCase().includes('sec-websocket-accept: ' + expected.toLowerCase())) {
+        settled = true;
+        socket.destroy();
+        rejectPromise(new Error('websocket handshake: bad Sec-WebSocket-Accept'));
+        return;
+      }
+      settled = true;
+      const client = new WsClient(socket);
+      if (rest.length > 0) client._onData(rest);
+      resolvePromise(client);
+    };
+
+    socket.on('data', onData);
+    socket.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      rejectPromise(error);
+    });
+
+    const onReady = () => {
+      socket.write(
+        'GET ' + path + ' HTTP/1.1\r\n' +
+          'Host: ' + host + ':' + port + '\r\n' +
+          'Upgrade: websocket\r\n' +
+          'Connection: Upgrade\r\n' +
+          'Sec-WebSocket-Key: ' + key + '\r\n' +
+          'Sec-WebSocket-Version: 13\r\n' +
+          '\r\n',
+      );
+    };
+
+    if (secure) socket.once('secureConnect', onReady);
+    else socket.once('connect', onReady);
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Harness
+ * ------------------------------------------------------------------ */
+
+class Harness {
+  constructor(url) {
+    this.url = url;
+    this.clients = [];
+    this.waiters = [];
+    this.textFrames = [];
+  }
+
+  async connect(name) {
+    const ws = await wsConnect(this.url);
+    const client = { name, ws, log: [], cursor: 0, closed: false, onMessage: null };
+
+    ws.on('binary', (bytes) => {
+      let msg = null;
+      let error = null;
+      try {
+        msg = decodeServerMsg(bytes);
+        // wire.mjs names messages by `variant`; the checks below read `type`.
+        if (msg && msg.type === undefined) msg.type = msg.variant;
+      } catch (decodeError) {
+        error = decodeError;
+      }
+      client.log.push({ at: Date.now(), msg, error, bytes });
+      if (msg && typeof client.onMessage === 'function') client.onMessage(msg);
+      this._wake();
+    });
+
+    ws.on('text', (text) => {
+      this.textFrames.push({ from: name, text });
+      client.log.push({ at: Date.now(), text });
+      this._wake();
+    });
+
+    ws.on('close', () => {
+      client.closed = true;
+      this._wake();
+    });
+
+    this.clients.push(client);
+    return client;
+  }
+
+  _scan(client, pred, fromStart) {
+    const start = fromStart ? 0 : client.cursor;
+    for (let i = start; i < client.log.length; i += 1) {
+      if (pred(client.log[i])) {
+        if (!fromStart) client.cursor = i + 1;
+        return client.log[i];
+      }
+    }
+    return null;
+  }
+
+  waitFor(client, pred, timeoutMs) {
+    const hit = this._scan(client, pred, false);
+    if (hit) return Promise.resolve(hit);
+    return this._wait(client, pred, timeoutMs, false);
+  }
+
+  waitForAny(client, pred, timeoutMs) {
+    const hit = this._scan(client, pred, true);
+    if (hit) return Promise.resolve(hit);
+    return this._wait(client, pred, timeoutMs, true);
+  }
+
+  _wait(client, pred, timeoutMs, fromStart) {
+    return new Promise((resolvePromise) => {
+      const waiter = { client, pred, fromStart, resolve: resolvePromise, timer: null };
+      waiter.timer = setTimeout(() => {
+        this.waiters = this.waiters.filter((item) => item !== waiter);
+        resolvePromise(null);
+      }, timeoutMs);
+      this.waiters.push(waiter);
+    });
+  }
+
+  _wake() {
+    if (this.waiters.length === 0) return;
+    const pending = this.waiters;
+    this.waiters = [];
+    for (const waiter of pending) {
+      const hit = this._scan(waiter.client, waiter.pred, waiter.fromStart);
+      if (hit) {
+        clearTimeout(waiter.timer);
+        waiter.resolve(hit);
+      } else {
+        this.waiters.push(waiter);
+      }
+    }
+  }
+
+  dispose() {
+    for (const waiter of this.waiters) clearTimeout(waiter.timer);
+    this.waiters = [];
+    for (const client of this.clients) client.ws.close();
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Client message helper
+ * ------------------------------------------------------------------ */
+
+// JSON.stringify that survives the BigInt values wire.mjs returns for u64 fields.
+function safeJson(value) {
+  return JSON.stringify(value, (_key, item) => (typeof item === 'bigint' ? item.toString() : item));
+}
+
+function sendClient(client, msg) {
+  let bytes;
+  // The kit names messages by `type`; wire.mjs names them by `variant`.
+  const wire = { ...msg, variant: msg.variant ?? msg.type };
+  delete wire.type;
+  try {
+    bytes = encodeClientMsg(wire);
+  } catch (error) {
+    throw new Error('encodeClientMsg(' + msg.type + ') failed: ' + error.message);
+  }
+  client.ws.sendBinary(bytes);
+}
+
+/* ------------------------------------------------------------------ *
+ * Stub driver
+ * ------------------------------------------------------------------ */
+
+function planVotes(sessionIndex, options, pool) {
+  const byId = new Map(pool.map((option) => [option.id, option]));
+  if (sessionIndex === 0) {
+    const index = options.findIndex((option) => {
+      const entry = byId.get(option.id);
+      return entry ? entry.permanent === true : false;
+    });
+    const target = index >= 0 ? index : 0;
+    return [target, target, target];
+  }
+  if (sessionIndex === 1) {
+    const index = options.findIndex((option) => {
+      const entry = byId.get(option.id);
+      return entry ? entry.permanent === false : false;
+    });
+    const target = index >= 0 ? index : 0;
+    return [target, target, target];
+  }
+  return [0, 1, 2];
+}
+
+function lastVoteStateCounts(log, fromAt, toAt) {
+  let counts = null;
+  for (const entry of log) {
+    if (!entry.msg || entry.msg.type !== 'VoteState') continue;
+    if (entry.at < fromAt || entry.at > toAt) continue;
+    counts = entry.msg.counts;
+  }
+  return counts;
+}
+
+function lastRunStateBefore(log, at) {
+  let found = null;
+  for (const entry of log) {
+    if (!entry.msg || entry.msg.type !== 'RunState') continue;
+    if (entry.at > at) break;
+    found = entry;
+  }
+  return found;
+}
+
+async function driveStub(url, pool) {
+  const harness = new Harness(url);
+  const clients = [];
+
+  for (let i = 0; i < CLIENT_COUNT; i += 1) {
+    const client = await harness.connect('kit-' + i);
+    client.onMessage = (msg) => {
+      if (msg.type === 'Draft') sendClient(client, { type: 'DraftPick', picks: [0] });
+    };
+    clients.push(client);
+    sendClient(client, { type: 'Hello', protocol_version: PROTOCOL_VERSION, name: 'kit-' + i });
+    sendClient(client, { type: 'ChooseClass', class: i % 3 });
+  }
+
+  const observer = clients[0];
+  const sessions = [];
+  const rejoin = { attempted: false, ok: false, detail: 'rejoin was never attempted' };
+  const lateVote = { sent: false, error: null, stateAfterResult: null };
+
+  for (let index = 0; index < SESSION_COUNT; index += 1) {
+    const openEntry = await harness.waitFor(
+      observer,
+      (entry) => Boolean(entry.msg && entry.msg.type === 'VoteOpen'),
+      10000,
+    );
+    if (!openEntry) break;
+
+    const open = openEntry.msg;
+    const session = {
+      level: open.level,
+      options: Array.isArray(open.options) ? open.options : [],
+      countdownS: open.countdown_s,
+      openAt: openEntry.at,
+      resultAt: 0,
+      result: null,
+      finalCounts: null,
+    };
+    sessions.push(session);
+
+    const plan = planVotes(index, session.options, pool);
+    for (let i = 0; i < clients.length; i += 1) {
+      sendClient(clients[i], { type: 'Vote', option: plan[i] });
+    }
+
+    if (index === 1 && !rejoin.attempted) {
+      rejoin.attempted = true;
+      const victim = clients[2];
+      victim.ws.close();
+      await sleep(80);
+      const back = await harness.connect('kit-rejoin');
+      sendClient(back, { type: 'Hello', protocol_version: PROTOCOL_VERSION, name: 'kit-rejoin' });
+      const seen = await harness.waitFor(
+        back,
+        (entry) => Boolean(entry.msg && (entry.msg.type === 'VoteState' || entry.msg.type === 'VoteOpen')),
+        2000,
+      );
+      if (!seen) {
+        rejoin.ok = false;
+        rejoin.detail = 'no session state reached the rejoining client within 2000ms';
+      } else if (seen.msg.type === 'VoteState') {
+        const counts = Array.isArray(seen.msg.counts) ? seen.msg.counts : [];
+        const total = counts.reduce((sum, value) => sum + value, 0);
+        rejoin.ok = total >= CLIENT_COUNT;
+        rejoin.detail = rejoin.ok
+          ? 'rejoin replayed VoteState counts=' + JSON.stringify(counts)
+          : 'rejoin replayed VoteState counts=' + JSON.stringify(counts) +
+            ' but ' + CLIENT_COUNT + ' votes had already been cast';
+      } else {
+        rejoin.ok = true;
+        rejoin.detail = 'rejoin replayed VoteOpen for level ' + seen.msg.level;
+      }
+      clients[2] = back;
+    }
+
+    const resultEntry = await harness.waitFor(
+      observer,
+      (entry) => Boolean(entry.msg && entry.msg.type === 'VoteResult'),
+      10000,
+    );
+    if (!resultEntry) break;
+
+    session.result = resultEntry.msg;
+    session.resultAt = resultEntry.at;
+    session.finalCounts = lastVoteStateCounts(observer.log, session.openAt, session.resultAt);
+
+    if (!lateVote.sent) {
+      lateVote.sent = true;
+      sendClient(observer, { type: 'Vote', option: 0 });
+      const errorEntry = await harness.waitFor(
+        observer,
+        (entry) => Boolean(entry.msg && entry.msg.type === 'Error'),
+        800,
+      );
+      lateVote.error = errorEntry ? errorEntry.msg : null;
+      const stray = observer.log.find(
+        (entry) => entry.msg && entry.msg.type === 'VoteState' && entry.at > session.resultAt + 5,
+      );
+      lateVote.stateAfterResult = stray ? stray.msg : null;
+    }
+  }
+
+  const observerLog = observer.log.slice();
+  harness.dispose();
+  return { sessions, rejoin, lateVote, observerLog, textFrames: harness.textFrames };
+}
+
+/* ------------------------------------------------------------------ *
+ * The ten stub checks
+ * ------------------------------------------------------------------ */
+
+function evaluate(data, pool) {
+  const { sessions, rejoin, lateVote, observerLog } = data;
+  const byId = new Map(pool.map((option) => [option.id, option]));
+  const results = [];
+  const push = (name, ok, detail) => results.push({ name, ok, detail });
+
+  // 1. session-at-every-level
+  {
+    const levels = sessions.map((session) => session.level);
+    const contiguous =
+      levels.length === SESSION_COUNT && levels.every((level, index) => level === index + 1);
+    let matched = true;
+    let mismatch = '';
+    for (const session of sessions) {
+      const runState = lastRunStateBefore(observerLog, session.openAt);
+      if (!runState || !runState.msg.info || runState.msg.info.level !== session.level) {
+        matched = false;
+        mismatch = 'level ' + session.level + ' was not preceded by a matching RunState';
+        break;
+      }
+    }
+    if (!contiguous) {
+      push(
+        'session-at-every-level',
+        false,
+        'expected levels 1..' + SESSION_COUNT + ', saw ' + JSON.stringify(levels),
+      );
+    } else {
+      push(
+        'session-at-every-level',
+        matched,
+        matched
+          ? 'levels ' + levels.join(',') + ' each preceded by a matching RunState'
+          : mismatch,
+      );
+    }
+  }
+
+  // 2. options-shape
+  {
+    let ok = true;
+    let detail = 'every VoteOpen carried ' + OPTIONS_PER_SESSION + ' well-formed options';
+    for (const session of sessions) {
+      if (session.options.length !== OPTIONS_PER_SESSION) {
+        ok = false;
+        detail = 'level ' + session.level + ' offered ' + session.options.length + ' options';
+        break;
+      }
+      const seen = new Set();
+      for (let i = 0; i < session.options.length; i += 1) {
+        const option = session.options[i];
+        const wellFormed =
+          option &&
+          option.index === i &&
+          typeof option.id === 'string' &&
+          option.id.length > 0 &&
+          Number.isInteger(option.kind) &&
+          option.kind >= 0 &&
+          option.kind <= 255;
+        if (!wellFormed) {
+          ok = false;
+          detail = 'level ' + session.level + ' option ' + i + ' is malformed: ' + JSON.stringify(option);
+          break;
+        }
+        if (seen.has(option.id)) {
+          ok = false;
+          detail = 'level ' + session.level + ' repeats option id ' + option.id;
+          break;
+        }
+        seen.add(option.id);
+      }
+      if (!ok) break;
+    }
+    push('options-shape', ok, detail);
+  }
+
+  // 3. majority-wins
+  {
+    let ok = true;
+    let detail = 'every unique-max session elected the top option';
+    let checked = 0;
+    for (const session of sessions) {
+      const counts = session.finalCounts;
+      if (!counts || !session.result) continue;
+      const max = Math.max(...counts);
+      const leaders = counts
+        .map((count, index) => (count === max ? index : -1))
+        .filter((index) => index >= 0);
+      if (leaders.length !== 1) continue;
+      checked += 1;
+      if (session.result.winner !== leaders[0]) {
+        ok = false;
+        detail =
+          'level ' + session.level + ' counts ' + JSON.stringify(counts) +
+          ' but the winner was ' + session.result.winner;
+        break;
+      }
+    }
+    if (ok && checked === 0) {
+      ok = false;
+      detail = 'no session produced a unique majority';
+    }
+    push('majority-wins', ok, detail);
+  }
+
+  // 4. tie-rules
+  {
+    let ok = true;
+    let detail = 'ties resolved to the lowest tied index';
+    let checked = 0;
+    for (const session of sessions) {
+      const counts = session.finalCounts;
+      if (!counts || !session.result) continue;
+      const max = Math.max(...counts);
+      const tied = counts
+        .map((count, index) => (count === max ? index : -1))
+        .filter((index) => index >= 0);
+      if (tied.length < 2) continue;
+      checked += 1;
+      if (session.result.winner !== tied[0]) {
+        ok = false;
+        detail =
+          'level ' + session.level + ' tied on ' + JSON.stringify(tied) +
+          ' but the winner was ' + session.result.winner;
+        break;
+      }
+    }
+    if (ok && checked === 0) {
+      ok = false;
+      detail = 'no session produced a tie';
+    }
+    push('tie-rules', ok, detail);
+  }
+
+  // 5. permanence
+  {
+    let ok = true;
+    let detail = 'VoteResult permanence and kind match the registry';
+    let checked = 0;
+    for (const session of sessions) {
+      if (!session.result) continue;
+      const entry = byId.get(session.result.id);
+      if (!entry) continue;
+      checked += 1;
+      if (session.result.permanent !== entry.permanent) {
+        ok = false;
+        detail =
+          'level ' + session.level + ' winner ' + session.result.id +
+          ' reported permanent=' + session.result.permanent +
+          ' but the registry says ' + entry.permanent;
+        break;
+      }
+      if (session.result.kind !== entry.kind) {
+        ok = false;
+        detail =
+          'level ' + session.level + ' winner ' + session.result.id +
+          ' reported kind=' + session.result.kind +
+          ' but the registry says ' + entry.kind;
+        break;
+      }
+    }
+    if (ok && checked === 0) {
+      ok = false;
+      detail = 'no VoteResult could be matched against the registry';
+    }
+    push('permanence', ok, detail);
+  }
+
+  // 6. cap-aware-pool
+  {
+    const offered = new Map();
+    for (const session of sessions) {
+      for (const option of session.options) {
+        offered.set(option.id, (offered.get(option.id) || 0) + 1);
+      }
+    }
+    let ok = true;
+    let detail = 'no option exceeded its selection cap';
+    for (const [id, count] of offered) {
+      const entry = byId.get(id);
+      if (!entry) continue;
+      if (count > entry.cap) {
+        ok = false;
+        detail = id + ' was offered ' + count + ' times but its cap is ' + entry.cap;
+        break;
+      }
+    }
+    push('cap-aware-pool', ok, detail);
+  }
+
+  // 7. min-level-gate
+  {
+    let ok = true;
+    let detail = 'every offered option met its minimum level';
+    for (const session of sessions) {
+      for (const option of session.options) {
+        const entry = byId.get(option.id);
+        if (!entry) continue;
+        if (entry.minLevel > session.level) {
+          ok = false;
+          detail =
+            option.id + ' (min level ' + entry.minLevel + ') was offered at level ' + session.level;
+          break;
+        }
+      }
+      if (!ok) break;
+    }
+    push('min-level-gate', ok, detail);
+  }
+
+  // 8. overflow-temporary
+  {
+    let ok = true;
+    let detail = 'temporary winners never returned to the pool';
+    let checked = 0;
+    for (let i = 0; i < sessions.length; i += 1) {
+      const session = sessions[i];
+      if (!session.result) continue;
+      const entry = byId.get(session.result.id);
+      if (!entry || entry.permanent) continue;
+      checked += 1;
+      for (let j = i + 1; j < sessions.length; j += 1) {
+        if (sessions[j].options.some((option) => option.id === session.result.id)) {
+          ok = false;
+          detail =
+            'temporary winner ' + session.result.id +
+            ' reappeared at level ' + sessions[j].level;
+          break;
+        }
+      }
+      if (!ok) break;
+    }
+    if (ok && checked === 0) {
+      ok = false;
+      detail = 'no temporary option ever won';
+    }
+    push('overflow-temporary', ok, detail);
+  }
+
+  // 9. rejoin-safety
+  push('rejoin-safety', rejoin.ok, rejoin.detail);
+
+  // 10. countdown-late-vote
+  {
+    let ok = false;
+    let detail;
+    if (!lateVote.sent) {
+      detail = 'no late vote was sent';
+    } else if (lateVote.stateAfterResult) {
+      detail =
+        'a vote sent after VoteResult was counted (VoteState counts=' +
+        JSON.stringify(lateVote.stateAfterResult.counts) + ')';
+    } else if (!lateVote.error) {
+      detail = 'a vote sent after VoteResult produced no Error';
+    } else {
+      ok = true;
+      detail = 'late vote rejected with Error code ' + lateVote.error.code;
+    }
+    push('countdown-late-vote', ok, detail);
+  }
+
+  return results;
+}
+
+/* ------------------------------------------------------------------ *
+ * Reporting
+ * ------------------------------------------------------------------ */
+
+function report(title, results) {
+  process.stdout.write('voting-conformance: ' + title + '\n');
+  for (const result of results) {
+    process.stdout.write(
+      '  ' + (result.ok ? 'PASS' : 'FAIL') + '  ' +
+        result.name.padEnd(24) + '  ' + result.detail + '\n',
+    );
+  }
+  const passed = results.filter((result) => result.ok).length;
+  process.stdout.write(
+    'voting-conformance: ' + passed + '/' + results.length + ' checks passed\n',
+  );
+  return passed === results.length;
+}
+
+function reportTextFrames(textFrames) {
+  if (textFrames.length === 0) return false;
+  for (const frame of textFrames) {
+    process.stdout.write(
+      '  FAIL  binary-transport          text frame from ' + frame.from +
+        ': ' + JSON.stringify(frame.text.slice(0, 200)) + '\n',
+    );
   }
   return true;
 }
 
-const isMsg = (type, match = {}) => (rec) => messageMatches(rec.msg, type, match);
+/* ------------------------------------------------------------------ *
+ * Modes
+ * ------------------------------------------------------------------ */
 
-function waitFor(clients, predicate, timeoutMs, what) {
-  const list = Array.isArray(clients) ? clients : [clients];
-  return new Promise((resolve, reject) => {
-    let done = false;
-    let timer = null;
-    const onMessage = () => {
-      scan();
-    };
-    const onClose = () => finish(null, new Error(`${what}: connection closed before the expected message arrived`));
-    const cleanup = () => {
-      clearTimeout(timer);
-      for (const ws of list) {
-        ws.off("message", onMessage);
-        ws.off("close", onClose);
-      }
-    };
-    const finish = (value, error) => {
-      if (done) return;
-      done = true;
-      cleanup();
-      if (error) reject(error);
-      else resolve(value);
-    };
-    const scan = () => {
-      for (const ws of list) {
-        for (const rec of ws.messages) {
-          if (predicate(rec)) {
-            finish(rec);
-            return true;
-          }
-        }
-      }
-      return false;
-    };
-    timer = setTimeout(() => finish(null, new Error(`${what}: timed out after ${timeoutMs} ms`)), timeoutMs);
-    for (const ws of list) {
-      ws.on("message", onMessage);
-      ws.on("close", onClose);
-    }
-    scan();
-  });
+async function stubMode(url) {
+  const pool = loadPool();
+  const data = await driveStub(url, pool);
+  const results = evaluate(data, pool);
+  const badTransport = reportTextFrames(data.textFrames);
+  const ok = report('stub matrix against ' + url, results);
+  return ok && !badTransport;
 }
 
-// ---------------------------------------------------------------------------
-// Flow helpers
-// ---------------------------------------------------------------------------
-function normalizeWsUrl(raw) {
-  let s = String(raw).trim().replace(/\/+$/, "");
-  if (/^https:\/\//.test(s)) s = "wss://" + s.slice("https://".length);
-  else if (/^http:\/\//.test(s)) s = "ws://" + s.slice("http://".length);
-  let url;
-  try {
-    url = new URL(s);
-  } catch {
-    throw new Error(`invalid WebSocket URL: ${raw}`);
-  }
-  if (url.protocol !== "ws:" && url.protocol !== "wss:") {
-    throw new Error(`unsupported URL ${raw}: want ws:// or wss://`);
-  }
-  return url.toString();
-}
-
-async function connectClient(base, name, token = undefined) {
-  const ws = new WsClient(base);
-  await ws.connect();
-  ws.send({ type: "hello", name, ...(token ? { token } : {}) });
-  const rec = await waitFor(ws, (r) => r.msg.type === "welcome" || r.msg.type === "error", CONNECT_TIMEOUT_MS, `hello ${name}`);
-  if (rec.msg.type === "error") fail(`hello ${name} rejected: ${rec.msg.reason ?? "(no reason given)"}`);
-  ws.clientId = rec.msg.clientId;
-  ws.token = rec.msg.token;
-  ws.welcome = rec.msg;
-  return ws;
-}
-
-async function openRoom(base, size = 3) {
-  const clients = [];
-  try {
-    for (let i = 0; i < size; i++) clients.push(await connectClient(base, i === 0 ? "kit-host" : `kit-${i}`));
-    if (clients[0].welcome.host !== true) {
-      fail(`the first connected client is not the host (welcome.host = ${JSON.stringify(clients[0].welcome.host)})`);
-    }
-    for (let i = 1; i < size; i++) {
-      if (clients[i].welcome.host !== false) fail(`late joiner kit-${i} unexpectedly reported host = true`);
-    }
-    return clients;
-  } catch (error) {
-    for (const c of clients) c.close();
-    throw error;
-  }
-}
-
-function closeAll(clients) {
-  for (const c of clients) if (c) c.close();
-}
-
-async function startRun(host, { seed, permanents = null, klass = "striker" } = {}) {
-  host.send({ type: "start_run", seed, class: klass, ...(permanents ? { permanents } : {}) });
-  const rec = await waitFor(host, (r) => r.msg.type === "run_started" || r.msg.type === "error", CONNECT_TIMEOUT_MS, "start_run");
-  if (rec.msg.type === "error") fail(`start_run rejected: ${rec.msg.reason ?? "(no reason given)"}`);
-  return rec.msg.runId;
-}
-
-async function runLevel(host, runId, level) {
-  host.send({ type: "start_level", level });
-  const spawnRec = await waitFor(host, isMsg("spawn_set", { runId, level }), SPAWN_OR_OPEN_TIMEOUT_MS, `spawn_set for level ${level}`);
-  const openRec = await waitFor(host, isMsg("vote_open", { runId, level }), SPAWN_OR_OPEN_TIMEOUT_MS, `vote_open for level ${level}`);
-  if (spawnRec.t > openRec.t) {
-    fail(`level ${level}: vote_open arrived before spawn_set — the session must open during the collapse window, after the level starts`);
-  }
-  return { spawn: spawnRec.msg, open: openRec.msg };
-}
-
-async function awaitClose(host, runId, sessionId) {
-  const rec = await waitFor(host, isMsg("vote_closed", { runId, sessionId }), CLOSE_TIMEOUT_MS, `vote_closed for session ${sessionId}`);
-  return rec.msg;
-}
-
-async function voteAll(entries, runId, sessionId) {
-  for (const [client, optionId] of entries) {
-    client.send({ type: "vote", optionId });
-    await waitFor(client, isMsg("vote_update", { runId, sessionId, voter: client.clientId }), CONNECT_TIMEOUT_MS, "ack of a vote");
-  }
-}
-
-const countIn = (list, id) => list.filter((x) => x === id).length;
-
-function multisetEqual(a, b) {
-  if (a.length !== b.length) return false;
-  const s = [...a].sort();
-  const t = [...b].sort();
-  return s.every((v, i) => v === t[i]);
-}
-
-function fullCapSeeding() {
-  const out = [];
-  for (const entry of ENEMIES) for (let i = 0; i < entry.cap; i++) out.push(entry.id);
-  return out;
-}
-
-// ---------------------------------------------------------------------------
-// Checks
-// ---------------------------------------------------------------------------
-async function checkSessionAtEveryLevel(base) {
-  const [host, two, three] = await openRoom(base);
-  try {
-    const runId = await startRun(host, { seed: 1101 });
-    for (const level of [1, 2, 3, 4]) {
-      const { open } = await runLevel(host, runId, level);
-      await awaitClose(host, runId, open.sessionId);
-    }
-  } finally {
-    closeAll([host, two, three]);
-  }
-}
-
-async function checkOptionsShape(base) {
-  const [host, two, three] = await openRoom(base);
-  try {
-    const runId = await startRun(host, { seed: 1201 });
-    for (const level of [1, 2]) {
-      const { open } = await runLevel(host, runId, level);
-      const options = open.options;
-      if (!Array.isArray(options) || options.length !== 3) {
-        fail(`level ${level}: offered ${JSON.stringify(options?.length)} options, want exactly 3`);
-      }
-      const ids = new Set();
-      for (const option of options) {
-        if (typeof option?.id !== "string" || option.id === "") fail(`level ${level}: option without an id: ${JSON.stringify(option)}`);
-        if (!isKnownEnemy(option.id)) fail(`level ${level}: option id ${JSON.stringify(option.id)} is not an enemy from design/ENEMY_REGISTRY.md`);
-        if (typeof option?.name !== "string" || option.name === "") fail(`level ${level}: option ${option.id} has no name`);
-        if (option?.kind !== "permanent" && option?.kind !== "temporary") {
-          fail(`level ${level}: option ${option.id} kind ${JSON.stringify(option?.kind)} is neither "permanent" nor "temporary"`);
-        }
-        if (ids.has(option.id)) fail(`level ${level}: duplicate option ${option.id}`);
-        ids.add(option.id);
-      }
-      await awaitClose(host, runId, open.sessionId);
-    }
-  } finally {
-    closeAll([host, two, three]);
-  }
-}
-
-async function checkMajorityWins(base) {
-  const [host, two, three] = await openRoom(base);
-  try {
-    const runId = await startRun(host, { seed: 1301 });
-    const { open } = await runLevel(host, runId, 1);
-    const want = open.options[0].id;
-    const other = open.options[1].id;
-    await voteAll([[host, want], [two, want], [three, other]], runId, open.sessionId);
-    const closed = await awaitClose(host, runId, open.sessionId);
-    if (closed.winnerId !== want) {
-      fail(`three clients voted 2-1 for ${JSON.stringify(want)}, but the winner was ${JSON.stringify(closed.winnerId)} — the majority option must win`);
-    }
-  } finally {
-    closeAll([host, two, three]);
-  }
-}
-
-async function checkTieRules(base) {
-  // (a) 1-1 tie between two options: the host's vote breaks the tie.
-  {
-    const [host, two, three] = await openRoom(base);
-    try {
-      const runId = await startRun(host, { seed: 1401 });
-      const { open } = await runLevel(host, runId, 1);
-      const hostPick = open.options[0].id;
-      const otherPick = open.options[1].id;
-      await voteAll([[host, hostPick], [two, otherPick]], runId, open.sessionId);
-      const closed = await awaitClose(host, runId, open.sessionId);
-      if (closed.winnerId !== hostPick) {
-        fail(`1-1 tie with the host voting ${JSON.stringify(hostPick)} resolved to ${JSON.stringify(closed.winnerId)} — a tie must go to the host's vote`);
-      }
-    } finally {
-      closeAll([host, two, three]);
-    }
-  }
-  // (b) tie with no host vote: the same seed and level must pick the same winner on a re-run.
-  {
-    const winners = [];
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const [host, two, three] = await openRoom(base);
-      try {
-        const runId = await startRun(host, { seed: 1402 });
-        const { open } = await runLevel(host, runId, 1);
-        await voteAll([[two, open.options[0].id], [three, open.options[1].id]], runId, open.sessionId);
-        const closed = await awaitClose(host, runId, open.sessionId);
-        winners.push(closed.winnerId);
-      } finally {
-        closeAll([host, two, three]);
-      }
-    }
-    if (winners[0] !== winners[1]) {
-      fail(`no-host-vote ties resolved differently on identical re-runs (seed 1402, level 1): ${JSON.stringify(winners)} — the server pick must be deterministic`);
-    }
-  }
-}
-
-async function checkPermanence(base) {
-  const [host, two, three] = await openRoom(base);
-  try {
-    const runId = await startRun(host, { seed: 1501 });
-    const first = await runLevel(host, runId, 1);
-    const winner = first.open.options[0].id;
-    await voteAll([[host, winner], [two, winner], [three, winner]], runId, first.open.sessionId);
-    const closed = await awaitClose(host, runId, first.open.sessionId);
-    if (closed.winnerId !== winner) fail(`unanimous vote for ${JSON.stringify(winner)} resolved to ${JSON.stringify(closed.winnerId)}`);
-    const second = await runLevel(host, runId, 2);
-    if (!second.spawn.enemies.includes(winner)) {
-      fail(`winner ${winner} is missing from level 2's spawn set — the vote winner must become permanent`);
-    }
-    if (countIn(second.spawn.permanents, winner) !== 1) {
-      fail(`level 2 spawn set holds ${JSON.stringify(second.spawn.permanents)} — want exactly one permanent ${winner}`);
-    }
-    await awaitClose(host, runId, second.open.sessionId);
-    const third = await runLevel(host, runId, 3);
-    if (countIn(third.spawn.permanents, winner) < 1) {
-      fail(`winner ${winner} vanished by level 3 — permanence must hold for later levels`);
-    }
-  } finally {
-    closeAll([host, two, three]);
-  }
-}
-
-async function checkCapAwarePool(base) {
-  const [host, two, three] = await openRoom(base);
-  try {
-    const seeded = ["pallbearer", "pallbearer"]; // selection_cap 2 -> already reached
-    const runId = await startRun(host, { seed: 1601, permanents: seeded });
-    const { open } = await runLevel(host, runId, 1);
-    for (const option of open.options) {
-      if (!isKnownEnemy(option.id)) fail(`offered option ${JSON.stringify(option.id)} is not in the frozen registry`);
-      const held = countIn(seeded, option.id);
-      if (held >= capOf(option.id)) {
-        fail(`${option.id} offered although ${held} permanents already reach its selection_cap (${capOf(option.id)})`);
-      }
-      if (option.kind !== "permanent") {
-        fail(`option ${option.id} offered as ${JSON.stringify(option.kind)} — a normal-pool option must be permanent`);
-      }
-    }
-    await awaitClose(host, runId, open.sessionId);
-  } finally {
-    closeAll([host, two, three]);
-  }
-}
-
-async function checkMinLevelGate(base) {
-  const [host, two, three] = await openRoom(base);
-  try {
-    const runId = await startRun(host, { seed: 1701 });
-    const { open } = await runLevel(host, runId, 1);
-    for (const option of open.options) {
-      const min = minLevelOf(option.id);
-      if (min === undefined) fail(`offered option ${JSON.stringify(option.id)} is not in the frozen registry`);
-      if (min > 1) fail(`level 1 offered ${option.id} whose min_level is ${min} — nothing above the current level may be offered`);
-    }
-    await awaitClose(host, runId, open.sessionId);
-  } finally {
-    closeAll([host, two, three]);
-  }
-}
-
-async function checkOverflowTemporary(base) {
-  const [host, two, three] = await openRoom(base);
-  try {
-    const seeded = fullCapSeeding(); // every entry at its selection_cap -> empty pool
-    const runId = await startRun(host, { seed: 1801, permanents: seeded });
-    const first = await runLevel(host, runId, 1);
-    if (!multisetEqual(first.spawn.permanents, seeded)) {
-      fail(`level 1 spawn set permanents ${JSON.stringify(first.spawn.permanents)} do not match the ${seeded.length} seeded permanents`);
-    }
-    if (first.spawn.temporaries.length !== 0) {
-      fail(`level 1 already reports temporaries ${JSON.stringify(first.spawn.temporaries)}`);
-    }
-    if (!Array.isArray(first.open.options) || first.open.options.length < 1) {
-      fail("overflow session offered no options — the run must not skip the enemy slot");
-    }
-    for (const option of first.open.options) {
-      if (!isKnownEnemy(option.id)) fail(`overflow option ${JSON.stringify(option.id)} is not a known enemy`);
-      if (option.kind !== "temporary") {
-        fail(`with every entry capped, option ${option.id} is offered as ${JSON.stringify(option.kind)} — overflow options must be temporary`);
-      }
-    }
-    const winner = first.open.options[0].id;
-    await voteAll([[host, winner], [two, winner], [three, winner]], runId, first.open.sessionId);
-    const closed = await awaitClose(host, runId, first.open.sessionId);
-    if (closed.temporary !== true) {
-      fail(`vote_closed reports temporary = ${JSON.stringify(closed.temporary)} — an overflow winner must be temporary`);
-    }
-    const second = await runLevel(host, runId, 2);
-    if (countIn(second.spawn.permanents, winner) !== countIn(seeded, winner)) {
-      fail(`overflow winner ${winner} added a permanent copy (level 2 permanents ${JSON.stringify(second.spawn.permanents)}) — overflow must never add a permanent`);
-    }
-    if (!second.spawn.temporaries.includes(winner)) {
-      fail(`overflow winner ${winner} missing from level 2's temporaries (${JSON.stringify(second.spawn.temporaries)})`);
-    }
-    await awaitClose(host, runId, second.open.sessionId);
-    const third = await runLevel(host, runId, 3);
-    if (third.spawn.temporaries.includes(winner)) {
-      fail(`overflow winner ${winner} still present at level 3 — temporary copies are removed when their level ends`);
-    }
-    if (!multisetEqual(third.spawn.permanents, seeded)) {
-      fail(`level 3 permanents drifted from the seeded set: ${JSON.stringify(third.spawn.permanents)}`);
-    }
-  } finally {
-    closeAll([host, two, three]);
-  }
-}
-
-async function checkRejoinSafety(base) {
-  const [host, two, three] = await openRoom(base);
-  const extras = [];
-  try {
-    const runId = await startRun(host, { seed: 1901 });
-    const { open } = await runLevel(host, runId, 1);
-    const preserved = open.options[0].id; // the rejoiner's pre-disconnect pick
-    const majorityPick = open.options[1].id;
-    two.send({ type: "vote", optionId: preserved });
-    await waitFor(two, isMsg("vote_update", { runId, sessionId: open.sessionId, voter: two.clientId }), CONNECT_TIMEOUT_MS, "ack of the first vote");
-    two.close();
-    const rejoiner = await connectClient(base, "kit-1", two.token);
-    extras.push(rejoiner);
-    if (rejoiner.welcome.rejoin !== true) {
-      fail(`server treated the reconnecting client as new (welcome.rejoin = ${JSON.stringify(rejoiner.welcome.rejoin)})`);
-    }
-    if (rejoiner.welcome.clientId !== two.clientId) {
-      fail(`rejoined client kept identity ${JSON.stringify(two.clientId)} but was assigned ${JSON.stringify(rejoiner.welcome.clientId)}`);
-    }
-    if (rejoiner.welcome.host !== false) fail("rejoined client unexpectedly became the host");
-    // host votes the other option; the third client votes the rejoiner's option. If the
-    // pre-disconnect vote was kept: 2-1 for it. If it was forgotten: 1-1 tie that the host
-    // tie-breaks toward the other option. The winner tells the two cases apart.
-    await voteAll([[host, majorityPick], [three, preserved]], runId, open.sessionId);
-    const closed = await awaitClose(host, runId, open.sessionId);
-    if (closed.winnerId !== preserved) {
-      fail(`a client that disconnects and rejoins keeps its vote: expected ${JSON.stringify(preserved)} (its vote + client 2 = 2-1), got ${JSON.stringify(closed.winnerId)}`);
-    }
-  } finally {
-    closeAll([host, two, three, ...extras]);
-  }
-}
-
-async function checkCountdownLateVote(base) {
-  const [host, two, three] = await openRoom(base);
-  try {
-    const runId = await startRun(host, { seed: 2001 });
-    host.send({ type: "start_level", level: 1 });
-    const openRec = await waitFor(host, isMsg("vote_open", { runId, level: 1 }), SPAWN_OR_OPEN_TIMEOUT_MS, "vote_open for level 1");
-    // nobody votes: the countdown must close the session on its own.
-    const closed = await awaitClose(host, runId, openRec.msg.sessionId);
-    if (closed.winnerId == null) fail("countdown closed the session without reporting a winner");
-    for (const client of [host, two, three]) client.send({ type: "vote", optionId: openRec.msg.options[0].id });
-    const rejected = await waitFor(
-      [host, two, three],
-      (r) => r.msg.type === "vote_rejected" || r.msg.type === "error",
-      REJECT_TIMEOUT_MS,
-      "rejection of a late vote after the countdown closed the session",
-    );
-    if (rejected.msg.type === "error" && typeof rejected.msg.reason !== "string") {
-      fail("late vote produced an error message without a reason");
-    }
-  } finally {
-    closeAll([host, two, three]);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Suite driver
-// ---------------------------------------------------------------------------
-async function runSuite(base, { log = console.log, only = null } = {}) {
+async function realMode(url) {
+  const harness = new Harness(url);
   const results = [];
-  for (const [name, check] of CHECKS) {
-    if (only && !only.has(name)) continue;
-    try {
-      await check(base);
-      results.push({ name, pass: true });
-      log(`PASS - ${name}`);
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      results.push({ name, pass: false, detail });
-      log(`FAIL - ${name}: ${detail}`);
+  const push = (name, ok, detail) => results.push({ name, ok, detail });
+
+  try {
+    const client = await harness.connect('kit-real');
+    sendClient(client, { type: 'Hello', protocol_version: PROTOCOL_VERSION, name: 'kit-real' });
+    sendClient(client, { type: 'Vote', option: 0 });
+
+    const welcome = await harness.waitForAny(
+      client,
+      (entry) => Boolean(entry.msg && entry.msg.type === 'Welcome'),
+      8000,
+    );
+    if (!welcome) {
+      push('real-welcome', false, 'no Welcome arrived within 8000ms');
+    } else if (welcome.msg.protocol_version !== PROTOCOL_VERSION) {
+      push(
+        'real-welcome',
+        false,
+        'Welcome carried protocol_version ' + welcome.msg.protocol_version +
+          ', expected ' + PROTOCOL_VERSION,
+      );
+    } else {
+      push('real-welcome', true, 'Welcome decoded at protocol version ' + PROTOCOL_VERSION);
     }
-    await sleep(150); // let the server reap the closed client sockets between checks
+
+    const runState = await harness.waitForAny(
+      client,
+      (entry) => Boolean(entry.msg && entry.msg.type === 'RunState'),
+      8000,
+    );
+    if (!runState) {
+      push('real-runstate', false, 'no RunState arrived within 8000ms');
+    } else if (!runState.msg.info || !KNOWN_PHASES.includes(runState.msg.info.phase)) {
+      push(
+        'real-runstate',
+        false,
+        'RunState carried an unknown phase: ' + safeJson(runState.msg.info),
+      );
+    } else {
+      push(
+        'real-runstate',
+        true,
+        'RunState phase ' + runState.msg.info.phase + ' at level ' + runState.msg.info.level,
+      );
+    }
+
+    const error = await harness.waitForAny(
+      client,
+      (entry) => Boolean(entry.msg && entry.msg.type === 'Error'),
+      4000,
+    );
+    if (!error) {
+      push(
+        'real-vote-outside-session',
+        false,
+        'a Vote sent with no session open produced no Error',
+      );
+    } else if (typeof error.msg.code !== 'number' || typeof error.msg.message !== 'string') {
+      push(
+        'real-vote-outside-session',
+        false,
+        'Error frame is malformed: ' + JSON.stringify(error.msg),
+      );
+    } else {
+      push(
+        'real-vote-outside-session',
+        true,
+        'Vote outside a session rejected with code ' + error.msg.code,
+      );
+    }
+  } finally {
+    harness.dispose();
   }
-  return results;
+
+  const badTransport = reportTextFrames(harness.textFrames);
+  const ok = report('real smoke against ' + url, results);
+  return ok && !badTransport;
 }
 
-async function startStub(violation) {
-  const child = spawn(process.execPath, [STUB_PATH, "0"], {
-    stdio: ["ignore", "pipe", "inherit"],
-    env: { ...process.env, VOTE_STUB_VIOLATION: violation },
-  });
-  const url = await new Promise((resolve, reject) => {
-    let out = "";
-    child.stdout?.on("data", (chunk) => {
-      out += chunk;
-      const match = out.match(/listening on (ws?:\/\/\S+)/);
-      if (match) resolve(match[1]);
+function spawnStub(violation) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(process.execPath, [STUB_PATH], {
+      env: {
+        ...process.env,
+        VOTE_STUB_PORT: '0',
+        VOTE_STUB_LEVEL_MS: '150',
+        VOTE_STUB_DRAFT_MS: '100',
+        VOTE_STUB_COUNTDOWN_S: '1',
+        VOTE_STUB_VIOLATION: violation,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
-    child.once("exit", (code) => reject(new Error(`stub exited early (code ${code})`)));
+
+    const stderrRef = { text: '' };
+    let stdout = '';
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGKILL');
+      rejectPromise(
+        new Error('stub did not report a port within 10000ms\n' + stderrRef.text),
+      );
+    }, 10000);
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8');
+      const match = stdout.match(/ws:\/\/127\.0\.0\.1:(\d+)/);
+      if (match && !settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolvePromise({ url: 'ws://127.0.0.1:' + match[1], child, stderrRef });
+      }
+    });
+
+    child.stderr.on('data', (chunk) => {
+      stderrRef.text += chunk.toString('utf8');
+    });
+
+    child.on('exit', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      rejectPromise(
+        new Error('stub exited with code ' + code + ' before reporting a port\n' + stderrRef.text),
+      );
+    });
   });
-  return { child, url };
 }
 
-async function runSelftest() {
-  let ok = true;
-  {
-    const stub = await startStub("");
-    let failing = [];
+async function selftest() {
+  const cases = [
+    { label: 'faithful', violation: '', expect: [] },
+    { label: 'majority_inverted', violation: 'majority_inverted', expect: ['majority-wins'] },
+    { label: 'tie_ignored', violation: 'tie_ignored', expect: ['tie-rules'] },
+    { label: 'cap_ignored', violation: 'cap_ignored', expect: ['cap-aware-pool'] },
+    { label: 'permanence_dropped', violation: 'permanence_dropped', expect: ['permanence'] },
+    { label: 'rejoin_forgotten', violation: 'rejoin_forgotten', expect: ['rejoin-safety'] },
+    { label: 'late_vote_accepted', violation: 'late_vote_accepted', expect: ['countdown-late-vote'] },
+  ];
+
+  const pool = loadPool();
+  let failures = 0;
+
+  for (const testCase of cases) {
+    let stub = null;
+    let results = [];
+    let textFrames = [];
+    let thrown = null;
+
     try {
-      failing = (await runSuite(stub.url)).filter((r) => !r.pass).map((r) => r.name);
+      stub = await spawnStub(testCase.violation);
+      const data = await driveStub(stub.url, pool);
+      results = evaluate(data, pool);
+      textFrames = data.textFrames;
     } catch (error) {
-      failing = [error instanceof Error ? error.message : String(error)];
+      thrown = error;
     } finally {
-      stub.child.kill();
+      if (stub) stub.child.kill('SIGKILL');
     }
-    ok = ok && failing.length === 0;
-    console.log(failing.length === 0
-      ? "self-test ok: the faithful stub passes the full check suite"
-      : `self-test FAIL: faithful stub must pass everything, failing: ${failing.join(", ")}`);
-  }
-  for (const [violation, check] of VIOLATIONS) {
-    const stub = await startStub(violation);
-    let failing = [];
-    try {
-      failing = (await runSuite(stub.url, { only: new Set([check]) })).filter((r) => !r.pass).map((r) => r.name);
-    } catch (error) {
-      failing = [error instanceof Error ? error.message : String(error)];
-    } finally {
-      stub.child.kill();
+
+    const failed = results.filter((result) => !result.ok).map((result) => result.name);
+    const label = testCase.violation === '' ? 'faithful' : testCase.violation;
+
+    if (thrown) {
+      failures += 1;
+      process.stdout.write('voting-conformance: selftest ' + label + ' FAILED to run\n');
+      process.stdout.write('  ' + String(thrown.message).split('\n').join('\n  ') + '\n');
+      if (stub && stub.stderrRef.text) {
+        process.stdout.write('  stub stderr: ' + stub.stderrRef.text.trim() + '\n');
+      }
+      continue;
     }
-    const caught = failing.includes(check);
-    ok = ok && caught;
-    console.log(caught
-      ? `self-test ok: violation "${violation}" trips "${check}"`
-      : `self-test FAIL: violation "${violation}" did not trip "${check}" (failing: ${failing.join(", ") || "nothing"})`);
+
+    if (textFrames.length > 0) {
+      failures += 1;
+      process.stdout.write('voting-conformance: selftest ' + label + ' FAILED (text frame)\n');
+      reportTextFrames(textFrames);
+      continue;
+    }
+
+    if (testCase.expect.length === 0) {
+      const ok = report('selftest ' + label, results);
+      if (!ok) failures += 1;
+      continue;
+    }
+
+    const missing = testCase.expect.filter((name) => !failed.includes(name));
+    const ok = missing.length === 0;
+    process.stdout.write(
+      'voting-conformance: selftest ' + label + ' ' + (ok ? 'PASS' : 'FAIL') + '\n',
+    );
+    process.stdout.write('  expected failures: ' + testCase.expect.join(', ') + '\n');
+    process.stdout.write(
+      '  observed failures: ' + (failed.length > 0 ? failed.join(', ') : '(none)') + '\n',
+    );
+    if (!ok) {
+      failures += 1;
+      process.stdout.write('  missing: ' + missing.join(', ') + '\n');
+    }
   }
-  console.log(ok ? "self-test: PASSED" : "self-test: FAILED");
-  return ok ? 0 : 1;
+
+  process.stdout.write(
+    'voting-conformance: selftest ' + (failures === 0 ? 'green' : failures + ' case(s) failed') + '\n',
+  );
+  return failures === 0;
 }
 
-const argValue = (name) => {
-  const i = process.argv.indexOf(name);
-  return i !== -1 && i + 1 < process.argv.length ? process.argv[i + 1] : null;
-};
+/* ------------------------------------------------------------------ *
+ * Entry point
+ * ------------------------------------------------------------------ */
+
+function argValue(argv, flag) {
+  const index = argv.indexOf(flag);
+  if (index >= 0 && index + 1 < argv.length) return argv[index + 1];
+  const prefix = flag + '=';
+  const hit = argv.find((arg) => arg.startsWith(prefix));
+  return hit ? hit.slice(prefix.length) : null;
+}
 
 async function main() {
-  if (process.argv.includes("--selftest")) return runSelftest();
-  const raw = argValue("--url") ?? process.env.VOTING_URL ?? "";
-  if (raw.trim() === "") {
-    console.log('voting-conformance: skipped (no server to test; set VOTING_URL=<ws url> or pass --url <ws url>)');
-    return 0;
+  const argv = process.argv.slice(2);
+  const url = argValue(argv, '--url') || process.env.VOTING_URL || '';
+
+  if (argv.includes('--selftest')) {
+    const ok = await selftest();
+    process.exitCode = ok ? 0 : 1;
+    return;
   }
-  let base;
-  try {
-    base = normalizeWsUrl(raw);
-  } catch (error) {
-    console.error(`voting-conformance: aborted - ${error instanceof Error ? error.message : String(error)}`);
-    return 2;
+
+  if (argv.includes('--real')) {
+    if (!url) {
+      process.stderr.write('voting-conformance: --real needs --url or VOTING_URL\n');
+      process.exitCode = 2;
+      return;
+    }
+    const ok = await realMode(url);
+    process.exitCode = ok ? 0 : 1;
+    return;
   }
-  const results = await runSuite(base);
-  const failed = results.filter((r) => !r.pass);
-  console.log(`voting-conformance: ${results.length - failed.length}/${results.length} checks passed against ${base}`);
-  return failed.length === 0 ? 0 : 1;
+
+  if (!url) {
+    process.stdout.write('voting-conformance: skipped (set VOTING_URL or pass --url)\n');
+    process.exitCode = 0;
+    return;
+  }
+
+  const ok = await stubMode(url);
+  process.exitCode = ok ? 0 : 1;
 }
 
-process.exit(await main());
+main().catch((error) => {
+  process.stderr.write('voting-conformance: ' + (error && error.stack ? error.stack : String(error)) + '\n');
+  process.exitCode = 1;
+});
+

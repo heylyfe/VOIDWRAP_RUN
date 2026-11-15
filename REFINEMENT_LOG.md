@@ -140,3 +140,99 @@ Release: `v0.11.0-alpha.1`.
 - Hush's HUD gift-hint half; CHAOS-exclusive curse pool; radar HUD fed by the server;
   five enemy-specific achievement events; lobby poll theme → server; matchmaker
   `phase: "voting"`; `release-notes/` stops at `v0.6.0-alpha.1`.
+
+---
+
+## Cycle 2 — 2026-11-15
+
+### Audit baseline (measured at the start of the cycle)
+
+| Audit | Result |
+|---|---|
+| Matchmaker conformance | 8/8 PASS |
+| Voting conformance | 0/10 against the real server; 3/10 against its own stub |
+| Pattern audit | 10 of 13 PASS (after Cycle 1's T-092) |
+| Economy audit | 7/8 |
+
+### Tickets
+
+| Ticket | Agent | Picked because | Result |
+|---|---|---|---|
+| T-094 voting kit wiring | deepseek | the kit still scored 0/10 against the real server | **PARTIAL** |
+| T-095 dead-end patterns | deepseek | `2.tag-diversity.mechs` failed with `dead_end` never offered | **PASS** |
+
+### T-095 — PASS
+
+`server/crates/sim/src/pattern.rs`: the walk pool at line 665 filtered to
+`ChunkRole::Path | ChunkRole::Junction`, so a dead-end pattern could never enter it
+and `allowed_after`'s dead-end rule was unreachable. A dead-end has no exit socket,
+so it can only terminate a plan: the final slot now offers dead-ends when a seeded
+roll (`dead_end_roll`, a splitmix64 finalizer over seed/level/players) falls under
+`DEAD_END_CHANCE = 0.25`, and the pick is forced rather than added to the pool so the
+bag's theme and history weights cannot dilute the rate. Five tests: a dead-end can
+terminate a plan, never appears mid-plan, the same seed reproduces, a catalog with no
+dead-ends is unchanged, and the observed rate lands in 0.10..0.45.
+
+The worker's patch was unusable — it invented `PatternEngine`, `Tier::Standard`,
+`engine.compose` and `plan.chunks`, none of which exist. Implemented against the real
+`CompositionPlan::build_with_len` API instead.
+
+Measured after regenerating the dump: `2.tag-diversity.mechs` **PASS**, 10 of 13
+metrics green (was 9). `4.near-duplicates` 20.33%, `5.heights` 13.49%,
+`5.reference-scale` 25.94% are unchanged — all three are geometry distributions, not
+tag-selection problems.
+
+### T-094 — PARTIAL, stub selftest PARKED
+
+The kit now speaks bincode. `tools/voting-conformance/run.mjs` sends
+`encodeClientMsg` as binary frames and decodes with `decodeServerMsg`; the invented
+`start_run`/`start_level` vocabulary is gone. **`--real` passes 3/3 against the live
+server** — `real-welcome` (Welcome at protocol version 8), `real-runstate` (RunState
+phase 0 at level 1), `real-vote-outside-session` (a Vote outside a session is
+rejected with code 409). That is the first time this kit has proven anything about
+the real voting core.
+
+Getting there required fixing four things the worker got wrong, all of which are
+findings in their own right:
+
+- `wire.mjs`'s `STRUCT_FIELDS` table was invented. The real shapes are
+  `VoteOption {index, id, name, kind}`, `DraftCard {kind, id}`,
+  `ShopItem {id, cost, stock}`, and `RunInfo {phase, level, lives, currency, Tuning,
+  fog_density_mul, enemies, upgrades, curses}` with `Tuning` carrying seven fields.
+  The invented table decoded a real `RunState` into `{seed, level, hp, max_hp, gold,
+  class}`. Corrected; `wire.mjs --selftest` is 24/24 again with the real layouts.
+- The kit names messages by `type`, `wire.mjs` by `variant`; both directions now
+  normalise.
+- The stub had its own hand-rolled codec with **compact** variant indices
+  (`RunState: 1`, `Error: 6`) instead of the real ones (`RunState: 6`, `Error: 4`),
+  so every frame it emitted was garbage on the real wire. Corrected, along with its
+  `RunInfo`, `VoteOption` and `Writer.f32`.
+- The kit JSON-stringified a decoded message containing BigInt u64 fields.
+
+**PARKED: the stub selftest.** After the codec fixes the faithful stub reaches 6 of
+10 checks. The four that still fail (`session-at-every-level` sees only level 1,
+`tie-rules`, `rejoin-safety`, `countdown-late-vote`) are all stub *progression*
+problems: the stub does not advance past its first session within the kit's window,
+so the checks that need a second and third session never run. Three attempts were
+spent; per the discipline rule it is parked rather than ground further. The kit is
+env-gated in `just verify`, so the gate stays green.
+
+### Merges and release
+
+`just verify` fully green: 127 server / 234 sim / 279 vitest, clippy `-D warnings`,
+protocol-gen --check, check-names, validate-content.
+
+Release: `v0.12.0-alpha.1`.
+
+### Top 3 candidates for Cycle 3
+
+1. **Finish the stub progression** (T-096). The stub must run three sessions inside
+   the kit's window and reject a vote sent after `VoteResult`. Everything else in the
+   kit is now correct, so this is the last piece before the ten-check matrix means
+   something again.
+2. **`5.heights` / `5.reference-scale`** (13.49% and 25.94% against 2% and 10%). Both
+   are pattern-geometry distributions. The lever is the pattern library's height and
+   footprint spread plus the engine's weighting, not tagging.
+3. **`4.near-duplicates`** (20.33% against 0.2%). 161,579 near-duplicate pairs over
+   3,000 levels. Needs a dedup lever in the generator — a repeat penalty on the
+   pattern set, or chunk variants.

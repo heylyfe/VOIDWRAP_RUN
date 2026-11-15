@@ -74,28 +74,35 @@ const STRUCT_FIELDS = Object.freeze({
     ['id', 'string'],
     ['name', 'string'],
     ['kind', 'u8'],
-    ['permanent', 'bool'],
   ]),
   DraftCard: Object.freeze([
-    ['id', 'string'],
-    ['name', 'string'],
     ['kind', 'u8'],
-    ['rarity', 'u8'],
-    ['cost', 'u8'],
+    ['id', 'string'],
   ]),
   ShopItem: Object.freeze([
     ['id', 'string'],
-    ['name', 'string'],
-    ['price', 'u32'],
-    ['kind', 'u8'],
+    ['cost', 'u32'],
+    ['stock', 'u8'],
+  ]),
+  Tuning: Object.freeze([
+    ['run_speed_mul', 'f32'],
+    ['jump_mul', 'f32'],
+    ['gravity_mul', 'f32'],
+    ['dash_speed_mul', 'f32'],
+    ['dash_cooldown_mul', 'f32'],
+    ['air_jumps', 'u8'],
+    ['friction_mul', 'f32'],
   ]),
   RunInfo: Object.freeze([
-    ['seed', 'u64'],
+    ['phase', 'u8'],
     ['level', 'u32'],
-    ['hp', 'u32'],
-    ['max_hp', 'u32'],
-    ['gold', 'u32'],
-    ['class', 'u8'],
+    ['lives', 'u32'],
+    ['currency', 'u32'],
+    ['tuning', 'Tuning'],
+    ['fog_density_mul', 'f32'],
+    ['enemies', 'vec:string'],
+    ['upgrades', 'vec:string'],
+    ['curses', 'vec:string'],
   ]),
 });
 
@@ -572,6 +579,11 @@ const bstr = (s) => {
   return Buffer.concat([b64(u.length), u]);
 };
 const cat = (...parts) => Buffer.concat(parts);
+const bf32 = (v) => {
+  const b = Buffer.alloc(4);
+  b.writeFloatLE(v, 0);
+  return b;
+};
 
 function hex(buf) {
   let s = '';
@@ -690,12 +702,10 @@ function runSelfTest() {
       bstr('a'),
       bstr('Alpha'),
       b8(1),
-      b8(0), // option 0: index 0, id "a", name "Alpha", kind 1, permanent false
       b8(1),
       bstr('bb'),
       bstr('B\u00e9ta'),
       b8(2),
-      b8(1), // option 1: index 1, id "bb", name "Béta", kind 2, permanent true
       b16(15), // countdown_s
     );
     const msg = decodeServerMsg(buf);
@@ -706,12 +716,10 @@ function runSelfTest() {
     eq(msg.options[0].id, 'a', 'options[0].id');
     eq(msg.options[0].name, 'Alpha', 'options[0].name');
     eq(msg.options[0].kind, 1, 'options[0].kind');
-    eq(msg.options[0].permanent, false, 'options[0].permanent');
     eq(msg.options[1].index, 1, 'options[1].index');
     eq(msg.options[1].id, 'bb', 'options[1].id');
     eq(msg.options[1].name, 'B\u00e9ta', 'options[1].name');
     eq(msg.options[1].kind, 2, 'options[1].kind');
-    eq(msg.options[1].permanent, true, 'options[1].permanent');
     eq(msg.countdown_s, 15, 'countdown_s');
   });
 
@@ -794,21 +802,36 @@ function runSelfTest() {
   check('decode RunState', () => {
     const buf = cat(
       b32(6),
-      b64(0x0123456789abcdefn), // seed
+      b8(1), // phase
       b32(3), // level
-      b32(30), // hp
-      b32(40), // max_hp
-      b32(250), // gold
-      b8(2), // class
+      b32(4), // lives
+      b32(250), // currency
+      bf32(1.1), // tuning.run_speed_mul
+      bf32(1.2), // tuning.jump_mul
+      bf32(0.9), // tuning.gravity_mul
+      bf32(1.3), // tuning.dash_speed_mul
+      bf32(0.8), // tuning.dash_cooldown_mul
+      b8(2), // tuning.air_jumps
+      bf32(1.4), // tuning.friction_mul
+      bf32(0.5), // fog_density_mul
+      b64(1),
+      bstr('rewind'), // enemies
+      b64(1),
+      bstr('zephyr_tread'), // upgrades
+      b64(1),
+      bstr('leadened_soles'), // curses
     );
     const msg = decodeServerMsg(buf);
     eq(msg.variant, 'RunState', 'variant');
-    eq(msg.info.seed, 0x0123456789abcdefn, 'info.seed');
+    eq(msg.info.phase, 1, 'info.phase');
     eq(msg.info.level, 3, 'info.level');
-    eq(msg.info.hp, 30, 'info.hp');
-    eq(msg.info.max_hp, 40, 'info.max_hp');
-    eq(msg.info.gold, 250, 'info.gold');
-    eq(msg.info.class, 2, 'info.class');
+    eq(msg.info.lives, 4, 'info.lives');
+    eq(msg.info.currency, 250, 'info.currency');
+    eq(msg.info.tuning.air_jumps, 2, 'info.tuning.air_jumps');
+    eq(msg.info.fog_density_mul, 0.5, 'info.fog_density_mul');
+    eq(msg.info.enemies[0], 'rewind', 'info.enemies[0]');
+    eq(msg.info.upgrades[0], 'zephyr_tread', 'info.upgrades[0]');
+    eq(msg.info.curses[0], 'leadened_soles', 'info.curses[0]');
   });
 
   check('decode Draft', () => {
@@ -817,43 +840,30 @@ function runSelfTest() {
       b8(2), // enemy_picks
       b8(1), // reward_picks
       b64(2), // cards.len
-      bstr('card-a'),
-      bstr('Alpha'),
       b8(1),
-      b8(0),
-      b8(1),
-      bstr('card-b'),
-      bstr('Beta'),
+      bstr('card-a'), // card 0: kind 1, id "card-a"
       b8(2),
-      b8(3),
-      b8(2),
+      bstr('card-b'), // card 1: kind 2, id "card-b"
     );
     const msg = decodeServerMsg(buf);
     eq(msg.variant, 'Draft', 'variant');
     eq(msg.enemy_picks, 2, 'enemy_picks');
     eq(msg.reward_picks, 1, 'reward_picks');
     eq(msg.cards.length, 2, 'cards.length');
-    eq(msg.cards[0].id, 'card-a', 'cards[0].id');
-    eq(msg.cards[0].name, 'Alpha', 'cards[0].name');
     eq(msg.cards[0].kind, 1, 'cards[0].kind');
-    eq(msg.cards[0].rarity, 0, 'cards[0].rarity');
-    eq(msg.cards[0].cost, 1, 'cards[0].cost');
-    eq(msg.cards[1].id, 'card-b', 'cards[1].id');
-    eq(msg.cards[1].name, 'Beta', 'cards[1].name');
+    eq(msg.cards[0].id, 'card-a', 'cards[0].id');
     eq(msg.cards[1].kind, 2, 'cards[1].kind');
-    eq(msg.cards[1].rarity, 3, 'cards[1].rarity');
-    eq(msg.cards[1].cost, 2, 'cards[1].cost');
+    eq(msg.cards[1].id, 'card-b', 'cards[1].id');
   });
 
   check('decode Shop', () => {
-    const buf = cat(b32(8), b64(1), bstr('item-a'), bstr('Potion'), b32(25), b8(4));
+    const buf = cat(b32(8), b64(1), bstr('item-a'), b32(25), b8(4));
     const msg = decodeServerMsg(buf);
     eq(msg.variant, 'Shop', 'variant');
     eq(msg.items.length, 1, 'items.length');
     eq(msg.items[0].id, 'item-a', 'items[0].id');
-    eq(msg.items[0].name, 'Potion', 'items[0].name');
-    eq(msg.items[0].price, 25, 'items[0].price');
-    eq(msg.items[0].kind, 4, 'items[0].kind');
+    eq(msg.items[0].cost, 25, 'items[0].cost');
+    eq(msg.items[0].stock, 4, 'items[0].stock');
   });
 
   check('decode Notice', () => {
@@ -889,7 +899,6 @@ function runSelfTest() {
       bstr('a'),
       bstr('Alpha'),
       b8(1),
-      b8(0),
       b16(15),
     );
     const cut = full.subarray(0, full.length - 1); // one byte short of countdown_s

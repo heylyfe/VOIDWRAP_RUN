@@ -26,6 +26,13 @@ pub const MIN_PLAN_LEN: usize = 10;
 /// Longest composition plan, in patterns (including the hub).
 pub const MAX_PLAN_LEN: usize = 48;
 
+/// Chance that a plan's final slot is offered a dead-end pattern.
+///
+/// A dead-end pattern has no exit socket, so it can only terminate a plan; the
+/// roll is derived from the plan seed, so the same seed always decides the same
+/// way and every other draw in the plan is untouched.
+const DEAD_END_CHANCE: f64 = 0.25;
+
 // ---------------------------------------------------------------------------
 // Tag vocabularies
 // ---------------------------------------------------------------------------
@@ -667,8 +674,16 @@ impl CompositionPlan {
         if walk.is_empty() {
             return plan;
         }
+        // T-095: a dead-end pattern has no exit socket, so it can only terminate a
+        // plan. It is offered to the final slot only, and only when this plan's
+        // seeded roll says so.
+        let dead_ends: Vec<usize> = (0..metas.len())
+            .filter(|&i| metas[i].role == ChunkRole::DeadEnd && metas[i].min_level <= level)
+            .collect();
+        let offer_dead_end = dead_end_roll(seed, level, players) < DEAD_END_CHANCE;
         while plan.len() < len {
             let previous = plan.indices.last().copied();
+            let last_slot = plan.len() + 1 == len;
             let mut pool: Vec<usize> = walk
                 .iter()
                 .copied()
@@ -677,6 +692,21 @@ impl CompositionPlan {
                         && theme_run(&plan.indices, metas, i) < MAX_THEME_RUN
                 })
                 .collect();
+            if last_slot && offer_dead_end {
+                // The roll fired: the plan terminates on a dead-end. Picking it
+                // outright (rather than adding it to the pool) keeps the observed
+                // rate equal to `DEAD_END_CHANCE` instead of letting the bag's
+                // theme and history weights dilute it.
+                let eligible: Vec<usize> = dead_ends
+                    .iter()
+                    .copied()
+                    .filter(|&i| allowed_after(previous.map(|p| &metas[p]), &metas[i]))
+                    .collect();
+                if let Some(index) = bag.pick(&eligible) {
+                    plan.push(index, metas);
+                    continue;
+                }
+            }
             if pool.len() == 1 && Some(pool[0]) == previous {
                 pool = walk.clone();
             }
@@ -788,6 +818,22 @@ impl<'a> PlanCursor<'a> {
 // ---------------------------------------------------------------------------
 // Composition rules
 // ---------------------------------------------------------------------------
+
+/// The plan's seeded roll for whether the final slot may be a dead-end, `0.0..1.0`.
+///
+/// Derived from the seed, level and player count with a splitmix64 finalizer so it
+/// is independent of the walk RNG: adding dead-ends to a catalog cannot shift any
+/// other pick in the plan.
+fn dead_end_roll(seed: u32, level: u32, players: u32) -> f64 {
+    let mut z = (seed as u64)
+        .wrapping_add(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add((level as u64) << 32)
+        .wrapping_add(players as u64);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    ((z >> 11) as f64) / ((1u64 << 53) as f64)
+}
 
 /// Whether `candidate` may directly follow `previous` under the tag-interaction
 /// rules of `design/PATTERN_FORMAT.md` §6.3.
@@ -931,5 +977,94 @@ mod tests {
         assert_eq!(parse_theme_choice("theme:lava"), None);
         assert_eq!(parse_theme_choice("difficulty:hard"), None);
         assert_eq!(parse_theme_choice(""), None);
+    }
+
+    // ---- T-095: dead-end patterns may terminate a plan -------------------
+
+    /// The two-theme catalog plus one dead-end pattern per theme.
+    fn dead_end_catalog() -> Vec<PatternMeta> {
+        let mut metas = catalog();
+        metas.push(meta("frost_dead_end", ChunkRole::DeadEnd, "frost"));
+        metas.push(meta("ember_dead_end", ChunkRole::DeadEnd, "ember"));
+        metas
+    }
+
+    /// True when `index` names a dead-end pattern in `metas`.
+    fn is_dead_end(metas: &[PatternMeta], index: usize) -> bool {
+        metas[index].role == ChunkRole::DeadEnd
+    }
+
+    #[test]
+    fn a_dead_end_can_terminate_a_plan() {
+        let metas = dead_end_catalog();
+        let mut terminated = 0usize;
+        for seed in 0..64u32 {
+            let plan = CompositionPlan::build_with_len(&metas, seed, 18, 4, 24, 2);
+            assert!(!plan.indices().is_empty(), "seed {seed} produced an empty plan");
+            for (pos, &index) in plan.indices().iter().enumerate() {
+                if is_dead_end(&metas, index) {
+                    assert_eq!(pos, plan.len() - 1, "seed {seed}: dead-end at {pos} of {}", plan.len());
+                    terminated += 1;
+                }
+            }
+        }
+        assert!(terminated > 0, "no plan in the 64-seed sweep ended on a dead-end");
+    }
+
+    #[test]
+    fn a_dead_end_never_appears_mid_plan() {
+        let metas = dead_end_catalog();
+        for seed in 0..64u32 {
+            let plan = CompositionPlan::build_with_len(&metas, seed, 18, 4, 24, 2);
+            let last = plan.len() - 1;
+            for (pos, &index) in plan.indices().iter().enumerate() {
+                if is_dead_end(&metas, index) {
+                    assert_eq!(pos, last, "seed {seed}: dead-end at {pos}, last is {last}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_same_seed_still_reproduces() {
+        let metas = dead_end_catalog();
+        for seed in 0..32u32 {
+            let a = CompositionPlan::build_with_len(&metas, seed, 18, 4, 24, 2);
+            let b = CompositionPlan::build_with_len(&metas, seed, 18, 4, 24, 2);
+            assert_eq!(a.indices(), b.indices(), "seed {seed} did not reproduce");
+        }
+    }
+
+    #[test]
+    fn a_catalog_without_dead_ends_is_unchanged() {
+        let metas = catalog();
+        for seed in 0..64u32 {
+            let plan = CompositionPlan::build_with_len(&metas, seed, 18, 4, 24, 2);
+            assert_eq!(plan.len(), 24, "seed {seed}: plan length changed");
+            assert!(
+                !plan.indices().iter().any(|&i| is_dead_end(&metas, i)),
+                "seed {seed}: a dead-end appeared in a catalog that has none"
+            );
+        }
+    }
+
+    #[test]
+    fn dead_end_chance_is_respected() {
+        let metas = dead_end_catalog();
+        let mut ended = 0usize;
+        let seeds = 512u32;
+        for seed in 0..seeds {
+            let plan = CompositionPlan::build_with_len(&metas, seed, 18, 4, 24, 2);
+            if let Some(&last) = plan.indices().last()
+                && is_dead_end(&metas, last)
+            {
+                ended += 1;
+            }
+        }
+        let fraction = ended as f64 / seeds as f64;
+        assert!(
+            (0.10..=0.45).contains(&fraction),
+            "dead-end termination rate {fraction:.3} is outside 0.10..0.45"
+        );
     }
 }
