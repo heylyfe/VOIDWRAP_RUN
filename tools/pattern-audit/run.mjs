@@ -36,7 +36,9 @@
  */
 
 import { spawn } from 'node:child_process';
-import { createReadStream } from 'node:fs';
+import { createReadStream, readFileSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import readline from 'node:readline';
 import process from 'node:process';
 
@@ -119,6 +121,47 @@ const TH = {
 
   MAX_OUTLIERS: 25,
 };
+
+/**
+ * Every pattern id the shipped catalog declares, read straight from `design/`.
+ *
+ * T-132: three separate bugs in this project shipped a piece that parsed,
+ * validated, was counted by `validate-content`, and never reached a level --
+ * `platform_kind_from_str` missing `"TRIPMINE"`, `verify_socket` rejecting ramps,
+ * and `mech:fork` on a two-socket path. The first two are caught by the strict
+ * parse count assertion; an *eligibility* filter is invisible to it, because the
+ * piece is in the catalog and simply never chosen. This set is what makes that
+ * visible: every id here must appear in at least one generated plan.
+ *
+ * Returns `null` when `design/` cannot be read, so the metric reports SKIP rather
+ * than failing on a checkout that only has a dump.
+ */
+function readCatalogIds() {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const design = join(here, '..', '..', 'design');
+  let files;
+  try {
+    files = readdirSync(design).filter((f) => f === 'chunks.json' || /^patterns-.*\.json$/.test(f));
+  } catch {
+    return null;
+  }
+  if (!files.length) return null;
+  const ids = new Set();
+  for (const f of files) {
+    let doc;
+    try {
+      doc = JSON.parse(readFileSync(join(design, f), 'utf8'));
+    } catch {
+      return null;
+    }
+    for (const c of doc.chunks ?? doc.patterns ?? []) {
+      if (c && typeof c.id === 'string') ids.add(c.id);
+    }
+  }
+  return ids.size ? ids : null;
+}
+
+const CATALOG_IDS = readCatalogIds();
 
 const THEME_VOCAB = ['ember', 'void', 'frost', 'ruin', 'garden', 'machine', 'spire', 'hollow'];
 const MECH_VOCAB = ['climb', 'drop', 'span', 'bounce', 'crawl', 'gauntlet', 'rest', 'loot', 'fork', 'dead_end'];
@@ -235,6 +278,7 @@ function createAggregate() {
     playersSeen: new Set(),
     entries: [], // one per level record
     schemaShortfallLevels: 0, // records without a "patterns" placement list
+    planIds: new Set(), // every pattern id that reached at least one plan
 
     geo: {
       placed: 0,
@@ -478,6 +522,8 @@ function consumeRecord(A, r) {
     if (typeof id === 'string' && id) plan.push(id); else badPlan++;
   }
   if (badPlan) pushRecordError(A, `plan has ${badPlan} non-string entries (${loc({ seed, level, players })})`);
+
+  for (const id of plan) A.planIds.add(id);
 
   const entry = {
     idx: A.entries.length, seed, level, players, plan,
@@ -766,6 +812,24 @@ function report(A, ctx, log) {
     sRate <= TH.SCALE_RATE_MAX,
     `placed patterns with max XZ footprint extent outside [${TH.SCALE_EXTENT_MIN}, ${TH.SCALE_EXTENT_MAX}]u: ${geo.scaleViol}/${geo.placed} (${pctf(sRate)}); threshold <= ${(TH.SCALE_RATE_MAX * 100).toFixed(0)}%; `
     + `by pattern id: ${scaleOwners.length ? scaleOwners.join(' ') : 'none'}`);
+
+  // --- 7 catalog coverage (T-132) -----------------------------------------------
+  // Every pattern the catalog declares must reach at least one generated plan. A
+  // piece that parses, validates and is counted by `validate-content` but is never
+  // *chosen* is invisible to every other check in this file: it has no placements,
+  // so it contributes to no rate. Three shipped bugs had exactly this shape.
+  if (!CATALOG_IDS) {
+    line('7.catalog-coverage', true, 'SKIP: design/ not readable from this checkout, so the catalog id list is unknown');
+  } else {
+    const never = [...CATALOG_IDS].filter((id) => !A.planIds.has(id)).sort();
+    const unknown = [...A.planIds].filter((id) => !CATALOG_IDS.has(id)).sort();
+    line('7.catalog-coverage',
+      never.length === 0 && unknown.length === 0,
+      `catalog patterns: ${CATALOG_IDS.size}; reached at least one plan: ${CATALOG_IDS.size - never.length}; `
+      + `never placed: ${never.length}${never.length ? ` (${never.slice(0, 12).join(', ')}${never.length > 12 ? ', ...' : ''})` : ''}; `
+      + `placed but not in the catalog: ${unknown.length}${unknown.length ? ` (${unknown.slice(0, 6).join(', ')})` : ''}; `
+      + `threshold: 0 never-placed`);
+  }
 
   // --- 5b gift spawn safety (T-112) ---------------------------------------------
   const gRate = geo.gifts ? geo.giftIntersections / geo.gifts : 0;
