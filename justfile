@@ -44,6 +44,7 @@ verify: wasm
     node tools/matchmaker-conformance/run.mjs
     node tools/voting-conformance/run.mjs
     node tools/debug-conformance/run.mjs
+    node tools/vote-integration/run.mjs
     node tools/economy-audit/run.mjs
     node tools/playthrough/run.mjs
 

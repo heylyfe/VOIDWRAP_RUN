@@ -214,6 +214,7 @@ async function main() {
   // altars end-to-end, because all three sit behind level 2 and the playthrough bots
   // cannot get there (T-139).
   run('debug conformance', 'node', ['tools/debug-conformance/run.mjs', '--url', WS_URL]);
+  run('vote integration', 'node', ['tools/vote-integration/run.mjs', '--url', WS_URL]);
 
   const matchmaker = process.env.MATCHMAKER_URL;
   if (matchmaker) {
