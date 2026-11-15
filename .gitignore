@@ -23,3 +23,6 @@ web/playwright-report/
 # packaged game
 dist/
 research/
+# economy-audit generator dumps (regenerate with `cargo run -p sim --example pattern_dump`)
+tools/economy-audit/*.ndjson
+tools/economy-audit/*.err
