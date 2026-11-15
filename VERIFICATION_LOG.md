@@ -450,10 +450,15 @@ commit.
   `phase: "voting"`.
 - `just verify` green after each merge (T-078 → T-079 → T-081 → T-080) and on the release commit.
 
-## Wave 5 (in progress) — progression, modes and economy
+## v0.10.0-alpha.1 — Wave 5: progression, modes and economy
 
 Merge order T-082 → T-083 → T-084 → T-085 → T-086 → T-087 → T-088 → T-089. `just verify` green
-after each merge so far. No release cut yet: Wave 5 releases at its boundary.
+after every merge. Released as v0.10.0-alpha.1.
+
+Final gate at the cut: 123 server tests, 229 sim tests, 279 vitest cases, check-names 561 files,
+validate-content 20 enemies / 10 upgrades / 19 curses / 4 classes / 34 shop items / 3 events /
+15 milestones / 4 altars / 10 achievements / 85 patterns. Both conformance kits and the economy
+audit skip by default (env-gated) and pass when pointed at a target.
 
 - T-082 ACCEPTED: the between-level shop. Four static items sampled from content plus contextual
   offerings from run state — two upgrade cards, one perk per class, one counter per permanent the
@@ -469,3 +474,49 @@ after each merge so far. No release cut yet: Wave 5 releases at its boundary.
   the four altar ids in `AltarKind` order, the presentation/codec API carries `#[allow(dead_code)]`
   because only tests exercise it today, and one stale game test was rewritten for the new altar
   semantics.
+- T-084 ACCEPTED (`11d2b51`): three greater curses — Wreath, Tithe, Hush — in a new
+  `sim/src/greater.rs` with 11 tests. The mechanic is derived from the curse id
+  (`GreaterCurse::from_id`), so `ModCard` and `PlayerSense` were untouched. Wreath's kill reuses
+  `DEATH_ENEMY` because a new cause would need a protocol change. Tithe's slow is applied per
+  player through a cloned `Tuning` with `run_speed_mul *= TITHE_SLOW_MUL`, so server and WASM
+  predictor agree by construction. The stair-reference audit found no live stair references;
+  `tools/pattern-audit`'s `5.stairs` metric was deliberately left as a zero-tolerance guard.
+  PARKED: Hush's HUD gift-hint half is client-side; `hush_active()` carries `#[allow(dead_code)]`.
+- T-085 ACCEPTED (`2f50961`): STANDARD / EXTREME / CHAOS / RANDOM in a new `sim/src/mode.rs` with
+  10 tests. The mode rides inside the opaque `phase` string as a suffix (`playing:extreme`)
+  because the matchmaker contract is frozen — no new field, no schema change. `vote_pool` and
+  `overflow_pool` kept their signatures as thin `Standard` wrappers so ~15 existing tests were
+  untouched; the mode-aware bodies live in `vote_pool_with` / `overflow_pool_with`.
+  PARKED: the CHAOS-exclusive curse pool — Part 1 exposes no accessor and nothing wires it.
+- T-086 ACCEPTED (`19cc2c6`): three radar modules as a new shop `kind: "radar"` in a new
+  `sim/src/radar.rs` with 9 tests. The "exactly 7 base items" rule now excludes
+  `counter`/`perk`/`radar`, and the validator asserts the three radar ids exactly.
+  PARKED: the HUD is not fed by the server — it needs a client-visible field and therefore a
+  protocol change; `radar_state()` carries `#[allow(dead_code)]`.
+- T-087 ACCEPTED (`cbf4115`): trampolines as a second launcher kind (`PLATFORM_TRAMPOLINE`,
+  protocol kind 7) — 26.0 u/s vertical with the run-up's horizontal speed kept and boosted x1.15,
+  against the jump pad's 16.0 and x0.6. The launch branch lives once in `sim/controller.rs`, so
+  server and WASM prediction agree by construction. Reachability keeps the conservative generic
+  rule, so a trampoline can never be the only route to a platform; one trampoline lands in
+  `ch24_cinder_switchyard`. Tripmines are a tested sim state machine (`sim/tripmine.rs`: Arming
+  40 ticks, Armed, Disarmed 120 ticks, radius 1.6). Two curses join the pool: Spring Floor and
+  Minefield. PARKED: placing trampolines/tripmines in generated levels — converting a pattern's
+  jump pad breaks the from-rest playthrough test, and the tagged patterns have no free floor for
+  a bonus platform; tripmines additionally need a level-data array and a client telegraph.
+- T-088 ACCEPTED (`ed257e4`): ten data-driven achievements in a new `sim/src/achievements.rs`
+  (11 tests) as a pure tracker — event in, unlocked ids out, no I/O, no time, no randomness.
+  Wired at the seams that exist: `LevelReached` and `LevelClearedNoDeath` in `finish_level` (a new
+  `deaths_this_level` counter fed by `Run::note_death`), `AllGiftsCollected` in `collect_gifts`,
+  `VoteWin` in `close_vote` from the ballot counts, `ExtremeRunFinished` at run over.
+  `RunSummary` gains `code` and `achievements`; the code is `VW-XXXX-XXXX` from an FNV-1a hash of
+  the run seed and the unlocked ids. The death screen renders the code and a badge per unlocked
+  achievement. PARKED: the enemy-specific events (`LureEscape`, `ChorusFreeze`, `WreathRemoved`,
+  `TrampolineLaunch`, `TripmineDisarm`) have no per-enemy hook yet.
+- T-089 ACCEPTED (`8875085`): `tools/economy-audit/`, a black-box audit over a captured generator
+  dump — Node built-ins only, `PASS/FAIL — metric` lines, exit 0 only on a full pass, env-gated in
+  `just verify`. Eight metrics over 3,000 generated levels. Six pass. Two fail, and both are real:
+  `1.gift_income` (a level carries a median of 219 gift slots against a cheapest shop item of 16
+  currency, so one level pays for about fourteen of the cheapest item — currency is not scarce)
+  and `8.hazard_entities` (`hazard:trampoline` on 2 patterns and `hazard:tripmine` on 1, none
+  carrying the matching platform kind). Both are left failing rather than relaxed: a green audit
+  that hides an unplaced feature is worse than a red one that names it.
