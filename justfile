@@ -34,6 +34,7 @@ verify: wasm
     node tools/protocol-gen.mjs --check
     node tools/check-names.mjs
     node tools/validate-content.mjs
+    node tools/pattern-audit/run.mjs --selftest
     cd server; cargo fmt --all --check
     cd server; cargo clippy --workspace --all-targets -- -D warnings
     cd server; cargo test --workspace

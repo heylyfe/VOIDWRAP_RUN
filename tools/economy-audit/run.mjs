@@ -125,12 +125,16 @@ function auditShopMix() {
   const perks = content.shop.filter((s) => s.kind === 'perk');
   const radar = content.shop.filter((s) => s.kind === 'radar');
   const counters = content.shop.filter((s) => s.kind === 'counter');
-  const perShop = SHOP_OFFER + SHOP_UPGRADE_DRAWS + perks.length + radar.length;
+  // T-144: `perShop` used SHOP_OFFER rather than the real offer, so the printed number
+  // overstated what a shop actually shows, and the `>= 4` floor was dead code (the
+  // expression is structurally >= 6). Use the real offer and assert the floor against it.
+  const staticOffer = Math.min(SHOP_OFFER, statics.length);
+  const perShop = staticOffer + SHOP_UPGRADE_DRAWS + perks.length + radar.length;
   metric(perShop >= 4 && perShop <= 16, '2.shop_offer_mix', [
-    `static pool: ${statics.length} (life/reroll/mods), offered ${Math.min(SHOP_OFFER, statics.length)} per shop`,
+    `static pool: ${statics.length} (life/reroll/mods), offered ${staticOffer} per shop`,
     `upgrade draws: ${SHOP_UPGRADE_DRAWS} at ${SHOP_UPGRADE_COST} each`,
     `perks: ${perks.length}, radar: ${radar.length}, counters: ${counters.length} (counters only for owned permanents)`,
-    `items per shop before counters: ${perShop}`,
+    `items per shop before counters: ${perShop} (band 4-16)`,
     `shop opens on level 1: standard/extreme/random no, chaos yes`,
   ]);
 }
@@ -242,8 +246,12 @@ function auditHazardTags(levels) {
 
 function auditRadar() {
   const radar = content.shop.filter((s) => s.kind === 'radar');
-  metric(radar.length === 3, '6.radar_offering', [
+  // T-144: `radar.length === 3` did not check the ids were distinct, so three copies of
+  // one module would have passed a metric about offering three different modules.
+  const distinct = new Set(radar.map((r) => r.id)).size;
+  metric(radar.length === 3 && distinct === 3, '6.radar_offering', [
     `radar modules: ${radar.length} (${radar.map((r) => `${r.id}@${r.cost}`).join(', ')})`,
+    `distinct ids: ${distinct} (threshold: 3)`,
     `offered every shop (make_shop appends all of them)`,
     `total radar spend to own all: ${radar.reduce((a, r) => a + r.cost, 0)}`,
   ]);
@@ -290,7 +298,13 @@ function auditHazardEntities() {
     // weaker "at least one" test passed while two of three trampoline patterns
     // carried a JUMP_PAD instead, which is exactly the defect this metric
     // exists to catch.
-    if (tagged.length > 0 && withEntity.length !== tagged.length) {
+    // T-144: `tagged.length > 0 &&` meant a hazard tag with ZERO tagged patterns
+    // passed. A tag no pattern carries is the strongest form of "a promise the
+    // engine does not keep", so it fails now.
+    if (tagged.length === 0) {
+      allOk = false;
+      lines.push(`  ${tag}: no pattern carries this tag at all — the hazard does not exist`);
+    } else if (withEntity.length !== tagged.length) {
       allOk = false;
       const missing = tagged.filter(([, v]) => !(v.kinds ?? []).includes(kind)).map(([id]) => id);
       lines.push(`  ${tag} without a ${kind} platform: ${missing.join(', ')}`);

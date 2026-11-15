@@ -185,6 +185,13 @@ function pushEx(list, obj) {
   if (list.length < TH.MAX_OUTLIERS) list.push(obj);
 }
 
+// T-144: record that a record actually carried `name`, so the report can distinguish
+// "the dump does not answer this" from "the answer is zero".
+function tallyField(A, name, rec) {
+  if (rec[name] === undefined || rec[name] === null) return;
+  A.fieldPresence.set(name, (A.fieldPresence.get(name) ?? 0) + 1);
+}
+
 function f2(x) { return Number.isFinite(x) ? (Math.round(x * 100) / 100).toFixed(2) : String(x); }
 function pctf(x) { return Number.isFinite(x) ? (x * 100).toFixed(2) + '%' : 'n/a'; }
 function loc(entry) { return `seed=${entry.seed} lvl=${entry.level} players=${entry.players}`; }
@@ -290,7 +297,7 @@ function createAggregate() {
       placementsNoPlatforms: 0,
       scaleViol: 0, scaleByPattern: new Map(), scaleEx: [],
       rampChecked: 0, rampViol: 0, rampEx: [],
-      stairSequences: 0, stairPatterns: new Set(), stairEx: [],
+      stairSequences: 0, stairPatterns: new Set(), stairEx: [], multiBoxPatterns: 0,
       heightPairs: 0, heightViol: 0, heightEx: [],
       // T-137: which patterns own the out-of-band deltas, and whether they are
       // too small (a half-step) or too large (a drop). An aggregate rate hides
@@ -313,6 +320,13 @@ function createAggregate() {
     legacyLevels: new Set(), legacyPatternIds: new Map(), // §6.4 no-tag fallback signal
 
     levelsWithFallbacks: 0, fallbackByKind: new Map(), fallbackDetails: new Map(),
+
+    // T-144: `Number(rec.gifts ?? 0)` makes an absent dump field indistinguishable from
+    // a measured zero, and those two cases need opposite verdicts: absent means the dump
+    // cannot answer (SKIP), present-and-zero means the game genuinely has none (FAIL).
+    // Count how many records actually carried each field so the report can tell them
+    // apart instead of falling through to PASS on an empty denominator.
+    fieldPresence: new Map(),
 
     enemyPlacements: new Map(),
     // key: "<players>|<level>" -> { levels: n, byType: Map(type -> count) }
@@ -486,6 +500,9 @@ function measurePatternGeometry(A, entry, id, pat) {
   }
 
   if (boxes.length > 1) {
+    // T-144: the denominator for `5.stairs`. `stairPatterns` only gains an entry when a
+    // chain is FOUND, so it cannot tell "no stairs exist" from "nothing was checked".
+    A.geo.multiBoxPatterns++;
     const adj = boxAdjacencyList(boxes);
     for (const { i, j } of adj) {
       const d = Math.abs(boxes[i].max[1] - boxes[j].max[1]);
@@ -620,6 +637,7 @@ function consumeRecord(A, r) {
   }
 
   // metric 3 — anchor / stitch fallbacks
+  tallyField(A, 'fallbacks', r);
   if (Array.isArray(r.fallbacks) && r.fallbacks.length > 0) {
     A.levelsWithFallbacks++;
     for (const fb of r.fallbacks) {
@@ -718,6 +736,7 @@ function nearDupeScan(entries) {
 function report(A, ctx, log) {
   const lines = [];
   const fails = [];
+  const skips = [];
   const line = (name, pass, detail) => {
     const s = `${pass ? 'PASS' : 'FAIL'} - ${name} (${detail})`;
     lines.push(s);
@@ -731,7 +750,11 @@ function report(A, ctx, log) {
     const s = `SKIP - ${name} (${detail})`;
     lines.push(s);
     log(s);
+    skips.push(name);
   };
+  // T-144: how many records actually carried a dump field. Zero means the dump cannot
+  // answer the question, which is a SKIP; a present field totalling zero is a FAIL.
+  const fieldSeen = (name) => A.fieldPresence.get(name) ?? 0;
   const tables = [];
   const tlog = (s) => { tables.push(s); log(s); };
 
@@ -764,15 +787,29 @@ function report(A, ctx, log) {
     `thresholds: mean redundancy <= ${(TH.INTRA_LEVEL_REDUNDANCY_MAX * 100).toFixed(0)}%, share <= ${(TH.INTRA_LEVEL_DOMINANCE_MAX * 100).toFixed(0)}%`);
 
   // --- 1b identical ordered plan lists across seeds --------------------------
-  line('1.pattern-repeat.across-seeds',
-    A.crossSeedPlanCollisions <= TH.ACROSS_SEED_PLAN_COLLISIONS_MAX,
-    `identical ordered plan lists across distinct seeds: ${A.crossSeedPlanCollisions} over ${N} level records ` +
-    `(same seed, different mode, same list: ${A.crossModeSameSeedKeys} keys, informational); ` +
-    `threshold: effectively zero (<= ${TH.ACROSS_SEED_PLAN_COLLISIONS_MAX})`);
+  // T-144: with a single seed there is nothing to collide across, so the metric used to
+  // pass having compared nothing.
+  if (A.seedsSeen.size < 2) {
+    skip('1.pattern-repeat.across-seeds',
+      `only ${A.seedsSeen.size} distinct seed(s) in the input; a cross-seed collision needs at least 2`);
+  } else {
+    line('1.pattern-repeat.across-seeds',
+      A.crossSeedPlanCollisions <= TH.ACROSS_SEED_PLAN_COLLISIONS_MAX,
+      `identical ordered plan lists across distinct seeds: ${A.crossSeedPlanCollisions} over ${N} level records ` +
+      `from ${A.seedsSeen.size} seeds ` +
+      `(same seed, different mode, same list: ${A.crossModeSameSeedKeys} keys, informational); ` +
+      `threshold: effectively zero (<= ${TH.ACROSS_SEED_PLAN_COLLISIONS_MAX})`);
+  }
 
   // --- 2 tag diversity -------------------------------------------------------
+  // T-144: mean/min used to count `entry.themes.size`, which includes unknown
+  // forward-compat tags. An unknown tag therefore inflated the diversity score while
+  // vocabulary coverage passed at a 0.02% share -- the metric rewarded the very thing
+  // it was meant to flag. Count vocabulary tags only; unknown values stay reported.
+  const vocabThemes = (e) => [...e.themes].filter((t) => THEME_VOCAB.includes(t)).length;
+  const vocabMechs = (e) => [...e.mechs].filter((m) => MECH_VOCAB.includes(m)).length;
   const neverThemes = THEME_VOCAB.filter((t) => !A.themePlacements.has(t));
-  const themeCounts = [...A.entries.map((e) => e.themes.size)].sort((a, b) => a - b);
+  const themeCounts = [...A.entries.map(vocabThemes)].sort((a, b) => a - b);
   const meanThemes = themeCounts.reduce((s, x) => s + x, 0) / N;
   const minThemes = themeCounts[0] ?? 0;
   const unknownThemeTotal = [...A.unknownThemeValues.values()].reduce((s, x) => s + x, 0);
@@ -783,7 +820,7 @@ function report(A, ctx, log) {
     `unknown forward-compat values observed: ${unknownThemeTotal}`);
 
   const neverMechs = MECH_VOCAB.filter((m) => !A.mechPlacements.has(m));
-  const mechCounts = [...A.entries.map((e) => e.mechs.size)].sort((a, b) => a - b);
+  const mechCounts = [...A.entries.map(vocabMechs)].sort((a, b) => a - b);
   const meanMechs = mechCounts.reduce((s, x) => s + x, 0) / N;
   const minMechs = mechCounts[0] ?? 0;
   const unknownMechTotal = [...A.unknownMechValues.values()].reduce((s, x) => s + x, 0);
@@ -794,10 +831,19 @@ function report(A, ctx, log) {
     `unknown forward-compat values observed: ${unknownMechTotal}`);
 
   // --- 3 anchor fallbacks -----------------------------------------------------
+  // T-144: a record without a `fallbacks` field was indistinguishable from a record
+  // with zero fallbacks, so a dump that stopped emitting the field read as a clean run.
   const fbRate = A.levelsWithFallbacks / N;
-  line('3.anchor-fallbacks',
-    fbRate <= TH.FALLBACK_LEVEL_RATE_MAX,
-    `levels needing a stitch fallback: ${A.levelsWithFallbacks}/${N} (${pctf(fbRate)}); threshold <= ${(TH.FALLBACK_LEVEL_RATE_MAX * 100).toFixed(0)}%`);
+  if (fieldSeen('fallbacks') === 0) {
+    skip('3.anchor-fallbacks',
+      `no record carried a "fallbacks" field, so stitch fallbacks are not measurable from this input`);
+  } else {
+    line('3.anchor-fallbacks',
+      fbRate <= TH.FALLBACK_LEVEL_RATE_MAX,
+      `levels needing a stitch fallback: ${A.levelsWithFallbacks}/${N} (${pctf(fbRate)}); ` +
+      `records carrying the field: ${fieldSeen('fallbacks')}/${N}; ` +
+      `threshold <= ${(TH.FALLBACK_LEVEL_RATE_MAX * 100).toFixed(0)}%`);
+  }
 
   // --- 4 near-duplicates -------------------------------------------------------
   const dup = nearDupeScan(A.entries);
@@ -810,28 +856,52 @@ function report(A, ctx, log) {
     `threshold: <= ${(TH.NEARDUPE_LEVEL_RATE_MAX * 100).toFixed(1)}% of levels`);
 
   // --- 5 heights, ramps, stairs, reference scale --------------------------------
+  // T-144: every line in this family used to compute `denom ? viol / denom : 0` and then
+  // assert `rate <= MAX`, so a zero denominator produced a PASS having measured nothing.
+  // Each one now routes to SKIP (nothing of that shape was generated, or the dump does
+  // not carry the field) or FAIL (the field is present and the game genuinely has none).
   const geo = A.geo;
-  line('5.ramps',
-    geo.rampViol === 0,
-    `${geo.rampViol} violations across ${geo.rampChecked} ramp platforms; rules: rise/run <= ${TH.RAMP_MAX_RISE_RUN}, run >= ${TH.RAMP_MIN_RUN}u, width >= ${TH.RAMP_MIN_WIDTH}u; threshold: 0`);
+  if (geo.rampChecked === 0) {
+    skip('5.ramps', 'no ramp platforms measured, so the slope/run/width rules were never applied');
+  } else {
+    line('5.ramps',
+      geo.rampViol === 0,
+      `${geo.rampViol} violations across ${geo.rampChecked} ramp platforms; rules: rise/run <= ${TH.RAMP_MAX_RISE_RUN}, run >= ${TH.RAMP_MIN_RUN}u, width >= ${TH.RAMP_MIN_WIDTH}u; threshold: 0`);
+  }
   const raRate = geo.rampAnchors ? geo.rampOrphans / geo.rampAnchors : 0;
-  line('5.ramp-anchors',
-    raRate <= TH.RAMP_ANCHOR_RATE_MAX,
-    `ramps whose high edge meets no other platform: ${geo.rampOrphans}/${geo.rampAnchors} (${pctf(raRate)}) across ${geo.rampOrphanLevels} levels; threshold: 0`);
-  line('5.stairs',
-    geo.stairSequences === 0,
-    `stair-like box sequences (>= ${TH.STAIR_MIN_STEPS} adjacent tops, equal steps +-${TH.STAIR_STEP_EPS}u, step ${TH.STAIR_STEP_MIN}-${TH.STAIR_STEP_MAX}u) in a single direction: ${geo.stairSequences} across ${geo.stairPatterns.size} patterns; threshold: 0 (stairs do not exist)`);
+  if (fieldSeen('ramps') === 0) {
+    skip('5.ramp-anchors',
+      'no record carried a "ramps" field, so orphaned ramps are not measurable from this input');
+  } else if (geo.rampAnchors === 0) {
+    line('5.ramp-anchors', false,
+      `the dump reports zero ramp platforms across ${N} levels; every stair in this game is a ramp, so zero ramps means the generator or the dump broke, not that the rule holds`);
+  } else {
+    line('5.ramp-anchors',
+      raRate <= TH.RAMP_ANCHOR_RATE_MAX,
+      `ramps whose high edge meets no other platform: ${geo.rampOrphans}/${geo.rampAnchors} (${pctf(raRate)}) across ${geo.rampOrphanLevels} levels; threshold: 0`);
+  }
+  if (geo.multiBoxPatterns === 0) {
+    skip('5.stairs', 'no pattern with 2+ boxes was measured, so no stair sequence could be detected');
+  } else {
+    line('5.stairs',
+      geo.stairSequences === 0,
+      `stair-like box sequences (>= ${TH.STAIR_MIN_STEPS} adjacent tops, equal steps +-${TH.STAIR_STEP_EPS}u, step ${TH.STAIR_STEP_MIN}-${TH.STAIR_STEP_MAX}u) in a single direction: ${geo.stairSequences} across ${geo.multiBoxPatterns} multi-box patterns; threshold: 0 (stairs do not exist)`);
+  }
   const hRate = geo.heightPairs ? geo.heightViol / geo.heightPairs : 0;
   const heightOwners = [...geo.heightByPattern.entries()]
     .sort((a, b) => b[1] - a[1])
     .slice(0, 6)
     .map(([id, n]) => `${id}:${n}`);
-  line('5.heights',
-    hRate <= TH.HEIGHT_DIFF_RATE_MAX,
-    `adjacent surface deltas measured: ${geo.heightPairs}; outside [${TH.HEIGHT_DIFF_MIN}, ${TH.HEIGHT_DIFF_MAX}]u (flat continuations ~0u excluded): ${geo.heightViol} (${pctf(hRate)}) `
-    + `[too small: ${geo.heightSmall}, too large: ${geo.heightLarge}]; `
-    + `by pattern id: ${heightOwners.length ? heightOwners.join(' ') : 'none'}; `
-    + `threshold <= ${(TH.HEIGHT_DIFF_RATE_MAX * 100).toFixed(0)}%`);
+  if (geo.heightPairs === 0) {
+    skip('5.heights', 'no adjacent surface pairs were measured, so no height delta could be checked');
+  } else {
+    line('5.heights',
+      hRate <= TH.HEIGHT_DIFF_RATE_MAX,
+      `adjacent surface deltas measured: ${geo.heightPairs}; outside [${TH.HEIGHT_DIFF_MIN}, ${TH.HEIGHT_DIFF_MAX}]u (flat continuations ~0u excluded): ${geo.heightViol} (${pctf(hRate)}) `
+      + `[too small: ${geo.heightSmall}, too large: ${geo.heightLarge}]; `
+      + `by pattern id: ${heightOwners.length ? heightOwners.join(' ') : 'none'}; `
+      + `threshold <= ${(TH.HEIGHT_DIFF_RATE_MAX * 100).toFixed(0)}%`);
+  }
   const sRate = geo.placed ? geo.scaleViol / geo.placed : 1;
   // T-128: name the patterns that own the outlier budget. An aggregate rate hides
   // concentration: six patterns used to account for all 8,081 out-of-band placements,
@@ -857,24 +927,41 @@ function report(A, ctx, log) {
   // piece that parses, validates and is counted by `validate-content` but is never
   // *chosen* is invisible to every other check in this file: it has no placements,
   // so it contributes to no rate. Three shipped bugs had exactly this shape.
-  if (!CATALOG_IDS) {
-    line('7.catalog-coverage', true, 'SKIP: design/ not readable from this checkout, so the catalog id list is unknown');
+  // T-144: the catalog is injectable so `--selftest` can supply a synthetic one. Without
+  // this the selftest tripped over `7.catalog-coverage` (its fake ids are not in the real
+  // catalog) and had been reporting FAIL unnoticed, because nothing gated it.
+  const catalog = ctx.catalogIds ?? CATALOG_IDS;
+  if (!catalog) {
+    // T-144: this used to call `line(name, true, 'SKIP: ...')` -- a PASS line whose text
+    // began with "SKIP". Historical defect #4 verbatim, on the metric built to catch T-132.
+    skip('7.catalog-coverage', 'design/ not readable from this checkout, so the catalog id list is unknown');
   } else {
-    const never = [...CATALOG_IDS].filter((id) => !A.planIds.has(id)).sort();
-    const unknown = [...A.planIds].filter((id) => !CATALOG_IDS.has(id)).sort();
+    const never = [...catalog].filter((id) => !A.planIds.has(id)).sort();
+    const unknown = [...A.planIds].filter((id) => !catalog.has(id)).sort();
     line('7.catalog-coverage',
       never.length === 0 && unknown.length === 0,
-      `catalog patterns: ${CATALOG_IDS.size}; reached at least one plan: ${CATALOG_IDS.size - never.length}; `
+      `catalog patterns: ${catalog.size}; reached at least one plan: ${catalog.size - never.length}; `
       + `never placed: ${never.length}${never.length ? ` (${never.slice(0, 12).join(', ')}${never.length > 12 ? ', ...' : ''})` : ''}; `
       + `placed but not in the catalog: ${unknown.length}${unknown.length ? ` (${unknown.slice(0, 6).join(', ')})` : ''}; `
       + `threshold: 0 never-placed`);
   }
 
   // --- 5b gift spawn safety (T-112) ---------------------------------------------
+  // T-144: `gRate` was computed and never used, and `giftIntersections <= 0` passed on an
+  // empty denominator. Both fixed: the rate is reported, and zero gifts is a FAIL when
+  // the dump carries the field (a level with no gifts is not a level).
   const gRate = geo.gifts ? geo.giftIntersections / geo.gifts : 0;
-  line('5.gift-spawn-safety',
-    geo.giftIntersections <= TH.GIFT_INTERSECT_MAX,
-    `gifts whose body overlaps a solid platform volume: ${geo.giftIntersections}/${geo.gifts} (${pctf(gRate)}) across ${geo.giftIntersectionLevels} levels; threshold: ${TH.GIFT_INTERSECT_MAX} (the owner's rule is "never inside a platform")`);
+  if (fieldSeen('gifts') === 0) {
+    skip('5.gift-spawn-safety',
+      'no record carried a "gifts" field, so gift/platform intersections are not measurable from this input');
+  } else if (geo.gifts === 0) {
+    line('5.gift-spawn-safety', false,
+      `the dump reports zero gifts across ${N} levels; a level with no gifts cannot be completed, so this is a generator failure rather than a clean spawn-safety result`);
+  } else {
+    line('5.gift-spawn-safety',
+      geo.giftIntersections <= TH.GIFT_INTERSECT_MAX,
+      `gifts whose body overlaps a solid platform volume: ${geo.giftIntersections}/${geo.gifts} (${pctf(gRate)}) across ${geo.giftIntersectionLevels} levels; threshold: ${TH.GIFT_INTERSECT_MAX} (the owner's rule is "never inside a platform")`);
+  }
 
   // --- 5c reachability (T-118) ---------------------------------------------------
   // The generator's promise is that every gift is reachable from the spawn. `validate`
@@ -882,12 +969,20 @@ function report(A, ctx, log) {
   // reported but not failed: a decorative pillar with no gift on it is scenery, and the
   // owner's "gap too big to jump" is exactly what the near-miss number measures.
   const nm = geo.tightestNearMiss;
-  line('5.reachability',
-    geo.unreachableGifts === 0,
-    `gifts on a platform the spawn cannot reach: ${geo.unreachableGifts}/${geo.gifts} across ${geo.unreachableGiftLevels} levels; threshold: 0. `
-    + `Unreachable platforms (scenery, informational): ${geo.unreachablePlatforms}. `
-    + `Tightest rejected jump: ${nm ? `${nm.gap.toFixed(2)}u gap at ${nm.rise.toFixed(2)}u rise, ${nm.excess.toFixed(2)}u past the envelope (seed=${nm.seed} lvl=${nm.level} players=${nm.players})` : 'none'}; `
-    + `levels with a measured near-miss: ${geo.nearMissLevels}`);
+  if (fieldSeen('unreachable_gifts') === 0) {
+    skip('5.reachability',
+      'no record carried an "unreachable_gifts" field, so the reachability graph\'s verdict is not measurable from this input');
+  } else if (geo.gifts === 0) {
+    line('5.reachability', false,
+      `the dump reports zero gifts across ${N} levels, so "every gift is reachable" is vacuously true and proves nothing`);
+  } else {
+    line('5.reachability',
+      geo.unreachableGifts === 0,
+      `gifts on a platform the spawn cannot reach: ${geo.unreachableGifts}/${geo.gifts} across ${geo.unreachableGiftLevels} levels; threshold: 0. `
+      + `Unreachable platforms (scenery, informational): ${geo.unreachablePlatforms}. `
+      + `Tightest rejected jump: ${nm ? `${nm.gap.toFixed(2)}u gap at ${nm.rise.toFixed(2)}u rise, ${nm.excess.toFixed(2)}u past the envelope (seed=${nm.seed} lvl=${nm.level} players=${nm.players})` : 'none'}; `
+      + `levels with a measured near-miss: ${geo.nearMissLevels}`);
+  }
 
   // --- 6 enemy spawn frequencies -------------------------------------------------
   // T-134: this used to report PASS when the roster was absent, which made it a
@@ -911,14 +1006,22 @@ function report(A, ctx, log) {
   for (const [cellKey, cell] of A.enemyCells) {
     if (cell.levels < TH.ENEMY_ALWAYS_CELL_MIN) continue;
     for (const [t, c] of cell.byType) {
-      if (c === cell.levels && cell.byType.size >= 2) {
+      // T-144: this used to require `cell.byType.size >= 2`, so a single type appearing in
+      // 100% of a cell's levels -- the strongest possible form of "never varies" -- was
+      // filtered out of the check built to catch exactly that. The filter is gone.
+      if (c === cell.levels) {
         alwaysCells.push({ cellKey, type: t, count: c, cellLevels: cell.levels, distinct: cell.byType.size });
       }
     }
   }
-  line('6.enemy-frequencies.always-offered',
-    alwaysCells.length === 0,
-    `(mode, level) cells with >= ${TH.ENEMY_ALWAYS_CELL_MIN} levels where a type appears in 100% of levels: ${alwaysCells.length}; threshold: 0`);
+  if (A.enemyCells.size === 0) {
+    skip('6.enemy-frequencies.always-offered',
+      'no record carried an "enemies" array, so per-cell enemy variety is not measurable from this input');
+  } else {
+    line('6.enemy-frequencies.always-offered',
+      alwaysCells.length === 0,
+      `(mode, level) cells with >= ${TH.ENEMY_ALWAYS_CELL_MIN} levels where a type appears in 100% of levels: ${alwaysCells.length} across ${A.enemyCells.size} cells; threshold: 0`);
+  }
 
   // ---------------------------------------------------------------------------
   // Raw numbers and flagged outliers
@@ -1003,7 +1106,9 @@ function report(A, ctx, log) {
   }
 
   log('');
-  log(`RESULT: ${fails.length ? 'FAIL' : 'PASS'} - ${fails.length} of ${lines.length} metric lines failed${fails.length ? `: ${fails.join(', ')}` : ''}`);
+  log(`RESULT: ${fails.length ? 'FAIL' : 'PASS'} - ${fails.length} of ${lines.length} metric lines failed`
+    + `${fails.length ? `: ${fails.join(', ')}` : ''}`
+    + `${skips.length ? `; ${skips.length} skipped (not measured, not a pass): ${skips.join(', ')}` : ''}`);
   return fails;
 }
 
@@ -1026,6 +1131,8 @@ async function runAudit(source, seedsTarget, enemyRoster, log) {
       // gift the player cannot see or reach.
       const giftTotal = Number(rec.gifts ?? 0);
       const giftHits = Number(rec.gift_intersections ?? 0);
+      tallyField(A, 'gifts', rec);
+      tallyField(A, 'gift_intersections', rec);
       A.geo.gifts += giftTotal;
       A.geo.giftIntersections += giftHits;
       if (giftHits > 0) A.geo.giftIntersectionLevels += 1;
@@ -1033,6 +1140,8 @@ async function runAudit(source, seedsTarget, enemyRoster, log) {
       // nothing; a level with any orphan is a level with a broken climb.
       const rampTotal = Number(rec.ramps ?? 0);
       const rampOrphans = Number(rec.orphan_ramps ?? 0);
+      tallyField(A, 'ramps', rec);
+      tallyField(A, 'orphan_ramps', rec);
       A.geo.rampAnchors += rampTotal;
       A.geo.rampOrphans += rampOrphans;
       if (rampOrphans > 0) A.geo.rampOrphanLevels += 1;
@@ -1042,6 +1151,7 @@ async function runAudit(source, seedsTarget, enemyRoster, log) {
       // that came closest to being legal: the "gap too big to jump" the owner asked for.
       const unreachablePlatforms = Number(rec.unreachable_platforms ?? 0);
       const unreachableGifts = Number(rec.unreachable_gifts ?? 0);
+      tallyField(A, 'unreachable_gifts', rec);
       A.geo.unreachablePlatforms += unreachablePlatforms;
       A.geo.unreachableGifts += unreachableGifts;
       if (unreachableGifts > 0) A.geo.unreachableGiftLevels += 1;
@@ -1129,7 +1239,16 @@ function selftest() {
   const recs = selftestTags(buildSelftestRecords());
   const A = createAggregate();
   for (const rec of recs) consumeRecord(A, rec);
-  const fails = report(A, { seedsTarget: 3, enemyRoster: ['a', 'b', 'c', 'ghost'], source: { kind: 'selftest', cmd: '(synthetic records)' } }, console.log);
+  const fails = report(A, {
+    seedsTarget: 3,
+    enemyRoster: ['a', 'b', 'c', 'ghost'],
+    // T-144: a synthetic catalog so `7.catalog-coverage` measures the metric instead of
+    // tripping over the real catalog's ids.
+    catalogIds: new Set(recs.flatMap((r) => r.plan)),
+    source: { kind: 'selftest', cmd: '(synthetic records)' },
+    // T-144: prefix every line so the planted FAILs cannot be mistaken for a real audit
+    // failure when this runs inside `just verify`.
+  }, (s) => console.log(s ? `  [selftest] ${s}` : s));
   const expected = new Set([
     '1.pattern-repeat.across-seeds',
     '2.tag-diversity.themes',
