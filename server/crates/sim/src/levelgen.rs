@@ -336,6 +336,12 @@ fn platform_kind_from_str(name: &str) -> Option<u8> {
         "CRUMBLE" => Some(protocol::PLATFORM_CRUMBLE),
         "JUMP_PAD" => Some(protocol::PLATFORM_JUMP_PAD),
         "TRAMPOLINE" => Some(protocol::PLATFORM_TRAMPOLINE),
+        // The protocol has carried PLATFORM_TRIPMINE since the hazard wave, and
+        // `sim::tripmine` arms it, but this table never learned the name. Every
+        // pattern that used a tripmine was rejected here and then silently
+        // dropped by `parse_catalog_lenient`, so tripmines never appeared in a
+        // generated level at all.
+        "TRIPMINE" => Some(protocol::PLATFORM_TRIPMINE),
         "RAMP_PX" => Some(protocol::PLATFORM_RAMP_PX),
         "RAMP_NX" => Some(protocol::PLATFORM_RAMP_NX),
         "RAMP_PZ" => Some(protocol::PLATFORM_RAMP_PZ),
@@ -393,7 +399,23 @@ fn verify_socket(
     }
     let mut covered = false;
     for p in platforms {
-        if (p.max.y - pos.y).abs() > EPS {
+        // A ramp's walking height varies along its incline, so its top face is
+        // not a single y: a socket at a ramp's low edge sits at `min.y`, not at
+        // `max.y`. The flat-only test rejected that and silently dropped
+        // `ch05_ramp_of_embers` from the catalog.
+        let ramp = matches!(
+            p.kind,
+            protocol::PLATFORM_RAMP_PX
+                | protocol::PLATFORM_RAMP_NX
+                | protocol::PLATFORM_RAMP_PZ
+                | protocol::PLATFORM_RAMP_NZ
+        );
+        let height_ok = if ramp {
+            pos.y >= p.min.y - EPS && pos.y <= p.max.y + EPS
+        } else {
+            (p.max.y - pos.y).abs() <= EPS
+        };
+        if !height_ok {
             continue;
         }
         let touches = match facing {
@@ -2909,6 +2931,30 @@ pub fn reachability_report(level: &LevelData) -> ReachabilityReport {
 mod tests {
     use super::*;
     use protocol::{PLATFORM_RAMP_NX, PLATFORM_RAMP_NZ, PLATFORM_RAMP_PX, PLATFORM_RAMP_PZ};
+
+    /// Every shipped chunk must survive the *strict* parse.
+    ///
+    /// `parse_catalog_lenient` drops a chunk it cannot parse and retries, which
+    /// keeps a shipped game playable but hides content loss: five chunks were
+    /// being dropped silently, including every pattern that used a tripmine,
+    /// because `platform_kind_from_str` never learned the name. A hazard the
+    /// owner asked for was in the protocol, in the sim, and in the catalog --
+    /// and never in a generated level. This test is the alarm that was missing.
+    #[test]
+    fn every_shipped_chunk_parses_strictly() {
+        let merged = merge_catalog_json(&[CHUNK_CATALOG_JSON, PATTERNS_A_JSON, PATTERNS_B_JSON])
+            .expect("catalog files must merge");
+        let strict = parse_catalog(&merged).expect("every shipped chunk must parse strictly");
+        let lenient = parse_catalog_lenient(&merged).expect("lenient parse must also succeed");
+        assert_eq!(
+            strict.chunks.len(),
+            lenient.chunks.len(),
+            "the lenient parser dropped a chunk the strict parser accepted"
+        );
+        // The count is asserted so a chunk that stops being included at all is
+        // also caught, not just one that fails to parse.
+        assert_eq!(strict.chunks.len(), 135, "catalog chunk count changed");
+    }
 
     /// A ramp kind must turn with its geometry, or the collision surface stops
     /// matching the visible wedge. One quarter-turn sends +X to -Z, so the cycle
