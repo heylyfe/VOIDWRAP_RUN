@@ -56,6 +56,8 @@ export class GameSession {
   private accumulator = 0;
   private outbox: InputFrame[] = [];
   private pingTimer: ReturnType<typeof setInterval> | null = null;
+  /** The command in flight, so the answer can be logged against what was sent. */
+  private pendingDebug: { command: string; args: string } | null = null;
 
   constructor(
     private readonly sim: Stepper,
@@ -189,6 +191,20 @@ export class GameSession {
         store.set({ notices: [...store.notices.slice(-4), notice] });
         return;
       }
+      case "DebugResult": {
+        const previous = store.debugResult;
+        store.set({
+          debugResult: {
+            seq: (previous?.seq ?? 0) + 1,
+            command: this.pendingDebug?.command ?? "",
+            args: this.pendingDebug?.args ?? "",
+            ok: msg.ok,
+            message: msg.message,
+          },
+        });
+        this.pendingDebug = null;
+        return;
+      }
       case "Draft":
         store.set({
           draft: { enemyPicks: msg.enemyPicks, rewardPicks: msg.rewardPicks, cards: msg.cards, submitted: false },
@@ -204,6 +220,15 @@ export class GameSession {
     if (!store.draft || store.draft.submitted) return;
     this.conn.send({ type: "DraftPick", picks });
     store.set({ draft: { ...store.draft, submitted: true } });
+  }
+
+  /**
+   * Send one tester-panel command (T-111). The code goes to the server, which is the only
+   * thing that decides whether the route is open; nothing is validated here.
+   */
+  debugCommand(code: string, command: string, args: string): void {
+    this.pendingDebug = { command, args };
+    this.conn.send({ type: "Debug", code, command, args });
   }
 
   /** Buy one shop item (lobby only; the server checks money and stock). */

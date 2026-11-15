@@ -65,6 +65,11 @@ export interface GameStore {
   goldenTaken: number[];
   /** Milliseconds until the collapse ends (0 outside phase 2); updated about twice a second. */
   collapseMs: number;
+  /**
+   * The last tester-panel answer (T-111). `command` and `args` echo what was sent so the
+   * panel can log the pair; `seq` makes identical answers distinguishable.
+   */
+  debugResult: { seq: number; command: string; args: string; ok: boolean; message: string } | null;
   set(patch: Partial<Omit<GameStore, "set">>): void;
 }
 
@@ -93,5 +98,6 @@ export const useGameStore = create<GameStore>((set) => ({
   levelPhase: 0,
   goldenTaken: [],
   collapseMs: 0,
+  debugResult: null,
   set: (patch) => set(patch),
 }));

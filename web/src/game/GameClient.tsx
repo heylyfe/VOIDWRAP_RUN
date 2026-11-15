@@ -21,6 +21,7 @@ import {
 import { gradeForTheme } from "@/content";
 import { CollapseHud } from "@/hud/CollapseHud";
 import { DraftScreen } from "@/hud/DraftScreen";
+import { TesterPanel } from "@/hud/TesterPanel";
 import { GameHud } from "@/hud/GameHud";
 import { Notices } from "@/hud/Notices";
 import { RunStatus } from "@/hud/RunStatus";
@@ -310,6 +311,7 @@ export default function GameClient() {
   const levelPhase = useGameStore((s) => s.levelPhase);
   const goldenTaken = useGameStore((s) => s.goldenTaken);
   const collapseMs = useGameStore((s) => s.collapseMs);
+  const playerCount = useGameStore((s) => s.playerCount);
   const [following, setFollowing] = useState<number | null>(null);
   const drafting = !!draft && runInfo?.phase === PHASE_ENEMY_DRAFT;
   // The lobby hub is shown in the colours of the level about to be played.
@@ -405,6 +407,10 @@ export default function GameClient() {
   const submitDraft = useCallback((picks: number[]) => session?.submitDraft(picks), [session]);
   const buy = useCallback((itemId: string) => session?.buy(itemId), [session]);
   const chooseClass = useCallback((cls: number) => session?.chooseClass(cls), [session]);
+  const debugCommand = useCallback(
+    (code: string, command: string, args: string) => session?.debugCommand(code, command, args),
+    [session],
+  );
 
   return (
     <div
@@ -426,6 +432,9 @@ export default function GameClient() {
           {loadError ?? "entering the void…"}
         </div>
       )}
+      {/* Tester panel (T-111): renders nothing until Ctrl+Shift+D, and hides itself
+          when a second player joins. The server gates every command regardless. */}
+      <TesterPanel playerCount={playerCount} onCommand={debugCommand} />
       {level && playing && normalTotal > 0 && (
         <>
           {phase2 ? (
