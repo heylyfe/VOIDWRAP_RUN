@@ -781,3 +781,202 @@ check-names (588 files), validate-content (20 enemies, 10 upgrades, 19 curses,
 4 classes, 34 shop items, 3 events, 15 milestones, 4 altars, 10 achievements,
 132 patterns). Matchmaker 8/8, voting selftest green + real 3/3, playthrough
 7/11 + 3 skip + 1 fail (`level-progression`, parked).
+
+## Fix & Test-Tools Wave v2 — `v0.21.0-alpha.1`
+
+Baseline `v0.20.0-alpha.1` (`df880fa`). Eleven tickets, T-106 → T-116. The
+owner's directive: ramps (texture, movement, orientation), generation
+consistency, shop scaling, a glider model, black gifts, a tester build, two
+bug hunters, gift spawn safety + straggler highlight, and performance.
+
+**Every dispatch returned no work.** All eleven subordinates reported no repo
+access and refused honestly rather than fabricating. The orchestrator
+implemented every ticket directly. This is recorded in each ticket.
+
+### T-106 — ramps: movement + texture — PASS (`f4f8b3f`, `b2eede2`)
+
+The owner's "walking on them bugs out" reproduced as a **teleport**: climbing
+one ramp into the foot of the next snapped the player back to the FIRST ramp's
+low edge. Two defects in the step-up path:
+
+- `overlaps_any_solid` treated a ramp as solid whenever the box bottom sat
+  below the surface by more than `GROUND_EPSILON` (0.001). On a slope that is
+  always true, so every ramp was solid to the step-up probe. Tolerance is now
+  `STEP_HEIGHT` (0.55).
+- The step-up lifted only to the triggering platform's surface. New
+  `highest_step_surface(world, pos, feet)` returns the highest surface under
+  the box within one step.
+
+Four regression tests (`standing_still_on_a_ramp_does_not_slide`,
+`walking_across_a_ramp_keeps_ground_contact`,
+`landing_on_a_ramp_mid_slope_settles_on_the_surface`,
+`two_ramps_meeting_at_a_shared_edge_are_walked_through`) plus fixtures
+`ramp_wide_level` and `ramp_to_ramp_level`.
+
+Texture: `rampSlope(kind, size)` in `platformUtils.ts` returns
+`{axis, cos}`; `platformShaders.ts` gained `attribute vec2 aSlope` /
+`varying vec2 vSlope` and divides the checker coordinate along the slope axis
+by `cos`, so the checker follows the incline instead of stretching. 7 new
+vitest cases. **Known gap: no close-up capture of a ramp incline** — the
+headless bot cannot navigate to one. Evidence rests on the shader unit tests
+and the slope regression suite.
+
+### T-107 — generation consistency — PASS (`d10c30c`)
+
+`levelgen.rs` gained `RAMP_ANCHOR_TOLERANCE` (**0.55, deliberately the same
+constant as the controller's `STEP_HEIGHT`** so generation and movement agree),
+`RAMP_ANCHOR_OVERLAP = 0.25`, and `pub fn orphaned_ramps(&[Platform])`.
+
+**Measured: 9,819/127,635 ramps (7.693 %) orphaned across 3,788/6,000 levels →
+0/125,871 across 0 levels.** Nine design fragments corrected (ch06, ch08, ch21,
+ch22, ch25, `pa_ruin_switchback`, `pb_machine_span`).
+
+`ch04_twin_terrace` was reverted to its original geometry: its 0.5 u lip is a
+legal step under the corrected tolerance, and lowering the deck to 3.5 broke
+the 4.0 u `STACK_CLEARANCE` rule (52 `no_plan` fallbacks). **The tolerance was
+the bug, not the geometry.**
+
+`catalog_fallback` now sets `plan: vec![hub.id.clone()]` instead of an empty
+plan — a fallback level was previously a void.
+
+### T-108 — shop scales with income — PASS (`ef99756`)
+
+`run.rs` gained `price_mul(level) = (gift_target(level,1) /
+gift_target(1,1)).clamp(1.0, 8.0)` and `scaled_cost(cost, level)`; all five
+cost sites in `make_shop` route through it. Invariant: **price/income is
+constant across brackets (≤ 5 % drift)**. 5 tests.
+
+Confirmed by the economy audit: the cheapest item costs **1.08 levels of
+income** at level 1, and the ratio no longer falls with level.
+
+### T-109 — glider model + gift colours — PASS
+
+The procedural hang-glider already existed from T-063 (`GliderWings.tsx`:
+leading-edge spars, swept membrane panels, kingpost, A-frame control bar,
+keel, hang strap, streamers, fold/unfold animation). Gift colours:
+`design/palette.json` `common.gift` body `#ffd23d → #0b0b14`, ribbon
+`#ff3db8 → #3a3a52`, glow `#ffe680 → #dfe6ff`; golden unchanged at `#ffd75e`.
+`GameHud.tsx` swatch gained an inset glow ring. `Lure.tsx` shimmer now uses
+`COMMON.gift.glow`, so LURE mimics the **black** gift only — judgment call 2
+satisfied.
+
+### T-110 — tester command layer — PASS (`66da74b`)
+
+`design/DEBUG_COMMANDS.md` frozen manifest: 15 commands, 3 gates, stable
+refusal strings. Protocol: `ClientMsg::Debug { code, command, args }` +
+`ServerMsg::DebugResult { ok, message }`, generated via `just gen` +
+`just fixtures`. `PROTOCOL_VERSION` stays 8.
+
+`server/crates/server/src/debug.rs`: `Gate` (dev flag / `VOIDWRAP_DEV_CODE`,
+constant-time compare, `MAX_BAD_CODES = 5` per connection, `forget` on
+disconnect), `execute(Ctx, command, args)`, typed `Args` reader rejecting
+unknown keys. 8 tests in `debug.rs` + 7 in `game.rs`.
+
+### T-111 — tester panel — PASS (`af3638d`, fixed in `b2eede2`)
+
+`web/src/hud/debugPanel.ts` (pure logic, 22 vitest cases) +
+`web/src/hud/TesterPanel.tsx` (renders `null` until **Ctrl+Shift+D**; lock
+screen sends the code with a `state` command; sections Enemies / Level /
+Economy / World / State). Wired via `session.ts` (`debugCommand` +
+`DebugResult` case + `pendingDebug`), `store.ts` (`debugResult`),
+`GameClient.tsx` (`TesterPanel` + `playerCount`).
+
+**The E2E found a real bug:** a debug command mutated server state but sent
+only `DebugResult`, so the HUD never moved (`grant_gold 500` left currency 0;
+`switch_level 12` left the HUD on level 1). `game.rs` now, on `ok`:
+`switch_level` → `respawn_all_and_broadcast()`, everything else →
+`broadcast_run_state()`. Two new server tests.
+
+### T-112 — gift spawn safety + straggler highlight — PASS (`8c5e66b`, `d324df2`)
+
+`accept_candidate` widened to every platform except the supporting one.
+**14,783/755,887 (1.956 %) → 7/755,887 (0.0011 %)** — a 2,112x reduction. The
+residual 7 are guaranteed-fallback positions. `pattern_dump.rs` emits `gifts` +
+`gift_intersections`; audit metric `5.gift-spawn-safety` (threshold 0.0001).
+
+`web/src/scene/straggler.ts` + a `GiftBox.tsx` beam for the last 20 % of a
+level's gifts — a vertical pulse, distinct from LURE's point shimmer and from
+golden `#ffd75e`.
+
+### T-113 — performance — PARKED with numbers (`82d4395`)
+
+Instrument added to `game.rs` `run()`: `tick N | X Hz | players P | Y.YY
+ms/tick`.
+
+| metric | value |
+| --- | --- |
+| server tick, 8 players | **0.03 ms/tick** at 20.0 Hz (0.06 % of the 50 ms budget) |
+| level generation | **1.22 ms/level** (6,000 levels, 3 runs: 7348/7390/7323 ms) |
+| client frame | **8.8 fps**, mean 113.9–114.3 ms, p50 114.5, p95 122.1, worst 222.1 — **SwiftShader software rendering, not a GPU measurement** |
+
+One candidate tried and **reverted**: `Atmosphere.tsx` sky-dome
+`renderOrder={-1} → {1}` measured 113.9 ms vs 114.3 ms baseline — no win, so
+per the ticket's own rule it does not merge. Gifts are already instanced; 41
+`useFrame` callbacks across 18 components are not a hot spot.
+
+`tools/fps-probe.mjs` kept as the probe. **Recommendation: a GPU-side profile
+is the next step, not more blind changes.**
+
+### T-114 — collision hunter — 4 fixed, 5 parked
+
+`tickets/T-114.findings.md`. The subordinate returned no work, so the
+orchestrator hunted directly. Fixed: ramp-to-ramp teleport (`f4f8b3f`),
+backwards ramps (`8c5e66b`), 7.7 % orphaned ramps (`d10c30c`), 1.96 % gifts
+inside solids (`8c5e66b`). Parked: gift pickup radius vs visual, enemy hitbox
+vs telegraph, hazard trigger volumes, Wreath head mount, LURE trigger radius —
+all "not investigated", each with a concrete next step.
+
+### T-115 — systems hunter — 3 fixed, 6 parked, 2 clean
+
+`tickets/T-115.findings.md`. Fixed: debug commands never pushed state
+(`b2eede2`), flat shop prices (`ef99756`), empty fallback levels (`d10c30c`).
+
+**Headline finding F-115-4:** `just verify` invokes `matchmaker-conformance`,
+`voting-conformance`, `economy-audit`, and `playthrough` with no arguments. All
+four print "skipped" and **exit 0**. The gate has been reporting green while
+four of its five black-box kits never ran. Parked for a human decision — the
+fix is a contract change (a new `just verify-live` recipe that starts the
+server, runs the live kits, and stops it). Every number in this log was
+produced by running those kits by hand.
+
+Also parked: 2 of 132 patterns silently dropped by `parse_catalog_lenient`;
+`5.heights` 4.47 %; `pb_machine_gauntlet`'s three unreachable pillars;
+playthrough `level-progression`; the playthrough docstring's wrong port (9001
+instead of 7878).
+
+### T-116 — regression audit — PASS
+
+`tickets/T-116.outcome.md`. **19 of 21 lines green.**
+
+Pattern audit **14/15**: only `5.heights` fails at **4.47 %** (17,056/381,836
+outside [1, 6] u; threshold 2 %) — pre-existing, frozen `design/chunks.json`,
+improved from 6.02 % incidentally. `5.ramp-anchors` **0/125,871**.
+`5.gift-spawn-safety` **7/755,887**. `5.ramps` 0 violations / 139,276.
+`5.stairs` 0. `4.near-duplicates` 0.00 % over 356,096 LSH candidates.
+`1.pattern-repeat.within-level` mean redundancy 11.40 %.
+
+Economy audit **8/8**. Voting real smoke **3/3**. Playthrough **7/11 + 3 skip
++ 1 fail** (`level-progression`, harness limitation — the bot cannot navigate
+ramps). Matchmaker `--selftest` green.
+
+`just verify` green: 241 sim tests, 149 server tests, 317 vitest (36 files),
+clippy `-D warnings`, protocol-gen `--check`, check-names (619 files),
+validate-content (20 enemies, 10 upgrades, 19 curses, 4 classes, 34 shop items,
+3 events, 15 milestones, 4 altars, 10 achievements, 132 patterns; fastest enemy
+worst case 9.5 u/s vs player 9).
+
+### Tuning notes for the owner's balancing pass
+
+- Shop: `price_mul` clamps at 8.0. Past the level where income hits 8x the
+  level-1 figure, the shop starts getting cheap again. Worth checking whether
+  the clamp binds inside a realistic run length.
+- `1.gift_income`: median 184.5 gifts/level, mean 192.45, min 72, max 408. The
+  spread is wide — a min-gift level with a shop open is a bad beat.
+- Pedestal capacity: standard/chaos/random 26 permanents (overflow from level
+  27), extreme 46 (overflow from 47). 20 enemies in the registry, so standard
+  never overflows in practice.
+- Greater curses: 6, drafted every 10 levels -> 5 drafts over 50 levels.
+- Hazards: `hazard:crumble` 42.6 %, `hazard:fog` 30.7 %, `hazard:trampoline`
+  26.6 %. Tripmine is tagged on 1 pattern only.
+- `5.heights` 4.47 % is the one content metric still red. It needs a human call
+  on the frozen `chunks.json`.
