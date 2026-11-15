@@ -211,6 +211,15 @@ export class GameSession {
           runOver: null,
         });
         return;
+      // T-149: the pedestal vote. The server opens a session every level at the collapse
+      // window and broadcasts these three; nothing in the client used to read them, so the
+      // vote ran invisibly and `VoteSession::resolve` fell through to its random pick.
+      // `RunVoteOverlay` replays this log through `useVote`.
+      case "VoteOpen":
+      case "VoteState":
+      case "VoteResult":
+        store.set({ voteMessages: [...store.voteMessages.slice(-63), msg] });
+        return;
     }
   }
 
@@ -239,6 +248,17 @@ export class GameSession {
   /** Pick this player's class (CLASS_*; the server accepts it in the lobby before level 1). */
   chooseClass(cls: number): void {
     this.conn.send({ type: "ChooseClass", class: cls });
+  }
+
+  /**
+   * Cast this player's pedestal ballot (T-149).
+   *
+   * The server opens a vote session every level at the collapse window and rejects a
+   * ballot when no session is open, so the client does not need to track that state --
+   * it just forwards the index the overlay offered.
+   */
+  vote(option: number): void {
+    this.conn.send({ type: "Vote", option });
   }
 
   /** Projectile positions drawn at the newest server position (like enemies). */

@@ -1,9 +1,19 @@
-// The ONLY module that knows the wire shape. T-078 is not merged yet and its
-// exact field names are not in this ticket, so the assumed shapes are listed
-// here and validated at runtime; if the regenerated protocol differs, this
-// file (and nothing else) absorbs the change.
+// The ONLY module that knows the wire shape. It was written against assumed field
+// names while T-078 was still in flight; T-149 wired the overlay up for the first time
+// and found the real protocol uses `countdownS` / `secondsLeft` rather than
+// `durationMs` / `remainingMs`, so the vote countdown would have shown the local
+// default instead of the server's. Both spellings are accepted below.
 //
-// ASSUMED WIRE SHAPES (T-078):
+// REAL WIRE SHAPES (protocol/generated.ts):
+//   VoteOpen   { type: 'VoteOpen'; level: number; options: VoteOption[];
+//                countdownS: number }
+//   VoteState  { type: 'VoteState'; counts: number[]; voted: number[];
+//                secondsLeft: number }
+//   VoteResult { type: 'VoteResult'; winner: number; id: string; name: string;
+//                kind: number; permanent: boolean }
+//   VoteOption { index: number; id: string; name: string; kind: number }
+//
+// ORIGINAL ASSUMED WIRE SHAPES (T-078):
 //   VoteOpen   (server): { type: 'VoteOpen';
 //                          options: [{ id: string; name: string;
 //                                      kind: number | string }];
@@ -85,19 +95,31 @@ export function parseVoteMessage(message: unknown): VoteEvent | null {
       if (options.length === 0) {
         return { type: 'failed', message: 'Vote opened with no options.' };
       }
-      const durationMs = isNonNegativeFinite(rec.durationMs) && rec.durationMs > 0
-        ? Math.floor(rec.durationMs)
-        : VOTE_DURATION_MS;
-      if (isNonNegativeFinite(rec.remainingMs)) {
-        return { type: 'opened', options, durationMs, remainingMs: Math.floor(rec.remainingMs) };
+      // T-149: the real protocol sends `countdownS` (whole seconds). Prefer it, fall back
+      // to the assumed millisecond fields, then to the local default.
+      const durationMs = isNonNegativeFinite(rec.countdownS) && rec.countdownS > 0
+        ? Math.floor(rec.countdownS * 1000)
+        : isNonNegativeFinite(rec.durationMs) && rec.durationMs > 0
+          ? Math.floor(rec.durationMs)
+          : VOTE_DURATION_MS;
+      const remainingMs = isNonNegativeFinite(rec.remainingMs)
+        ? Math.floor(rec.remainingMs)
+        : isNonNegativeFinite(rec.secondsLeft)
+          ? Math.floor(rec.secondsLeft * 1000)
+          : undefined;
+      if (remainingMs !== undefined) {
+        return { type: 'opened', options, durationMs, remainingMs };
       }
       return { type: 'opened', options, durationMs };
     }
 
     case 'VoteState': {
+      // T-149: the real protocol sends `secondsLeft` (whole seconds).
       const remainingMs = isNonNegativeFinite(rec.remainingMs)
         ? Math.floor(rec.remainingMs)
-        : undefined;
+        : isNonNegativeFinite(rec.secondsLeft)
+          ? Math.floor(rec.secondsLeft * 1000)
+          : undefined;
       let yourVote: number | null | undefined;
       const youRaw = rec.yourVote !== undefined ? rec.yourVote : rec.you;
       if (typeof youRaw === 'number' && Number.isFinite(youRaw)) {

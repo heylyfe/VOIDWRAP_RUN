@@ -245,3 +245,90 @@ describe('RunVoteOverlay', () => {
     expect(html(createElement(RunVoteOverlay, { messages: [] }))).toBe('');
   });
 });
+
+// T-149: the adapter was written against assumed field names while T-078 was in flight.
+// These pin it to the shapes `protocol/generated.ts` actually produces, so wiring the
+// overlay up cannot silently fall back to the local 20 s default.
+describe('parseVoteMessage (real protocol shapes)', () => {
+  it('reads the countdown from VoteOpen.countdownS', () => {
+    const event = parseVoteMessage({
+      type: 'VoteOpen',
+      level: 4,
+      options: [
+        { index: 0, id: 'a', name: 'Alpha', kind: 0 },
+        { index: 1, id: 'b', name: 'Beta', kind: 2 },
+        { index: 2, id: 'c', name: 'Gamma', kind: 0 },
+      ],
+      countdownS: 20,
+    });
+    expect(event).toEqual({
+      type: 'opened',
+      options: [
+        { id: 'a', name: 'Alpha', kind: 'enemy' },
+        { id: 'b', name: 'Beta', kind: 'curse' },
+        { id: 'c', name: 'Gamma', kind: 'enemy' },
+      ],
+      durationMs: 20_000,
+    });
+  });
+
+  it('honours a countdown that is not the local default', () => {
+    const event = parseVoteMessage({
+      type: 'VoteOpen',
+      level: 1,
+      options: [{ index: 0, id: 'a', name: 'Alpha', kind: 0 }],
+      countdownS: 7,
+    });
+    expect(event).toMatchObject({ type: 'opened', durationMs: 7_000 });
+  });
+
+  it('reads the remaining time from VoteState.secondsLeft', () => {
+    const event = parseVoteMessage({
+      type: 'VoteState',
+      counts: [2, 1, 0],
+      voted: [7, 9],
+      secondsLeft: 13,
+    });
+    expect(event).toEqual({ type: 'progress', counts: [2, 1, 0], remainingMs: 13_000, yourVote: undefined });
+  });
+
+  it('reads the winner from VoteResult.winner', () => {
+    const event = parseVoteMessage({
+      type: 'VoteResult',
+      winner: 1,
+      id: 'b',
+      name: 'Beta',
+      kind: 2,
+      permanent: false,
+    });
+    expect(event).toEqual({ type: 'result', winnerIndex: 1, counts: undefined });
+  });
+});
+
+// T-149: end-to-end through the chain the overlay actually runs -- a real VoteOpen frame
+// from the server, parsed by the adapter, folded by the reducer, rendered by the widget.
+// This is the proof that mounting the overlay puts pedestals on screen; a browser would
+// prove the same thing more slowly.
+describe('a real VoteOpen reaches the screen', () => {
+  it('renders every pedestal the server offered', () => {
+    const frame = {
+      type: 'VoteOpen',
+      level: 3,
+      options: [
+        { index: 0, id: 'pallbearer', name: 'The Pallbearer', kind: 0 },
+        { index: 1, id: 'leadened_soles', name: 'Leadened Soles', kind: 2 },
+        { index: 2, id: 'snapshrike', name: 'Snapshrike', kind: 0 },
+      ],
+      countdownS: 20,
+    };
+    const event = parseVoteMessage(frame);
+    expect(event).not.toBeNull();
+    const state = reduceEvents([event as VoteEvent]);
+    expect(isVotingOpen(state)).toBe(true);
+    expect(secondsRemaining(state.remainingMs)).toBe(20);
+    const markup = widget(state);
+    expect(markup).toContain('The Pallbearer');
+    expect(markup).toContain('Leadened Soles');
+    expect(markup).toContain('Snapshrike');
+  });
+});

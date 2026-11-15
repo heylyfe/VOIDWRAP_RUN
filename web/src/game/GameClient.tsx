@@ -36,6 +36,7 @@ import { Atmosphere } from "@/scene/Atmosphere";
 import { Beacon } from "@/scene/Beacon";
 import { BlockyAvatar } from "@/scene/BlockyAvatar";
 import { classColor } from "@/scene/classColors";
+import { RunVoteOverlay } from "@/hud/RunVoteOverlay";
 import type { AvatarMotion } from "@/scene/avatarPose";
 import { Crystals } from "@/scene/Crystals";
 import { DashStreak } from "@/scene/DashStreak";
@@ -312,6 +313,7 @@ export default function GameClient() {
   const activeIds = useGameStore((s) => s.activeIds);
   const shop = useGameStore((s) => s.shop);
   const notices = useGameStore((s) => s.notices);
+  const voteMessages = useGameStore((s) => s.voteMessages);
   const myClass = useGameStore((s) => s.myClass);
   const levelPhase = useGameStore((s) => s.levelPhase);
   const goldenTaken = useGameStore((s) => s.goldenTaken);
@@ -440,6 +442,10 @@ export default function GameClient() {
       {/* Tester panel (T-111): renders nothing until Ctrl+Shift+D, and hides itself
           when a second player joins. The server gates every command regardless. */}
       <TesterPanel playerCount={playerCount} onCommand={debugCommand} />
+      {/* Pedestal vote (T-149). The server opens a session every level at the collapse
+          window; this overlay is the only thing that renders it and the only thing that
+          can send a ballot. It renders nothing outside a vote. */}
+      <RunVoteOverlay messages={voteMessages} onVote={(option) => session?.vote(option)} />
       {level && playing && normalTotal > 0 && (
         <>
           {phase2 ? (

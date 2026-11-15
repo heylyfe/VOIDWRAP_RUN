@@ -53,6 +53,15 @@ export interface GameStore {
   shop: ShopItem[] | null;
   /** Recent notices, newest last (the HUD expires them). */
   notices: Notice[];
+  /**
+   * Vote traffic from the server, oldest first (T-149).
+   *
+   * The pedestal vote opens every level at the collapse window and the server
+   * broadcasts VoteOpen / VoteState / VoteResult. Nothing in the client used to
+   * read those messages, so the vote ran invisibly and the server resolved it
+   * with a random pick. `RunVoteOverlay` consumes this log.
+   */
+  voteMessages: unknown[];
   /** This player's class (CLASS_*), from the latest snapshot. */
   myClass: number;
   /** Platforms not in their normal state (crumbling or gone), from the latest snapshot. */
@@ -92,6 +101,7 @@ export const useGameStore = create<GameStore>((set) => ({
   activeIds: [],
   shop: null,
   notices: [],
+  voteMessages: [],
   myClass: 0,
   tiles: [],
   altarsUsed: [],
