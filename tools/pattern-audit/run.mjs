@@ -168,6 +168,10 @@ function readCatalogIds() {
 
 const CATALOG_IDS = readCatalogIds();
 
+// T-148: the dump's `enemies` array holds generic spawn markers under this name, not enemy
+// types. Metric 6 must not mistake it for a roster entry.
+const GENERIC_SPAWN_MARKER = 'spawn';
+
 const THEME_VOCAB = ['ember', 'void', 'frost', 'ruin', 'garden', 'machine', 'spire', 'hollow'];
 const MECH_VOCAB = ['climb', 'drop', 'span', 'bounce', 'crawl', 'gauntlet', 'rest', 'loot', 'fork', 'dead_end'];
 const RAMP_KINDS = new Set(['RAMP_PX', 'RAMP_NX', 'RAMP_PZ', 'RAMP_NZ']);
@@ -655,13 +659,21 @@ function consumeRecord(A, r) {
   // metric 6 — enemy spawn frequencies
   const cellKey = `${players}|${level}`;
   let cell = A.enemyCells.get(cellKey);
-  if (!cell) A.enemyCells.set(cellKey, (cell = { levels: 0, byType: new Map() }));
+  if (!cell) A.enemyCells.set(cellKey, (cell = { levels: 0, byType: new Map(), levelsWithType: new Map() }));
   cell.levels++;
   if (Array.isArray(r.enemies)) {
+    // T-148: `byType` counts PLACEMENTS; `levelsWithType` counts LEVELS that contain the
+    // type at least once. The always-offered check needs the second one -- see the note
+    // at the check itself.
+    const seenHere = new Set();
     for (const en of r.enemies) {
       const t = en && typeof en.type === 'string' && en.type ? en.type : '<unknown>';
       bump(A.enemyPlacements, t);
       bump(cell.byType, t);
+      if (!seenHere.has(t)) {
+        seenHere.add(t);
+        cell.levelsWithType.set(t, (cell.levelsWithType.get(t) ?? 0) + 1);
+      }
     }
   }
 }
@@ -755,6 +767,9 @@ function report(A, ctx, log) {
   // T-144: how many records actually carried a dump field. Zero means the dump cannot
   // answer the question, which is a SKIP; a present field totalling zero is a FAIL.
   const fieldSeen = (name) => A.fieldPresence.get(name) ?? 0;
+  // T-148: injectable so `--selftest` can exercise the always-offered check with its small
+  // synthetic cells. The real run uses the threshold.
+  const cellMin = ctx.enemyAlwaysCellMin ?? TH.ENEMY_ALWAYS_CELL_MIN;
   const tables = [];
   const tlog = (s) => { tables.push(s); log(s); };
 
@@ -1002,10 +1017,16 @@ function report(A, ctx, log) {
       + 'registry coverage is asserted by economy-audit 3.pedestal_pool');
   }
 
+  // T-148: this compared `cell.byType` (a PLACEMENT count) against `cell.levels` (a LEVEL
+  // count). A level carries several spawn markers, so placements always exceeded levels and
+  // `c === cell.levels` could only hold if every level had exactly one enemy -- which never
+  // happens. The check reported PASS on every run since it was written while measuring
+  // nothing. It now compares levels-containing-the-type against levels-in-the-cell, which is
+  // what "appears in 100% of levels" always meant.
   const alwaysCells = [];
   for (const [cellKey, cell] of A.enemyCells) {
-    if (cell.levels < TH.ENEMY_ALWAYS_CELL_MIN) continue;
-    for (const [t, c] of cell.byType) {
+    if (cell.levels < cellMin) continue;
+    for (const [t, c] of cell.levelsWithType) {
       // T-144: this used to require `cell.byType.size >= 2`, so a single type appearing in
       // 100% of a cell's levels -- the strongest possible form of "never varies" -- was
       // filtered out of the check built to catch exactly that. The filter is gone.
@@ -1014,13 +1035,28 @@ function report(A, ctx, log) {
       }
     }
   }
+  // T-148: the dump's `enemies` array carries generic `spawn` markers, not enemy types --
+  // the type is chosen at runtime from the registry. A marker that is present in every level
+  // by construction would make this check fire on every run for a reason that is not a
+  // defect, so say the input cannot answer the question instead.
+  const genericOnly = A.enemyPlacements.size > 0 && [...A.enemyPlacements.keys()].every((t) => t === GENERIC_SPAWN_MARKER);
   if (A.enemyCells.size === 0) {
     skip('6.enemy-frequencies.always-offered',
       'no record carried an "enemies" array, so per-cell enemy variety is not measurable from this input');
+  } else if (genericOnly) {
+    skip('6.enemy-frequencies.always-offered',
+      `every placement in the dump is the generic "${GENERIC_SPAWN_MARKER}" marker, not an enemy type, so per-cell variety is not measurable here; `
+      + 'registry coverage is asserted by economy-audit 3.pedestal_pool');
+  } else if (![...A.enemyCells.values()].some((c) => c.levels >= cellMin)) {
+    // T-148: with no cell large enough, the loop above never runs and the metric would
+    // report PASS having examined zero cells -- the same empty-denominator defect T-144
+    // fixed elsewhere. Say so instead.
+    skip('6.enemy-frequencies.always-offered',
+      `no (mode, level) cell reached ${cellMin} levels (largest: ${Math.max(...[...A.enemyCells.values()].map((c) => c.levels))}), so the always-offered check examined nothing`);
   } else {
     line('6.enemy-frequencies.always-offered',
       alwaysCells.length === 0,
-      `(mode, level) cells with >= ${TH.ENEMY_ALWAYS_CELL_MIN} levels where a type appears in 100% of levels: ${alwaysCells.length} across ${A.enemyCells.size} cells; threshold: 0`);
+      `(mode, level) cells with >= ${cellMin} levels where a type appears in 100% of levels: ${alwaysCells.length} across ${A.enemyCells.size} cells; threshold: 0`);
   }
 
   // ---------------------------------------------------------------------------
@@ -1084,7 +1120,7 @@ function report(A, ctx, log) {
     for (const x of alwaysCells) tlog(`  players/level=${x.cellKey}: type "${x.type}" in ${x.count}/${x.cellLevels} levels (cell has ${x.distinct} distinct types)`);
   }
   if (A.enemyCells.size) {
-    tlog(`enemy cells (mode, level index); cell size >= ${TH.ENEMY_ALWAYS_CELL_MIN} qualifies for the always-offered check:`);
+    tlog(`enemy cells (mode, level index); cell size >= ${cellMin} qualifies for the always-offered check:`);
     const cellKeys = [...A.enemyCells.keys()].sort((a, b) => {
       const [pa, la] = a.split('|').map(Number);
       const [pb, lb] = b.split('|').map(Number);
@@ -1245,6 +1281,11 @@ function selftest() {
     // T-144: a synthetic catalog so `7.catalog-coverage` measures the metric instead of
     // tripping over the real catalog's ids.
     catalogIds: new Set(recs.flatMap((r) => r.plan)),
+    // T-148: the synthetic cells hold 3 levels each, so the real threshold (20) would make
+    // the always-offered check examine nothing. Lowering it here is the point: the planted
+    // defect is that every record carries the same two enemy types, which is exactly what
+    // the check exists to catch.
+    enemyAlwaysCellMin: 3,
     source: { kind: 'selftest', cmd: '(synthetic records)' },
     // T-144: prefix every line so the planted FAILs cannot be mistaken for a real audit
     // failure when this runs inside `just verify`.
@@ -1256,6 +1297,7 @@ function selftest() {
     '4.near-duplicates',
     '5.ramps',
     '6.enemy-frequencies.never-offered',
+    '6.enemy-frequencies.always-offered',
   ]);
   const got = new Set(fails);
   const ok = expected.size === got.size && [...expected].every((x) => got.has(x));
